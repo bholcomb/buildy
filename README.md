@@ -90,12 +90,14 @@ buildy/
 │   ├── template_engine.py       # Build template engine
 │   ├── toolchain.py             # Toolchain system
 │   └── variables.py             # Variable environment
-├── buildy_templates.yaml        # Universal build templates
-├── toolchains/                  # Toolchain configurations
-│   ├── gcc-linux.yaml
-│   ├── clang-linux.yaml
-│   ├── msvc-windows.yaml
-│   └── ...
+├── data/
+│   ├── templates/
+│   │   └── buildy_templates.yaml  # Universal build templates
+│   └── toolchains/                # Toolchain configurations
+│       ├── gcc-linux.yaml
+│       ├── clang-linux.yaml
+│       ├── msvc-windows.yaml
+│       └── ...
 ├── examples/                    # Example projects
 │   └── math/
 │       └── simple_project.yaml

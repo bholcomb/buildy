@@ -41,15 +41,9 @@ class IncrementalBuilder:
         # Parse current configuration
         config = config_parser.parse_config_file(config_file)
         
-        # Get toolchain file path if available
+        # Note: Toolchain file lookup happens AFTER task generation
+        # because the toolchain is selected during generate_tasks()
         toolchain_file = None
-        if config_parser.current_toolchain:
-            # Try to find the toolchain file
-            toolchain_name = config_parser.current_toolchain.name
-            for tc_file in toolchain_manager.toolchain_dir.glob("*.yaml"):
-                if tc_file.stem == toolchain_name or toolchain_name in tc_file.stem:
-                    toolchain_file = str(tc_file)
-                    break
         
         # Force full rebuild if requested
         if force:
@@ -104,6 +98,9 @@ class IncrementalBuilder:
         # Generate full task graph
         all_tasks = config_parser.generate_tasks(config)
         
+        # Get toolchain file AFTER task generation (when toolchain is known)
+        toolchain_file = self._get_toolchain_file(config_parser, toolchain_manager)
+        
         graph = TaskGraph()
         for task in all_tasks:
             graph.add_task(task)
@@ -133,6 +130,9 @@ class IncrementalBuilder:
         """Perform incremental build of affected tasks"""
         # Generate full task graph (fast, no execution)
         all_tasks = config_parser.generate_tasks(config)
+        
+        # Get toolchain file AFTER task generation (when toolchain is known)
+        toolchain_file = self._get_toolchain_file(config_parser, toolchain_manager)
         
         graph = TaskGraph()
         for task in all_tasks:
@@ -248,6 +248,23 @@ class IncrementalBuilder:
         
         self.build_state.save(self.state_file)
         logger.debug("Build state updated")
+    
+    def _get_toolchain_file(self, config_parser, toolchain_manager) -> Optional[str]:
+        """Get the toolchain file path after toolchain selection"""
+        if not config_parser.current_toolchain:
+            return None
+        
+        toolchain_name = config_parser.current_toolchain.name
+        for tc_file in toolchain_manager.toolchains_dir.glob("*.yaml"):
+            # Match by exact stem or if name contains the stem
+            if (tc_file.stem == toolchain_name or 
+                toolchain_name in tc_file.stem or
+                tc_file.stem in toolchain_name):
+                logger.debug(f"Found toolchain file: {tc_file}")
+                return str(tc_file)
+        
+        logger.warning(f"Could not find toolchain file for '{toolchain_name}' in {toolchain_manager.toolchains_dir}")
+        return None
     
     def _hash_graph(self, graph: TaskGraph) -> str:
         """Generate hash of task graph structure"""
