@@ -12,7 +12,9 @@ tasks:
       - "src/audio.cpp"
       - "src/sound.cpp"
       - "src/music.cpp"
+    include_dirs:
+      - "include"
+      - "../core/include"  # Need core headers
     dependencies:
       - core:engine_core  # Scoped dependency (explicit)
-    public: true
 

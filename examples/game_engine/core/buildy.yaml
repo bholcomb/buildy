@@ -13,4 +13,6 @@ tasks:
       - "src/engine.cpp"
       - "src/math.cpp"
       - "src/memory.cpp"
+    include_dirs:
+      - "include"
 
