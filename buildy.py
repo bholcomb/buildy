@@ -1182,6 +1182,26 @@ class ConfigParser:
             exe_tasks = self._generate_executable_tasks(exe, merged_config, output_dir, setup_task.task_id, task_counter, tasks)
             tasks.extend(exe_tasks)
             task_counter += len(exe_tasks)
+        
+        # Generate shader tasks (use resolved_config so variables in paths are resolved)
+        shaders = resolved_config.get('shaders', [])
+        if not isinstance(shaders, list):
+            shaders = [shaders] if shaders else []
+        
+        for shader_group in shaders:
+            shader_tasks = self._generate_shader_tasks(shader_group, merged_config, output_dir, setup_task.task_id, task_counter)
+            tasks.extend(shader_tasks)
+            task_counter += len(shader_tasks)
+        
+        # Generate texture tasks (use resolved_config so variables in paths are resolved)
+        textures = resolved_config.get('textures', [])
+        if not isinstance(textures, list):
+            textures = [textures] if textures else []
+        
+        for texture_group in textures:
+            texture_tasks = self._generate_texture_tasks(texture_group, merged_config, output_dir, setup_task.task_id, task_counter)
+            tasks.extend(texture_tasks)
+            task_counter += len(texture_tasks)
 
         return tasks
 
@@ -1550,6 +1570,148 @@ class ConfigParser:
         except Exception as e:
             logger.error(f"Error expanding glob '{pattern}': {e}")
             return []
+    
+    def _generate_shader_tasks(self, shader_config: Dict[str, Any], merged_config: Dict[str, Any],
+                               output_dir: str, setup_task_id: str, task_counter: int) -> List[BuildTask]:
+        """Generate shader compilation tasks
+        
+        Example shader_config:
+        {
+            'name': 'game_shaders',
+            'toolchain': 'glslc',  # Optional: override toolchain for shaders
+            'sources': 'shaders/*.vert',
+            'output_dir': 'shaders/spirv',
+            'flags': ['-O']
+        }
+        """
+        tasks = []
+        shader_name = shader_config.get('name', f'shaders_{task_counter}')
+        sources = shader_config.get('sources', [])
+        shader_output_dir = shader_config.get('output_dir', f'{output_dir}/shaders')
+        custom_flags = shader_config.get('flags', [])
+        
+        # Check if a custom toolchain is specified for this shader group
+        shader_toolchain_name = shader_config.get('toolchain')
+        if shader_toolchain_name:
+            # Temporarily switch toolchain for shader compilation
+            shader_toolchain = self.toolchain_manager.get_toolchain(shader_toolchain_name)
+            if not shader_toolchain:
+                logger.warning(f"Shader toolchain '{shader_toolchain_name}' not found, using current toolchain")
+                shader_toolchain = self.current_toolchain
+            shader_cmd_builder = CommandBuilder(shader_toolchain)
+        else:
+            shader_toolchain = self.current_toolchain
+            shader_cmd_builder = self.command_builder
+        
+        # Expand source patterns
+        if isinstance(sources, str):
+            sources = self._expand_glob(sources)
+        
+        # Generate compilation task for each shader
+        for source in sources:
+            shader_ext = shader_toolchain.extensions.get('object', '.spv')
+            output_file = f"{shader_output_dir}/{Path(source).stem}{shader_ext}"
+            
+            # Build shader compile command
+            command, _ = shader_cmd_builder.build_compile_command(
+                source=source,
+                output=output_file,
+                cpp_standard='',  # Not applicable for shaders
+                defines=[],
+                include_dirs=[],
+                is_shared_library=False,
+                config_type=self.configuration,
+                extra_flags=custom_flags
+            )
+            
+            task = BuildTask(
+                task_id=f"shader_{shader_name}_{task_counter:03d}",
+                task_type="compile_shader",
+                inputs=[TaskInput(path=source)],
+                outputs=[output_file],
+                dependencies=[setup_task_id],
+                command=command,
+                platform=self.platform,
+                architecture=self.architecture,
+                configuration=self.configuration,
+                estimated_time=1.0,
+                resource_requirements=ResourceRequirements(cpu_cores=1, memory_mb=100, disk_mb=5)
+            )
+            tasks.append(task)
+            task_counter += 1
+        
+        return tasks
+    
+    def _generate_texture_tasks(self, texture_config: Dict[str, Any], merged_config: Dict[str, Any],
+                                output_dir: str, setup_task_id: str, task_counter: int) -> List[BuildTask]:
+        """Generate texture conversion tasks
+        
+        Example texture_config:
+        {
+            'name': 'game_textures',
+            'toolchain': 'compressonator',  # or 'texconv', 'imagemagick'
+            'sources': 'textures/*.png',
+            'output_dir': 'textures/dds',
+            'flags': ['-fd', 'BC7']
+        }
+        """
+        tasks = []
+        texture_name = texture_config.get('name', f'textures_{task_counter}')
+        sources = texture_config.get('sources', [])
+        texture_output_dir = texture_config.get('output_dir', f'{output_dir}/textures')
+        custom_flags = texture_config.get('flags', [])
+        
+        # Check if a custom toolchain is specified for this texture group
+        texture_toolchain_name = texture_config.get('toolchain')
+        if texture_toolchain_name:
+            # Temporarily switch toolchain for texture conversion
+            texture_toolchain = self.toolchain_manager.get_toolchain(texture_toolchain_name)
+            if not texture_toolchain:
+                logger.warning(f"Texture toolchain '{texture_toolchain_name}' not found, using current toolchain")
+                texture_toolchain = self.current_toolchain
+            texture_cmd_builder = CommandBuilder(texture_toolchain)
+        else:
+            texture_toolchain = self.current_toolchain
+            texture_cmd_builder = self.command_builder
+        
+        # Expand source patterns
+        if isinstance(sources, str):
+            sources = self._expand_glob(sources)
+        
+        # Generate conversion task for each texture
+        for source in sources:
+            texture_ext = texture_toolchain.extensions.get('object', '.dds')
+            output_file = f"{texture_output_dir}/{Path(source).stem}{texture_ext}"
+            
+            # Build texture conversion command
+            command, _ = texture_cmd_builder.build_compile_command(
+                source=source,
+                output=output_file,
+                cpp_standard='',  # Not applicable for textures
+                defines=[],
+                include_dirs=[],
+                is_shared_library=False,
+                config_type=self.configuration,
+                extra_flags=custom_flags
+            )
+            
+            task = BuildTask(
+                task_id=f"texture_{texture_name}_{task_counter:03d}",
+                task_type="convert_texture",
+                inputs=[TaskInput(path=source)],
+                outputs=[output_file],
+                dependencies=[setup_task_id],
+                command=command,
+                platform=self.platform,
+                architecture=self.architecture,
+                configuration=self.configuration,
+                estimated_time=2.0,
+                resource_requirements=ResourceRequirements(cpu_cores=1, memory_mb=200, disk_mb=10)
+            )
+            tasks.append(task)
+            task_counter += 1
+        
+        return tasks
 
 class TaskExecutor:
     """Execute tasks with caching, parallel execution, and resource-aware scheduling"""
