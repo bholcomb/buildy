@@ -14,7 +14,7 @@ logger = logging.getLogger('buildy.template_engine')
 class BuildTemplateEngine:
     """Expands universal build templates into concrete tasks"""
     
-    def __init__(self, templates_file: str = "buildy_templates.yaml"):
+    def __init__(self, templates_file: str = "data/templates/buildy_templates.yaml"):
         self.templates_file = Path(templates_file)
         self.templates = self._load_templates()
     

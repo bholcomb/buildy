@@ -49,7 +49,7 @@ def main():
                        help='Specify toolchain to use (overrides config file)')
     parser.add_argument('--list-toolchains', action='store_true',
                        help='List available toolchains and exit')
-    parser.add_argument('--toolchains-dir', default='toolchains',
+    parser.add_argument('--toolchains-dir', default='data/toolchains',
                        help='Directory containing toolchain configurations')
     parser.add_argument('--force', action='store_true',
                        help='Force full rebuild, ignore cache and build state')

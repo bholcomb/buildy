@@ -58,10 +58,19 @@ class ChangeDetector:
             return changes  # Full rebuild needed
         
         # Check toolchain hash
+        # Calculate current toolchain hash (empty string if no file)
+        current_toolchain_hash = ""
         if toolchain_file:
-            toolchain_hash = BuildState.hash_file(toolchain_file)
-            if toolchain_hash != self.build_state.toolchain_hash:
+            current_toolchain_hash = BuildState.hash_file(toolchain_file)
+        
+        # Compare hashes - any difference triggers rebuild
+        if current_toolchain_hash != self.build_state.toolchain_hash:
+            if toolchain_file:
                 logger.info("Toolchain changed")
+            else:
+                logger.debug("Toolchain file not found (both builds), skipping toolchain check")
+            # Only trigger rebuild if at least one side has a toolchain
+            if current_toolchain_hash or self.build_state.toolchain_hash:
                 changes.toolchain_changed = True
                 return changes  # Full rebuild needed
         

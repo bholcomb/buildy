@@ -197,7 +197,7 @@ class ToolMatcher:
 class ToolchainManager:
     """Manages toolchain selection and loading"""
     
-    def __init__(self, toolchains_dir: str = "toolchains"):
+    def __init__(self, toolchains_dir: str = "data/toolchains"):
         self.toolchains_dir = Path(toolchains_dir)
         self._toolchains: Dict[str, ToolchainConfig] = {}
         self._load_toolchains()
