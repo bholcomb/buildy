@@ -1,0 +1,9 @@
+"""Constants used throughout the buildy system"""
+
+# Default timeouts and estimates
+DEFAULT_TASK_TIMEOUT_SECONDS = 300
+DEFAULT_COMPILE_TIME_SECONDS = 2.0
+DEFAULT_LINK_TIME_SECONDS = 1.5
+DEFAULT_SETUP_TIME_SECONDS = 0.1
+DEFAULT_MAX_WORKERS = 4
+
