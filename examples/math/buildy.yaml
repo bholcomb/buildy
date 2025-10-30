@@ -14,13 +14,13 @@ config:
     - "-Wextra"
     - "-g"
 
-libraries:
+library:
   - name: "mathcore"
     sources: "libsrc/*.cpp"
     include_dirs:
       - "include"
 
-executables:
+executable:
   - name: "calculator"
     sources: "appsrc/main.cpp"
     include_dirs:

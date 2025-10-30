@@ -13,6 +13,9 @@ import logging
 from pathlib import Path
 from dataclasses import asdict
 
+# Get the directory where buildy.py is located
+BUILDY_DIR = Path(__file__).parent.resolve()
+
 # Import from buildy_lib package
 from buildy_lib import (
     BuildCache,
@@ -50,8 +53,10 @@ def main():
                        help='Specify toolchain to use (overrides config file)')
     parser.add_argument('--list-toolchains', action='store_true',
                        help='List available toolchains and exit')
-    parser.add_argument('--toolchains-dir', default='data/toolchains',
+    parser.add_argument('--toolchains-dir', default=str(BUILDY_DIR / 'data' / 'toolchains'),
                        help='Directory containing toolchain configurations')
+    parser.add_argument('--templates-file', default=str(BUILDY_DIR / 'data' / 'templates' / 'buildy_templates.yaml'),
+                       help='Path to build templates file')
     parser.add_argument('--force', action='store_true',
                        help='Force full rebuild, ignore cache and build state')
     parser.add_argument('--target', action='append', dest='targets', metavar='NAME',
@@ -89,13 +94,19 @@ def main():
         
         # Initialize components
         cache = BuildCache(args.cache_dir)
+        
+        # Initialize template engine with correct path
+        from buildy_lib import BuildTemplateEngine
+        template_engine = BuildTemplateEngine(args.templates_file)
+        
         config_parser = ConfigParser(
             args.platform, 
             args.architecture, 
             args.configuration, 
             cli_defines,
             toolchain_manager,
-            args.toolchain
+            args.toolchain,
+            template_engine=template_engine
         )
         graph = TaskGraph()
 
@@ -179,6 +190,7 @@ def main():
                 cli_defines,
                 toolchain_manager,
                 args.toolchain,
+                template_engine=template_engine,
                 workspace=workspace
             )
             

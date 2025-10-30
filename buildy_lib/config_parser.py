@@ -93,27 +93,30 @@ class ConfigParser:
             elif not isinstance(project['name'], str) or not project['name'].strip():
                 errors.append("'project.name' must be a non-empty string")
         
-        # Validate libraries
-        libraries = config.get('libraries', [])
-        if libraries:
+        # Validate library (can be a single dict or list of dicts)
+        library = config.get('library')
+        if library:
+            libraries = [library] if isinstance(library, dict) else library
             if not isinstance(libraries, list):
-                libraries = [libraries]
-            for i, lib in enumerate(libraries):
-                if not isinstance(lib, dict):
-                    errors.append(f"Library {i} must be a dictionary")
-                    continue
-                if 'name' not in lib:
-                    errors.append(f"Library {i} missing 'name'")
-                elif not isinstance(lib['name'], str):
-                    errors.append(f"Library {i} 'name' must be a string")
-                if 'sources' not in lib:
-                    errors.append(f"Library {i} missing 'sources'")
+                errors.append("'library' must be a dictionary or list of dictionaries")
+            else:
+                for i, lib in enumerate(libraries):
+                    if not isinstance(lib, dict):
+                        errors.append(f"Library {i} must be a dictionary")
+                        continue
+                    if 'name' not in lib:
+                        errors.append(f"Library {i} missing required 'name' field")
+                    elif not isinstance(lib['name'], str):
+                        errors.append(f"Library {i} 'name' must be a string")
+                    if 'sources' not in lib:
+                        errors.append(f"Library '{lib.get('name', i)}' missing required 'sources' field")
         
-        # Validate executables
-        executables = config.get('executables', [])
-        if executables:
+        # Validate executable (can be a single dict or list of dicts)
+        executable = config.get('executable')
+        if executable:
+            executables = [executable] if isinstance(executable, dict) else executable
             if not isinstance(executables, list):
-                executables = [executables]
+                errors.append("'executable' must be a dictionary or list of dictionaries")
             for i, exe in enumerate(executables):
                 if not isinstance(exe, dict):
                     errors.append(f"Executable {i} must be a dictionary")
@@ -391,24 +394,24 @@ class ConfigParser:
         task_counter += 1
 
         # Generate library tasks (use resolved_config so variables in paths are resolved)
-        libraries = resolved_config.get('libraries', [])
-        if not isinstance(libraries, list):
-            libraries = [libraries] if libraries else []
-
-        for lib in libraries:
-            lib_tasks = self._generate_library_tasks(lib, merged_config, output_dir, setup_task.task_id, task_counter)
-            tasks.extend(lib_tasks)
-            task_counter += len(lib_tasks)
+        # Support both single dict and list of dicts
+        library = resolved_config.get('library')
+        if library:
+            libraries = [library] if isinstance(library, dict) else library
+            for lib in libraries:
+                lib_tasks = self._generate_library_tasks(lib, merged_config, output_dir, setup_task.task_id, task_counter)
+                tasks.extend(lib_tasks)
+                task_counter += len(lib_tasks)
 
         # Generate executable tasks (use resolved_config so variables in paths are resolved)
-        executables = resolved_config.get('executables', [])
-        if not isinstance(executables, list):
-            executables = [executables] if executables else []
-
-        for exe in executables:
-            exe_tasks = self._generate_executable_tasks(exe, merged_config, output_dir, setup_task.task_id, task_counter, tasks)
-            tasks.extend(exe_tasks)
-            task_counter += len(exe_tasks)
+        # Support both single dict and list of dicts
+        executable = resolved_config.get('executable')
+        if executable:
+            executables = [executable] if isinstance(executable, dict) else executable
+            for exe in executables:
+                exe_tasks = self._generate_executable_tasks(exe, merged_config, output_dir, setup_task.task_id, task_counter, tasks)
+                tasks.extend(exe_tasks)
+                task_counter += len(exe_tasks)
         
         # Generate shader tasks (use resolved_config so variables in paths are resolved)
         shaders = resolved_config.get('shaders', [])

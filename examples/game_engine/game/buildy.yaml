@@ -5,18 +5,17 @@ project:
 variables:
   GAME_NAME: "MyGame"
 
-tasks:
-  - name: mygame
-    type: executable
-    sources:
-      - "src/main.cpp"
-      - "src/game.cpp"
-    include_dirs:
-      - "../core/include"
-      - "../renderer/include"
-      - "../audio/include"
-    dependencies:
-      - engine_core
-      - engine_renderer
-      - engine_audio
+executable:
+  name: mygame
+  sources:
+    - "src/main.cpp"
+    - "src/game.cpp"
+  include_dirs:
+    - "../core/include"
+    - "../renderer/include"
+    - "../audio/include"
+  depends_on:
+    - engine_core
+    - engine_renderer
+    - engine_audio
 
