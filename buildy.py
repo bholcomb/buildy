@@ -479,8 +479,7 @@ class BuildCache:
         return {
             'total_entries': total_entries,
             'total_size_mb': total_size / (1024 * 1024),
-            'cache_directory': str(self.cache_dir),
-            'sharding': 'enabled (256 shards)'
+            'cache_directory': str(self.cache_dir)
         }
 
 class TaskGraph:
@@ -1303,7 +1302,6 @@ def main():
     parser.add_argument('--architecture', default='x86_64', help='Target architecture') 
     parser.add_argument('--configuration', default='debug', help='Build configuration')
     parser.add_argument('--cache-dir', default='.buildy_cache', help='Cache directory')
-    parser.add_argument('--output', help='Output task graph to file')
     parser.add_argument('--dry-run', action='store_true', help='Generate tasks but don\'t execute')
     parser.add_argument('--workers', type=int, default=DEFAULT_MAX_WORKERS, help='Max parallel workers')
     parser.add_argument('--cache-stats', action='store_true', help='Show cache statistics')
@@ -1373,29 +1371,31 @@ def main():
             logger.error(f"Error building task graph: {e}")
             return 1
 
-        # Output task graph if requested
-        if args.output:
-            try:
-                output_data = {
-                    'metadata': {
-                        'platform': args.platform,
-                        'architecture': args.architecture,
-                        'configuration': args.configuration,
-                        'generated_at': time.time(),
-                        'total_tasks': len(all_tasks)
-                    },
-                    'resolved_variables': config_parser.var_env.get_all_variables(),
-                    'tasks': [asdict(task) for task in all_tasks],
-                    'execution_plan': graph.get_execution_plan()
-                }
+        # Always output task graph to cache directory
+        try:
+            output_data = {
+                'metadata': {
+                    'platform': args.platform,
+                    'architecture': args.architecture,
+                    'configuration': args.configuration,
+                    'generated_at': time.time(),
+                    'total_tasks': len(all_tasks)
+                },
+                'resolved_variables': config_parser.var_env.get_all_variables(),
+                'tasks': [asdict(task) for task in all_tasks],
+                'execution_plan': graph.get_execution_plan()
+            }
 
-                with open(args.output, 'w') as f:
-                    json.dump(output_data, f, indent=2, default=str)
+            # Always save to cache directory
+            output_path = cache.cache_dir / "tasks.json"
+            
+            with open(output_path, 'w') as f:
+                json.dump(output_data, f, indent=2, default=str)
 
-                logger.info(f"Task graph saved to {args.output}")
-            except (OSError, IOError) as e:
-                logger.error(f"Failed to write task graph to {args.output}: {e}")
-                return 1
+            logger.debug(f"Task graph saved to {output_path}")
+        except (OSError, IOError) as e:
+            logger.warning(f"Failed to write task graph: {e}")
+            # Don't fail the build if we can't write the task graph
 
         # Execute tasks
         executor = TaskExecutor(cache, args.workers)
