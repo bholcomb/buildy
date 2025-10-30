@@ -14,6 +14,9 @@ from .template_engine import BuildTemplateEngine
 from .variables import VariableEnvironment
 from .config_parser import ConfigParser
 from .executor import TaskExecutor
+from .build_state import BuildState
+from .change_detector import ChangeDetector, ChangeSet
+from .incremental_builder import IncrementalBuilder
 
 __all__ = [
     'BuildTask',
@@ -34,5 +37,9 @@ __all__ = [
     'VariableEnvironment',
     'ConfigParser',
     'TaskExecutor',
+    'BuildState',
+    'ChangeDetector',
+    'ChangeSet',
+    'IncrementalBuilder',
 ]
 

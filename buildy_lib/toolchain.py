@@ -308,7 +308,12 @@ class CommandBuilder:
         if tool.supports.get('dependencies'):
             dep_template = tool.supports.get('dependencies')
             if dep_template:
-                dep_file = output.replace(tool.output_extension, '.d')
+                # Use .json extension for MSVC /sourceDependencies, .d for GCC/Clang
+                if '/sourceDependencies' in dep_template or '/sourcedependencies' in dep_template.lower():
+                    dep_file = output.replace(tool.output_extension, '.json')
+                else:
+                    dep_file = output.replace(tool.output_extension, '.d')
+                
                 template_vars['dep_file'] = dep_file
                 template_vars['dep_flags'] = dep_template.format(dep_file=dep_file)
             else:

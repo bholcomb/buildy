@@ -63,20 +63,35 @@ class BuildCache:
             # Ensure cache directory exists (may be deleted in parallel builds)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Write to temporary file first
-            temp_file = self.cache_index_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                # Acquire exclusive lock for writing
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    json.dump(self.cache_index, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            # Use unique temp file name to avoid race conditions in parallel builds
+            import tempfile
+            temp_fd, temp_path = tempfile.mkstemp(
+                suffix='.tmp',
+                prefix='cache_index_',
+                dir=self.cache_dir,
+                text=True
+            )
             
-            # Atomic rename
-            temp_file.replace(self.cache_index_file)
+            try:
+                with os.fdopen(temp_fd, 'w') as f:
+                    # Acquire exclusive lock for writing
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        json.dump(self.cache_index, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                
+                # Atomic rename
+                Path(temp_path).replace(self.cache_index_file)
+            except:
+                # Clean up temp file on error
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                raise
         except (OSError, IOError) as e:
             logger.error(f"Failed to save cache index: {e}")
 
@@ -234,18 +249,31 @@ class BuildCache:
             return ""
     
     def _parse_dependency_file(self, dep_file: str) -> List[str]:
-        """Parse GCC-generated .d file to extract header dependencies
+        """Parse compiler-generated dependency file (supports GCC/Clang and MSVC formats)
         
-        .d file format example:
-        build/obj/math.o: examples/math/libsrc/math.cpp \\
-          examples/math/include/mymath.h \\
-          /usr/include/c++/11/iostream
+        Supports:
+        - GCC/Clang Makefile-style .d files
+        - MSVC /sourceDependencies JSON files
         
         Returns list of header file paths (relative or absolute)
         """
         if not os.path.exists(dep_file):
             return []
         
+        # Detect format by extension
+        if dep_file.endswith('.json'):
+            return self._parse_msvc_json_deps(dep_file)
+        else:
+            return self._parse_makefile_deps(dep_file)
+    
+    def _parse_makefile_deps(self, dep_file: str) -> List[str]:
+        """Parse GCC/Clang Makefile-style .d file
+        
+        Format example:
+        build/obj/math.o: examples/math/libsrc/math.cpp \\
+          examples/math/include/mymath.h \\
+          /usr/include/c++/11/iostream
+        """
         try:
             with open(dep_file, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -263,16 +291,68 @@ class BuildCache:
             all_deps = content.split()
             
             # Filter to only header files (skip .cpp, .c source files)
+            # Include .inl (inline implementation files) and .inc (include files)
             headers = [
                 dep.strip() for dep in all_deps 
-                if dep.strip() and dep.endswith(('.h', '.hpp', '.hxx', '.hh', '.H'))
+                if dep.strip() and dep.endswith(('.h', '.hpp', '.hxx', '.hh', '.H', '.inl', '.inc'))
             ]
             
-            logger.debug(f"Parsed {len(headers)} header dependencies from {dep_file}")
+            logger.debug(f"Parsed {len(headers)} header dependencies from {dep_file} (Makefile format)")
             return headers
             
         except Exception as e:
-            logger.warning(f"Failed to parse dependency file {dep_file}: {e}")
+            logger.warning(f"Failed to parse Makefile dependency file {dep_file}: {e}")
+            return []
+    
+    def _parse_msvc_json_deps(self, dep_file: str) -> List[str]:
+        """Parse MSVC /sourceDependencies JSON format
+        
+        MSVC JSON format:
+        {
+            "Version": "1.1",
+            "Data": {
+                "Source": "main.cpp",
+                "Includes": [
+                    "header1.h",
+                    "header2.h",
+                    "C:\\Program Files\\...\\iostream"
+                ]
+            }
+        }
+        """
+        try:
+            with open(dep_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            includes = data.get('Data', {}).get('Includes', [])
+            
+            # Filter to only user headers (skip system headers in common system paths)
+            # Normalize paths to forward slashes for consistency
+            headers = []
+            for inc in includes:
+                # Normalize path separators
+                inc_normalized = inc.replace('\\', '/')
+                
+                # Skip system headers in common locations
+                if any(inc_normalized.lower().startswith(prefix.lower()) for prefix in [
+                    'c:/program files',
+                    'c:/windows',
+                    '/usr/include',
+                    '/usr/local/include'
+                ]):
+                    continue
+                
+                # Only include files with header extensions
+                # Include .inl (inline implementation files) and .inc (include files)
+                if inc_normalized.endswith(('.h', '.hpp', '.hxx', '.hh', '.H', '.inl', '.inc')):
+                    # Convert back to OS-native path separators
+                    headers.append(os.path.normpath(inc))
+            
+            logger.debug(f"Parsed {len(headers)} header dependencies from {dep_file} (MSVC JSON format)")
+            return headers
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse MSVC JSON dependency file {dep_file}: {e}")
             return []
 
     def get_cache_stats(self) -> Dict[str, Any]:
