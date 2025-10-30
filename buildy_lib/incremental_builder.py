@@ -399,14 +399,16 @@ class IncrementalBuilder:
             from dataclasses import asdict
             import json
             
-            # Get toolchain info
-            toolchain_info = {
-                'name': config_parser.current_toolchain.name,
-                'description': config_parser.current_toolchain.description,
-                'target_platform': config_parser.current_toolchain.target_platform,
-                'target_architecture': config_parser.current_toolchain.target_architecture,
-                'execution_type': config_parser.current_toolchain.execution_type
-            }
+            # Get toolchain info (may be None in workspace mode)
+            toolchain_info = None
+            if config_parser.current_toolchain:
+                toolchain_info = {
+                    'name': config_parser.current_toolchain.name,
+                    'description': config_parser.current_toolchain.description,
+                    'target_platform': config_parser.current_toolchain.target_platform,
+                    'target_architecture': config_parser.current_toolchain.target_architecture,
+                    'execution_type': config_parser.current_toolchain.execution_type
+                }
             
             output_data = {
                 'metadata': {

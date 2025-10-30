@@ -5,16 +5,16 @@ project:
 variables:
   MODULE_NAME: "engine_audio"
 
-tasks:
-  - name: engine_audio
-    type: static_library
-    sources:
-      - "src/audio.cpp"
-      - "src/sound.cpp"
-      - "src/music.cpp"
-    include_dirs:
-      - "include"
-      - "../core/include"  # Need core headers
-    dependencies:
-      - core:engine_core  # Scoped dependency (explicit)
+library:
+  name: engine_audio
+  type: static_library
+  sources:
+    - "src/audio.cpp"
+    - "src/sound.cpp"
+    - "src/music.cpp"
+  include_dirs:
+    - "include"
+    - "../core/include"  # Need core headers
+  depends_on:
+    - core:engine_core  # Scoped dependency (explicit)
 

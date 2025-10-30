@@ -6,13 +6,13 @@ project:
 variables:
   MODULE_NAME: "engine_core"
 
-tasks:
-  - name: engine_core
-    type: static_library
-    sources:
-      - "src/engine.cpp"
-      - "src/math.cpp"
-      - "src/memory.cpp"
-    include_dirs:
-      - "include"
+library:
+  name: engine_core
+  type: static_library
+  sources:
+    - "src/engine.cpp"
+    - "src/math.cpp"
+    - "src/memory.cpp"
+  include_dirs:
+    - "include"
 
