@@ -14,59 +14,19 @@ toolchain:
     type: native
   
   tools:
-    c_compiler: glslc
-    cxx_compiler: glslc
-    linker: ""
-    archiver: ""
-  
-  # Shader compilation configuration
-  compile:
-    # Command template for shader compilation
-    # Variables: {cxx_compiler}, {flags}, {defines}, {includes}, {input}, {output}
-    command: "{cxx_compiler} {flags} {defines} {includes} {input} -o {output}"
-    
-    # Configuration-specific flags
-    flags:
-      common: []
-      debug: ["-g", "-O0"]
-      release: ["-O"]
-    
-    # No dependency generation for shaders
-    dep_flags: ""
-    
-    # Not applicable for shaders
-    pic_flag: ""
-    
-    # Include directory flag
-    include_flag: "-I"
-    
-    # Define flag
-    define_flag: "-D"
-  
-  # Linking not applicable for shaders
-  link:
-    shared_library:
-      command: ""
-      output_pattern: ""
-      pic_flag: ""
-    
-    static_library:
-      command: ""
-      output_pattern: ""
-    
-    executable:
-      command: ""
-      output_pattern: ""
-    
-    lib_dir_flag: ""
-    lib_flag: ""
-  
-  # File extensions for shaders
-  extensions:
-    object: ".spv"        # SPIR-V output
-    dependency: ""        # No dependency files
-    shared_library: ""
-    static_library: ""
-    executable: ""
-
-
+    # GLSL shader compilation
+    compile:
+      action: compile
+      command: "glslc {flags} {defines} {includes} {input} -o {output}"
+      input_extensions: [".vert", ".frag", ".comp", ".geom", ".tesc", ".tese", ".glsl"]
+      output_extension: ".spv"
+      flags:
+        common: []
+        debug: ["-g", "-O0"]
+        release: ["-O"]
+      supports:
+        defines: true
+        define_flag: "-D"
+        includes: true
+        include_flag: "-I"
+        dependencies: false
