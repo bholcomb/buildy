@@ -314,7 +314,8 @@ class BuildCache:
         if not cache_entry:
             return False
 
-        cache_files_dir = self.cache_dir / task.cache_key
+        # Use sharded path for better filesystem performance
+        cache_files_dir = self._get_cache_path(task.cache_key)
         if not cache_files_dir.exists():
             return False
 
@@ -467,8 +468,9 @@ class BuildCache:
         total_entries = len(self.cache_index)
         total_size = 0
 
+        # Iterate through sharded cache directories
         for cache_key in self.cache_index:
-            cache_dir = self.cache_dir / cache_key
+            cache_dir = self._get_cache_path(cache_key)
             if cache_dir.exists():
                 for file_path in cache_dir.rglob('*'):
                     if file_path.is_file():
@@ -477,7 +479,8 @@ class BuildCache:
         return {
             'total_entries': total_entries,
             'total_size_mb': total_size / (1024 * 1024),
-            'cache_directory': str(self.cache_dir)
+            'cache_directory': str(self.cache_dir),
+            'sharding': 'enabled (256 shards)'
         }
 
 class TaskGraph:
