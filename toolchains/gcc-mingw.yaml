@@ -1,0 +1,60 @@
+toolchain:
+  name: "gcc-mingw"
+  description: "MinGW-w64 GCC for Windows cross-compilation"
+  
+  target:
+    platform: windows
+    architecture: x86_64
+  
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    c_compiler: x86_64-w64-mingw32-gcc
+    cxx_compiler: x86_64-w64-mingw32-g++
+    linker: x86_64-w64-mingw32-g++
+    archiver: x86_64-w64-mingw32-ar
+    strip: x86_64-w64-mingw32-strip
+    objcopy: x86_64-w64-mingw32-objcopy
+  
+  compile:
+    command: "{cxx_compiler} {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+    
+    flags:
+      common: ["-Wall", "-Wextra"]
+      debug: ["-g", "-O0"]
+      release: ["-O3", "-DNDEBUG"]
+    
+    dep_flags: "-MMD -MP -MF {dep_file}"
+    pic_flag: ""  # Not typically used on Windows
+    include_flag: "-I"
+    define_flag: "-D"
+  
+  link:
+    shared_library:
+      command: "{linker} -shared {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "{name}.dll"
+      pic_flag: ""
+    
+    static_library:
+      command: "{archiver} rcs {output} {objects}"
+      output_pattern: "lib{name}.a"
+    
+    executable:
+      command: "{linker} {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "{name}.exe"
+    
+    lib_dir_flag: "-L"
+    lib_flag: "-l"
+  
+  extensions:
+    object: ".o"
+    dependency: ".d"
+    shared_library: ".dll"
+    static_library: ".a"
+    executable: ".exe"
+

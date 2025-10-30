@@ -1,0 +1,83 @@
+toolchain:
+  name: "gcc-linux"
+  description: "GCC compiler for Linux x86_64"
+  
+  # Platform this toolchain targets
+  target:
+    platform: linux
+    architecture: x86_64
+  
+  # Host platform where toolchain runs (for cross-compilation)
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  # Execution environment
+  execution:
+    type: native  # native, docker, ssh, wsl
+  
+  # Tool paths and commands
+  tools:
+    c_compiler: gcc
+    cxx_compiler: g++
+    linker: g++
+    archiver: ar
+    strip: strip
+    objcopy: objcopy
+  
+  # Compiler configuration
+  compile:
+    # Command template
+    # Variables: {cxx_compiler}, {dep_flags}, {std}, {flags}, {defines}, {pic}, {includes}, {input}, {output}
+    command: "{cxx_compiler} {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+    
+    # Configuration-specific flags
+    flags:
+      common: ["-Wall", "-Wextra"]
+      debug: ["-g", "-O0"]
+      release: ["-O3", "-DNDEBUG"]
+    
+    # Dependency generation flags
+    dep_flags: "-MMD -MP -MF {dep_file}"
+    
+    # Position-independent code flag
+    pic_flag: "-fPIC"
+    
+    # Include directory flag
+    include_flag: "-I"
+    
+    # Define flag
+    define_flag: "-D"
+  
+  # Linker configuration
+  link:
+    # Shared library
+    shared_library:
+      command: "{linker} -shared {pic} {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "lib{name}.so"
+      pic_flag: "-fPIC"
+    
+    # Static library
+    static_library:
+      command: "{archiver} rcs {output} {objects}"
+      output_pattern: "lib{name}.a"
+    
+    # Executable
+    executable:
+      command: "{linker} {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "{name}"
+    
+    # Library directory flag
+    lib_dir_flag: "-L"
+    
+    # Library link flag
+    lib_flag: "-l"
+  
+  # File extensions
+  extensions:
+    object: ".o"
+    dependency: ".d"
+    shared_library: ".so"
+    static_library: ".a"
+    executable: ""
+
