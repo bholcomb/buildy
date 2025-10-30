@@ -19,7 +19,8 @@ from buildy_lib import (
     TaskGraph,
     ConfigParser,
     TaskExecutor,
-    ToolchainManager
+    ToolchainManager,
+    IncrementalBuilder
 )
 from buildy_lib.constants import DEFAULT_MAX_WORKERS
 
@@ -50,6 +51,8 @@ def main():
                        help='List available toolchains and exit')
     parser.add_argument('--toolchains-dir', default='toolchains',
                        help='Directory containing toolchain configurations')
+    parser.add_argument('--force', action='store_true',
+                       help='Force full rebuild, ignore cache and build state')
 
     args = parser.parse_args()
 
@@ -106,76 +109,29 @@ def main():
             parser.print_help()
             return 1
 
-        # Parse configuration files and generate tasks
-        all_tasks = []
-        for config_file in args.config_files:
-            if not os.path.exists(config_file):
-                logger.error(f"Configuration file not found: {config_file}")
-                return 1
-            
-            logger.info(f"Parsing {config_file}...")
-            config = config_parser.parse_config_file(config_file)
-            if not config:
-                logger.error(f"Failed to parse configuration file: {config_file}")
-                return 1
-            
-            tasks = config_parser.generate_tasks(config)
-            all_tasks.extend(tasks)
-
-        if not all_tasks:
-            logger.error("No tasks generated from configuration files")
+        # Always use incremental builder (it handles both incremental and full builds)
+        state_file = Path(args.cache_dir) / "build_state.json"
+        
+        # For now, only support single config file with incremental builds
+        if len(args.config_files) > 1:
+            logger.warning("Multiple config files not yet supported with incremental builds, using first one")
+        
+        config_file = args.config_files[0]
+        if not os.path.exists(config_file):
+            logger.error(f"Configuration file not found: {config_file}")
             return 1
-
-        # Build task graph
-        for task in all_tasks:
-            graph.add_task(task)
-
-        try:
-            graph.build_execution_stages()
-        except ValueError as e:
-            logger.error(f"Error building task graph: {e}")
-            return 1
-
-        # Always output task graph to cache directory
-        try:
-            # Get toolchain info
-            toolchain_info = {
-                'name': config_parser.current_toolchain.name,
-                'description': config_parser.current_toolchain.description,
-                'target_platform': config_parser.current_toolchain.target_platform,
-                'target_architecture': config_parser.current_toolchain.target_architecture,
-                'execution_type': config_parser.current_toolchain.execution_type
-            }
-            
-            output_data = {
-                'metadata': {
-                    'platform': args.platform,
-                    'architecture': args.architecture,
-                    'configuration': args.configuration,
-                    'generated_at': time.time(),
-                    'total_tasks': len(all_tasks),
-                    'toolchain': toolchain_info
-                },
-                'resolved_variables': config_parser.var_env.get_all_variables(),
-                'tasks': [asdict(task) for task in all_tasks],
-                'execution_plan': graph.get_execution_plan()
-            }
-
-            # Always save to cache directory
-            output_path = cache.cache_dir / "tasks.json"
-            
-            with open(output_path, 'w') as f:
-                json.dump(output_data, f, indent=2, default=str)
-
-            logger.debug(f"Task graph saved to {output_path}")
-        except (OSError, IOError) as e:
-            logger.warning(f"Failed to write task graph: {e}")
-            # Don't fail the build if we can't write the task graph
-
-        # Execute tasks with execution environment from config parser
-        executor = TaskExecutor(cache, args.workers, exec_env=config_parser.exec_env)
-        success = executor.execute_task_graph(graph, args.dry_run)
-
+        
+        builder = IncrementalBuilder(args.cache_dir, args.workers)
+        success = builder.build(
+            config_file,
+            config_parser,
+            toolchain_manager,
+            config_parser.template_engine,
+            config_parser.var_env,
+            dry_run=args.dry_run,
+            force=args.force
+        )
+        
         return 0 if success else 1
 
     except KeyboardInterrupt:

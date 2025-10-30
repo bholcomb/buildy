@@ -17,7 +17,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "cl.exe {flags} {defines} {includes} /c {input} /Fo{output}"
+      command: "cl.exe {dep_flags} {flags} {defines} {includes} /c {input} /Fo{output}"
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
@@ -30,12 +30,12 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
-        dependencies: false
+        dependencies: "/sourceDependencies {dep_file}"
     
     # C++ compilation
     cpp_compile:
       action: compile
-      command: "cl.exe /std:{std} {flags} {defines} {includes} /c {input} /Fo{output}"
+      command: "cl.exe {dep_flags} /std:{std} {flags} {defines} {includes} /c {input} /Fo{output}"
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".obj"
       flags:
@@ -48,7 +48,7 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
-        dependencies: false
+        dependencies: "/sourceDependencies {dep_file}"
         std: true
     
     # Shared library linking (DLL)

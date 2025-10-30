@@ -288,6 +288,7 @@ class TestBuildCache:
         dep_content = """output.o: src/main.cpp \\
   include/header1.h \\
   include/header2.hpp \\
+  include/inline_impl.inl \\
   /usr/include/c++/11/iostream
 """
         dep_file = create_source_file('output.d', dep_content)
@@ -296,6 +297,37 @@ class TestBuildCache:
         
         assert 'include/header1.h' in headers
         assert 'include/header2.hpp' in headers
+        assert 'include/inline_impl.inl' in headers
         assert '/usr/include/c++/11/iostream' not in headers  # System headers excluded
         assert 'src/main.cpp' not in headers  # Source files excluded
+    
+    def test_parse_msvc_dependency_file(self, temp_dir, create_source_file):
+        """Test parsing MSVC /sourceDependencies JSON files"""
+        cache = BuildCache(str(temp_dir / 'cache'))
+        
+        dep_content = """{
+  "Version": "1.1",
+  "Data": {
+    "Source": "C:\\\\project\\\\src\\\\main.cpp",
+    "Includes": [
+      "C:\\\\project\\\\include\\\\header1.h",
+      "C:\\\\project\\\\include\\\\header2.hpp",
+      "C:\\\\project\\\\include\\\\inline_impl.inl",
+      "C:\\\\Program Files\\\\Microsoft Visual Studio\\\\include\\\\iostream",
+      "C:\\\\Windows\\\\System32\\\\winbase.h"
+    ]
+  }
+}"""
+        dep_file = create_source_file('output.json', dep_content)
+        
+        headers = cache._parse_dependency_file(str(dep_file))
+        
+        # Should include project headers (with normalized paths)
+        assert any('header1.h' in h for h in headers)
+        assert any('header2.hpp' in h for h in headers)
+        assert any('inline_impl.inl' in h for h in headers)
+        
+        # Should exclude system headers
+        assert not any('iostream' in h for h in headers)
+        assert not any('winbase.h' in h for h in headers)
 
