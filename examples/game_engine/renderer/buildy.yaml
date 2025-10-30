@@ -1,0 +1,18 @@
+project:
+  name: renderer
+  description: "Rendering engine"
+
+variables:
+  MODULE_NAME: "engine_renderer"
+
+tasks:
+  - name: engine_renderer
+    type: static_library
+    sources:
+      - "src/renderer.cpp"
+      - "src/shader.cpp"
+      - "src/texture.cpp"
+    dependencies:
+      - engine_core  # Simple dependency (unambiguous)
+    public: true
+

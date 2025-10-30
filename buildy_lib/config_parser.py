@@ -18,6 +18,8 @@ from .variables import VariableEnvironment
 from .toolchain import ToolchainManager, ToolchainConfig, ToolMatcher, CommandBuilder
 from .execution import ExecutionEnvironment
 from .template_engine import BuildTemplateEngine
+from .workspace import Workspace, ModuleInfo
+from .target_registry import TargetRegistry
 
 logger = logging.getLogger('buildy.config_parser')
 
@@ -26,7 +28,8 @@ class ConfigParser:
 
     def __init__(self, platform: str = "linux", architecture: str = "x86_64", configuration: str = "debug", 
                  cli_defines: Dict[str, str] = None, toolchain_manager: ToolchainManager = None,
-                 default_toolchain: str = None, template_engine: BuildTemplateEngine = None):
+                 default_toolchain: str = None, template_engine: BuildTemplateEngine = None,
+                 workspace: Optional[Workspace] = None, parent_var_env: Optional[VariableEnvironment] = None):
         self.platform = platform
         self.architecture = architecture  
         self.configuration = configuration
@@ -35,7 +38,7 @@ class ConfigParser:
         self.arch_config = {}
         self.config_config = {}
         self.config_file_dir = None  # Track the directory of the config file
-        self.var_env = VariableEnvironment()  # Variable environment
+        self.var_env = VariableEnvironment(parent=parent_var_env)  # Variable environment with optional parent
         self.cli_defines = cli_defines or {}  # CLI-provided variable overrides
         self.toolchain_manager = toolchain_manager  # Toolchain manager
         self.default_toolchain = default_toolchain  # Default toolchain name
@@ -44,6 +47,9 @@ class ConfigParser:
         self.tool_matcher: Optional[ToolMatcher] = None  # Tool matcher for current toolchain
         self.command_builder: Optional[CommandBuilder] = None  # Command builder for current toolchain
         self.exec_env: Optional[ExecutionEnvironment] = None  # Execution environment
+        self.workspace = workspace  # Workspace for multi-module support
+        self.target_registry: Optional[TargetRegistry] = None  # Target registry for dependency resolution
+        self.current_module: Optional[str] = None  # Current module being parsed
 
     def parse_config_file(self, config_file: str) -> Dict[str, Any]:
         """Parse YAML build configuration file"""
@@ -178,6 +184,110 @@ class ConfigParser:
         # No toolchain found
         raise ValueError(f"No suitable toolchain found for {self.platform}-{self.architecture}. "
                         f"Available toolchains: {[name for name, _ in self.toolchain_manager.list_toolchains()]}")
+    
+    def generate_workspace_tasks(self, target_filter: Optional[List[str]] = None) -> List[BuildTask]:
+        """
+        Generate tasks for entire workspace or specific targets.
+        
+        Args:
+            target_filter: List of target names to build (None = all targets)
+            
+        Returns:
+            List of BuildTask objects for all modules
+        """
+        if not self.workspace:
+            raise ValueError("No workspace configured. Use generate_tasks() for single-file builds.")
+        
+        # Initialize target registry
+        self.target_registry = TargetRegistry(self.workspace)
+        self.target_registry.initialize()
+        
+        all_tasks = []
+        
+        # Create workspace-level variable environment
+        workspace_var_env = VariableEnvironment()
+        workspace_var_env.push_scope("workspace")
+        workspace_var_env.extract_variables_from_section(
+            self.workspace.config.raw_config.get('variables', {}),
+            "workspace"
+        )
+        
+        # Process each module
+        for module_path, module_info in self.workspace.modules.items():
+            # Skip if target filter specified and this module has no matching targets
+            if target_filter:
+                has_matching_target = any(
+                    target in target_filter for target in module_info.targets
+                )
+                if not has_matching_target:
+                    continue
+            
+            logger.info(f"Processing module: {module_path}")
+            
+            # Create module-specific parser with chained variable environment
+            module_parser = ConfigParser(
+                platform=self.platform,
+                architecture=self.architecture,
+                configuration=self.configuration,
+                cli_defines=self.cli_defines,
+                toolchain_manager=self.toolchain_manager,
+                default_toolchain=self.default_toolchain,
+                template_engine=self.template_engine,
+                workspace=self.workspace,
+                parent_var_env=workspace_var_env  # Chain to workspace environment
+            )
+            
+            # Set current module for dependency resolution
+            module_parser.current_module = module_path
+            module_parser.target_registry = self.target_registry
+            
+            # Generate tasks for this module
+            module_tasks = module_parser.generate_tasks(module_info.config)
+            
+            # Resolve cross-module dependencies
+            module_tasks = self._resolve_module_dependencies(module_tasks, module_path)
+            
+            all_tasks.extend(module_tasks)
+        
+        logger.info(f"Generated {len(all_tasks)} tasks from {len(self.workspace.modules)} modules")
+        return all_tasks
+    
+    def _resolve_module_dependencies(self, tasks: List[BuildTask], current_module: str) -> List[BuildTask]:
+        """
+        Resolve dependency strings to actual task IDs.
+        
+        Args:
+            tasks: List of tasks from current module
+            current_module: Module path for context
+            
+        Returns:
+            Tasks with resolved dependencies
+        """
+        if not self.target_registry:
+            return tasks
+        
+        for task in tasks:
+            resolved_deps = []
+            for dep in task.dependencies:
+                # If dependency is already a task ID (internal), keep it
+                if any(t.task_id == dep for t in tasks):
+                    resolved_deps.append(dep)
+                    continue
+                
+                # Try to resolve as target reference
+                try:
+                    target_ref = self.target_registry.resolve_dependency(dep, current_module)
+                    # Convert target reference to task ID
+                    # For now, use target name as task ID (will need refinement)
+                    resolved_deps.append(target_ref.name)
+                    logger.debug(f"Resolved dependency '{dep}' to '{target_ref.full_name}'")
+                except Exception as e:
+                    logger.warning(f"Failed to resolve dependency '{dep}': {e}")
+                    resolved_deps.append(dep)  # Keep original
+            
+            task.dependencies = resolved_deps
+        
+        return tasks
 
     def generate_tasks(self, config: Dict[str, Any]) -> List[BuildTask]:
         """Generate tasks from configuration with variable resolution"""

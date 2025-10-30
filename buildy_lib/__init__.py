@@ -17,6 +17,8 @@ from .executor import TaskExecutor
 from .build_state import BuildState
 from .change_detector import ChangeDetector, ChangeSet
 from .incremental_builder import IncrementalBuilder
+from .workspace import Workspace, WorkspaceConfig, ModuleInfo
+from .target_registry import TargetRegistry, TargetReference, AmbiguousTargetError, TargetNotFoundError
 
 __all__ = [
     'BuildTask',
@@ -41,5 +43,12 @@ __all__ = [
     'ChangeDetector',
     'ChangeSet',
     'IncrementalBuilder',
+    'Workspace',
+    'WorkspaceConfig',
+    'ModuleInfo',
+    'TargetRegistry',
+    'TargetReference',
+    'AmbiguousTargetError',
+    'TargetNotFoundError',
 ]
 

@@ -1,0 +1,18 @@
+project:
+  name: audio
+  description: "Audio engine"
+
+variables:
+  MODULE_NAME: "engine_audio"
+
+tasks:
+  - name: engine_audio
+    type: static_library
+    sources:
+      - "src/audio.cpp"
+      - "src/sound.cpp"
+      - "src/music.cpp"
+    dependencies:
+      - core:engine_core  # Scoped dependency (explicit)
+    public: true
+

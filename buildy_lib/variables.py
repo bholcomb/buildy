@@ -6,12 +6,19 @@ from typing import Dict, List, Optional, Any
 logger = logging.getLogger('buildy.variables')
 
 class VariableEnvironment:
-    """Hierarchical variable environment with provenance tracking"""
+    """Hierarchical variable environment with provenance tracking and chaining"""
     
-    def __init__(self):
+    def __init__(self, parent: Optional['VariableEnvironment'] = None):
+        """
+        Initialize variable environment.
+        
+        Args:
+            parent: Parent environment to chain to (for inheritance)
+        """
         # Variables stored with their source for provenance
         self.variables: Dict[str, tuple[str, str]] = {}  # name -> (value, source)
         self.scopes: List[str] = []  # Stack of scope names for tracking
+        self.parent = parent  # Parent environment for chaining
     
     def push_scope(self, scope_name: str):
         """Push a new scope onto the stack"""
@@ -39,18 +46,64 @@ class VariableEnvironment:
         self.variables[name] = (value, source)
     
     def get_variable(self, name: str) -> Optional[str]:
-        """Get a variable value, returns None if not found"""
+        """
+        Get a variable value, searching parent chain if not found locally.
+        
+        Args:
+            name: Variable name
+            
+        Returns:
+            Variable value or None if not found
+        """
         result = self.variables.get(name)
-        return result[0] if result else None
+        if result:
+            return result[0]
+        
+        # Search parent environment if not found locally
+        if self.parent:
+            return self.parent.get_variable(name)
+        
+        return None
     
     def get_provenance(self, name: str) -> Optional[str]:
-        """Get the source/provenance of a variable"""
+        """
+        Get the source/provenance of a variable, searching parent chain.
+        
+        Args:
+            name: Variable name
+            
+        Returns:
+            Source/provenance or None if not found
+        """
         result = self.variables.get(name)
-        return result[1] if result else None
+        if result:
+            return result[1]
+        
+        # Search parent environment if not found locally
+        if self.parent:
+            return self.parent.get_provenance(name)
+        
+        return None
     
     def get_variable_with_source(self, name: str) -> Optional[tuple[str, str]]:
-        """Get a variable and its source, returns None if not found"""
-        return self.variables.get(name)
+        """
+        Get a variable and its source, searching parent chain.
+        
+        Args:
+            name: Variable name
+            
+        Returns:
+            Tuple of (value, source) or None if not found
+        """
+        result = self.variables.get(name)
+        if result:
+            return result
+        
+        # Search parent environment if not found locally
+        if self.parent:
+            return self.parent.get_variable_with_source(name)
+        
+        return None
     
     def resolve_string(self, text: str, collected_errors: List[str] = None, max_iterations: int = 10) -> str:
         """Resolve all ${variable} references in a string
@@ -113,12 +166,27 @@ class VariableEnvironment:
         else:
             return value
     
-    def get_all_variables(self) -> Dict[str, Dict[str, str]]:
-        """Get all variables with their values and sources for export"""
-        return {
-            name: {"value": value, "source": source}
-            for name, (value, source) in self.variables.items()
-        }
+    def get_all_variables(self, include_parent: bool = True) -> Dict[str, Dict[str, str]]:
+        """
+        Get all variables with their values and sources for export.
+        
+        Args:
+            include_parent: Include variables from parent environment
+            
+        Returns:
+            Dictionary of variable_name -> {value, source}
+        """
+        result = {}
+        
+        # Get parent variables first (so local overrides them)
+        if include_parent and self.parent:
+            result.update(self.parent.get_all_variables(include_parent=True))
+        
+        # Add local variables (overriding parent)
+        for name, (value, source) in self.variables.items():
+            result[name] = {"value": value, "source": source}
+        
+        return result
     
     def extract_variables_from_section(self, section: Dict[str, Any], source_name: str):
         """Extract variables from a 'variables' section in the config"""

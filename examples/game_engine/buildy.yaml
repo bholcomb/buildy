@@ -1,0 +1,19 @@
+project:
+  name: game_engine
+  version: "1.0.0"
+
+# Workspace configuration
+workspace:
+  discover:
+    - "**/buildy.yaml"
+  exclude:
+    - ".buildy_cache/**"
+    - "build/**"
+
+# Workspace-level variables
+variables:
+  ENGINE_VERSION: "1.0.0"
+  BUILD_DIR: "build"
+  INCLUDE_DIR: "include"
+  CXX_STANDARD: "c++17"
+

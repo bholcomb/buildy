@@ -16,6 +16,7 @@ from .task_graph import TaskGraph
 from .config_parser import ConfigParser
 from .executor import TaskExecutor
 from .toolchain import ToolchainManager
+from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,115 @@ class IncrementalBuilder:
                                       toolchain_manager, template_engine,
                                       variable_env, toolchain_file,
                                       changes, dry_run)
+    
+    def build_workspace(self, workspace: Workspace,
+                       config_parser: ConfigParser,
+                       toolchain_manager: ToolchainManager,
+                       template_engine,
+                       target_filter: Optional[list] = None,
+                       dry_run: bool = False,
+                       force: bool = False) -> bool:
+        """
+        Perform incremental build for entire workspace.
+        
+        Args:
+            workspace: Workspace to build
+            config_parser: ConfigParser (with workspace set)
+            toolchain_manager: ToolchainManager instance
+            template_engine: BuildTemplateEngine instance
+            target_filter: Optional list of target names to build
+            dry_run: If True, don't execute commands
+            force: If True, force full rebuild
+            
+        Returns:
+            True if build succeeded, False otherwise
+        """
+        # Force full rebuild if requested
+        if force:
+            logger.info("Force flag set, performing full rebuild")
+            self.build_state = None
+        
+        # For workspace builds, we track state at workspace level
+        workspace_state_file = self.cache_dir / "workspace_state.json"
+        workspace_build_state = BuildState.load(workspace_state_file)
+        
+        # Detect changes at workspace level
+        if workspace_build_state is None or force:
+            logger.info("No previous workspace state, performing full build")
+            return self._full_workspace_build(workspace, config_parser,
+                                            toolchain_manager, template_engine,
+                                            target_filter, dry_run, workspace_state_file)
+        
+        # Check if workspace configuration changed
+        workspace_config_hash = BuildState.hash_config(workspace.config.raw_config)
+        if workspace_config_hash != workspace_build_state.config_hash:
+            logger.info("Workspace configuration changed, performing full rebuild")
+            return self._full_workspace_build(workspace, config_parser,
+                                            toolchain_manager, template_engine,
+                                            target_filter, dry_run, workspace_state_file)
+        
+        # TODO: Implement proper incremental workspace builds
+        # For now, just do full build
+        logger.info("Workspace incremental builds not yet implemented, performing full build")
+        return self._full_workspace_build(workspace, config_parser,
+                                        toolchain_manager, template_engine,
+                                        target_filter, dry_run, workspace_state_file)
+    
+    def _full_workspace_build(self, workspace: Workspace,
+                             config_parser: ConfigParser,
+                             toolchain_manager: ToolchainManager,
+                             template_engine,
+                             target_filter: Optional[list],
+                             dry_run: bool,
+                             state_file: Path) -> bool:
+        """Perform full workspace build"""
+        # Discover modules (with caching)
+        workspace.discover_modules()
+        
+        # Save discovery cache
+        workspace.save_discovery_cache(self.cache_dir)
+        
+        # Generate tasks for all modules
+        all_tasks = config_parser.generate_workspace_tasks(target_filter)
+        
+        # Build task graph
+        graph = TaskGraph()
+        for task in all_tasks:
+            graph.add_task(task)
+        
+        # Save task graph
+        self._save_task_graph(all_tasks, graph, config_parser)
+        
+        # Execute all tasks
+        executor = TaskExecutor(self.cache, max_workers=self.max_workers)
+        success = executor.execute_task_graph(graph, dry_run=dry_run)
+        
+        # Update workspace build state
+        if success and not dry_run:
+            workspace_config_hash = BuildState.hash_config(workspace.config.raw_config)
+            graph_hash = self._hash_graph(graph)
+            
+            # Collect all file mtimes
+            file_mtimes = {}
+            for task in all_tasks:
+                for inp in task.inputs:
+                    path = inp.path if hasattr(inp, 'path') else inp
+                    if os.path.exists(path):
+                        file_mtimes[path] = os.path.getmtime(path)
+            
+            # Create new build state
+            new_state = BuildState(
+                last_build_time=time.time(),
+                task_graph_hash=graph_hash,
+                completed_tasks=[task.task_id for task in all_tasks],
+                file_mtimes=file_mtimes,
+                config_hash=workspace_config_hash,
+                toolchain_hash=""  # TODO: Track toolchain per module
+            )
+            new_state.save(state_file)
+            logger.info(f"Saved workspace build state to {state_file}")
+        
+        return success
     
     def _full_build(self, config_file: str,
                    config: Dict[str, Any],

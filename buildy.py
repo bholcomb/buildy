@@ -20,7 +20,8 @@ from buildy_lib import (
     ConfigParser,
     TaskExecutor,
     ToolchainManager,
-    IncrementalBuilder
+    IncrementalBuilder,
+    Workspace
 )
 from buildy_lib.constants import DEFAULT_MAX_WORKERS
 
@@ -34,7 +35,7 @@ logger = logging.getLogger('buildy')
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Buildy - Task-based build system prototype')
-    parser.add_argument('config_files', nargs='*', help='Build configuration files')
+    parser.add_argument('config_files', nargs='*', help='Build configuration files (or omit for workspace mode)')
     parser.add_argument('--platform', default='linux', help='Target platform')
     parser.add_argument('--architecture', default='x86_64', help='Target architecture') 
     parser.add_argument('--configuration', default='debug', help='Build configuration')
@@ -53,6 +54,10 @@ def main():
                        help='Directory containing toolchain configurations')
     parser.add_argument('--force', action='store_true',
                        help='Force full rebuild, ignore cache and build state')
+    parser.add_argument('--target', action='append', dest='targets', metavar='NAME',
+                       help='Build specific target(s) (workspace mode only, can be used multiple times)')
+    parser.add_argument('--all', action='store_true', dest='build_all',
+                       help='Build all targets in workspace (default if no --target specified)')
 
     args = parser.parse_args()
 
@@ -103,34 +108,102 @@ def main():
             logger.info(f"  Cache directory: {stats['cache_directory']}")
             return 0
         
-        # Ensure config files are provided
+        # Determine build mode: workspace or single-file
+        workspace = None
+        config_file = None
+        
         if not args.config_files:
-            logger.error("No configuration files provided")
-            parser.print_help()
+            # No config files specified - try workspace mode
+            logger.info("No config file specified, attempting workspace discovery...")
+            
+            # Try loading from cache first
+            workspace = Workspace.load_discovery_cache(Path(args.cache_dir))
+            if workspace:
+                logger.info(f"Loaded workspace from cache: {workspace.root_dir}")
+            else:
+                # Cache miss or invalid, do full discovery
+                workspace = Workspace.discover(os.getcwd())
+                if not workspace:
+                    logger.error("No workspace found. Either provide a config file or run from a directory with buildy.yaml")
+                    parser.print_help()
+                    return 1
+                logger.info(f"Discovered workspace at: {workspace.root_dir}")
+            
+            workspace.discover_modules()
+            logger.info(f"Found {len(workspace.modules)} module(s)")
+        else:
+            # Config file(s) specified - check if it's a workspace root
+            config_file = args.config_files[0]
+            if not os.path.exists(config_file):
+                logger.error(f"Configuration file not found: {config_file}")
+                return 1
+            
+            # Check if this is a workspace root (has modules defined)
+            config_path = Path(config_file).resolve()
+            if config_path.name == 'buildy.yaml':
+                # Try to load as workspace
+                try:
+                    workspace = Workspace(config_path.parent)
+                    if workspace.modules:
+                        logger.info(f"Loaded workspace from: {workspace.root_dir}")
+                        logger.info(f"Found {len(workspace.modules)} module(s)")
+                    else:
+                        # No modules, treat as single file
+                        workspace = None
+                except Exception as e:
+                    logger.debug(f"Not a workspace: {e}")
+                    workspace = None
+            
+            # Warn about multiple config files (not yet supported)
+            if len(args.config_files) > 1:
+                logger.warning("Multiple config files not yet supported, using first one")
+        
+        # Validate target/all flags
+        if args.targets and not workspace:
+            logger.error("--target flag requires workspace mode")
             return 1
-
-        # Always use incremental builder (it handles both incremental and full builds)
-        state_file = Path(args.cache_dir) / "build_state.json"
-        
-        # For now, only support single config file with incremental builds
-        if len(args.config_files) > 1:
-            logger.warning("Multiple config files not yet supported with incremental builds, using first one")
-        
-        config_file = args.config_files[0]
-        if not os.path.exists(config_file):
-            logger.error(f"Configuration file not found: {config_file}")
+        if args.build_all and not workspace:
+            logger.error("--all flag requires workspace mode")
             return 1
         
-        builder = IncrementalBuilder(args.cache_dir, args.workers)
-        success = builder.build(
-            config_file,
-            config_parser,
-            toolchain_manager,
-            config_parser.template_engine,
-            config_parser.var_env,
-            dry_run=args.dry_run,
-            force=args.force
-        )
+        # Build using appropriate mode
+        if workspace:
+            # Workspace mode
+            target_filter = args.targets if args.targets else None
+            
+            # Create workspace-aware config parser
+            config_parser = ConfigParser(
+                args.platform,
+                args.architecture,
+                args.configuration,
+                cli_defines,
+                toolchain_manager,
+                args.toolchain,
+                workspace=workspace
+            )
+            
+            builder = IncrementalBuilder(args.cache_dir, args.workers)
+            success = builder.build_workspace(
+                workspace,
+                config_parser,
+                toolchain_manager,
+                config_parser.template_engine,
+                target_filter=target_filter,
+                dry_run=args.dry_run,
+                force=args.force
+            )
+        else:
+            # Single-file mode
+            builder = IncrementalBuilder(args.cache_dir, args.workers)
+            success = builder.build(
+                config_file,
+                config_parser,
+                toolchain_manager,
+                config_parser.template_engine,
+                config_parser.var_env,
+                dry_run=args.dry_run,
+                force=args.force
+            )
         
         return 0 if success else 1
 
