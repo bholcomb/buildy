@@ -144,6 +144,24 @@ class VariableEnvironment:
             self.set_variable(name, value, source_name)
 
 @dataclass
+class Tool:
+    """Individual tool within a toolchain"""
+    name: str
+    action: str
+    command: str
+    input_extensions: List[str]
+    output_extension: str
+    output_pattern: str = "{name}"
+    flags: Dict[str, List[str]] = None
+    supports: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.flags is None:
+            self.flags = {}
+        if self.supports is None:
+            self.supports = {}
+
+@dataclass
 class ToolchainConfig:
     """Toolchain configuration loaded from YAML"""
     name: str
@@ -154,11 +172,7 @@ class ToolchainConfig:
     host_architecture: str
     execution_type: str
     execution_config: Dict[str, Any]
-    tools: Dict[str, str]
-    compile_template: str
-    compile_flags: Dict[str, Any]
-    link_templates: Dict[str, Dict[str, str]]
-    extensions: Dict[str, str]
+    tools: Dict[str, Tool]  # tool_name -> Tool object
     
     @staticmethod
     def load(toolchain_file: str) -> 'ToolchainConfig':
@@ -169,6 +183,25 @@ class ToolchainConfig:
             
             tc = data['toolchain']
             
+            # Parse tools
+            tools = {}
+            for tool_name, tool_data in tc.get('tools', {}).items():
+                # Normalize input_extensions to list
+                input_exts = tool_data.get('input_extensions', [])
+                if isinstance(input_exts, str):
+                    input_exts = [input_exts]
+                
+                tools[tool_name] = Tool(
+                    name=tool_name,
+                    action=tool_data.get('action', 'compile'),
+                    command=tool_data.get('command', ''),
+                    input_extensions=input_exts,
+                    output_extension=tool_data.get('output_extension', ''),
+                    output_pattern=tool_data.get('output_pattern', '{name}'),
+                    flags=tool_data.get('flags', {}),
+                    supports=tool_data.get('supports', {})
+                )
+            
             return ToolchainConfig(
                 name=tc['name'],
                 description=tc.get('description', ''),
@@ -178,15 +211,455 @@ class ToolchainConfig:
                 host_architecture=tc['host']['architecture'],
                 execution_type=tc['execution']['type'],
                 execution_config=tc['execution'],
-                tools=tc['tools'],
-                compile_template=tc['compile']['command'],
-                compile_flags=tc['compile'],
-                link_templates=tc['link'],
-                extensions=tc['extensions']
+                tools=tools
             )
         except Exception as e:
             logger.error(f"Failed to load toolchain from {toolchain_file}: {e}")
             raise
+
+class BuildTemplateEngine:
+    """Expands universal build templates into concrete tasks"""
+    
+    def __init__(self, templates_file: str = "buildy_templates.yaml"):
+        self.templates_file = Path(templates_file)
+        self.templates = self._load_templates()
+    
+    def _load_templates(self) -> Dict[str, Any]:
+        """Load build templates from YAML file"""
+        if not self.templates_file.exists():
+            logger.warning(f"Templates file not found: {self.templates_file}")
+            return {}
+        
+        try:
+            with open(self.templates_file, 'r') as f:
+                data = yaml.safe_load(f)
+            return data.get('templates', {})
+        except Exception as e:
+            logger.error(f"Failed to load templates: {e}")
+            return {}
+    
+    def get_template(self, template_name: str) -> Optional[Dict[str, Any]]:
+        """Get a template by name"""
+        return self.templates.get(template_name)
+    
+    def list_templates(self) -> List[tuple[str, str]]:
+        """List available templates with descriptions"""
+        return [(name, tmpl.get('description', '')) 
+                for name, tmpl in self.templates.items()]
+    
+    def expand_template(self, template_name: str, item_config: Dict[str, Any],
+                       merged_config: Dict[str, Any], output_dir: str,
+                       setup_task_id: str, task_counter: int,
+                       tool_matcher: 'ToolMatcher', command_builder: 'CommandBuilder',
+                       platform: str, architecture: str, configuration: str,
+                       existing_tasks: List['BuildTask'] = None) -> List['BuildTask']:
+        """Expand a template into concrete build tasks
+        
+        Args:
+            template_name: Name of template to expand
+            item_config: Configuration for this specific item (library/executable/etc)
+            merged_config: Merged global configuration
+            output_dir: Base output directory
+            setup_task_id: ID of setup task to depend on
+            task_counter: Starting task counter
+            tool_matcher: Tool matcher for finding appropriate tools
+            command_builder: Command builder for generating commands
+            platform: Target platform
+            architecture: Target architecture
+            configuration: Build configuration (debug/release)
+            existing_tasks: List of existing tasks (for dependency resolution)
+        
+        Returns:
+            List of generated BuildTask objects
+        """
+        existing_tasks = existing_tasks or []
+        template = self.get_template(template_name)
+        if not template:
+            raise ValueError(f"Template '{template_name}' not found")
+        
+        tasks = []
+        step_results = {}  # Store results from each step for reference
+        
+        # Build context for template variable resolution
+        context = {
+            'item': item_config,
+            'config': merged_config,
+            'output_dir': output_dir,
+            'platform': platform,
+            'architecture': architecture,
+            'configuration': configuration,
+        }
+        
+        for step in template.get('steps', []):
+            step_name = step.get('name', 'unnamed')
+            action = step.get('action')
+            
+            if step.get('for_each'):
+                # Generate multiple tasks (one per source file)
+                step_tasks = self._expand_foreach_step(
+                    step, context, item_config, merged_config, output_dir,
+                    setup_task_id, task_counter, tool_matcher, command_builder,
+                    platform, architecture, configuration
+                )
+                tasks.extend(step_tasks)
+                task_counter += len(step_tasks)
+                
+                # Store results for later steps to reference
+                step_results[step_name] = {
+                    'tasks': step_tasks,
+                    'task_ids': [t.task_id for t in step_tasks],
+                    'outputs': [out for t in step_tasks for out in t.outputs]
+                }
+            else:
+                # Generate single task
+                step_task = self._expand_single_step(
+                    step, context, step_results, item_config, merged_config,
+                    output_dir, task_counter, tool_matcher, command_builder,
+                    platform, architecture, configuration, existing_tasks
+                )
+                if step_task:
+                    tasks.append(step_task)
+                    task_counter += 1
+                    
+                    step_results[step_name] = {
+                        'tasks': [step_task],
+                        'task_ids': [step_task.task_id],
+                        'outputs': step_task.outputs
+                    }
+        
+        return tasks
+    
+    def _expand_foreach_step(self, step: Dict[str, Any], context: Dict[str, Any],
+                            item_config: Dict[str, Any], merged_config: Dict[str, Any],
+                            output_dir: str, setup_task_id: str, task_counter: int,
+                            tool_matcher: 'ToolMatcher', command_builder: 'CommandBuilder',
+                            platform: str, architecture: str, configuration: str) -> List['BuildTask']:
+        """Expand a for_each step into multiple tasks"""
+        tasks = []
+        sources = item_config.get('sources', [])
+        
+        if isinstance(sources, str):
+            # Expand glob pattern
+            from glob import glob as glob_func
+            sources = sorted(glob_func(sources, recursive=True))
+        
+        for source in sources:
+            source_path = Path(source)
+            
+            # Find appropriate tool for this source file
+            action = step.get('action')
+            tool = tool_matcher.find_tool(action, source)
+            if not tool:
+                logger.warning(f"No {action} tool found for {source}, skipping")
+                continue
+            
+            # Build context for this iteration
+            iter_context = {
+                **context,
+                'source': source,
+                'source_stem': source_path.stem,
+                'tool': {
+                    'output_ext': tool.output_extension,
+                    'output_pattern': tool.output_pattern
+                }
+            }
+            
+            # Resolve output path
+            output_template = step.get('output', '')
+            output = self._resolve_template_string(output_template, iter_context)
+            
+            # Get tool parameters
+            tool_params = step.get('tool_params', {})
+            resolved_params = self._resolve_tool_params(tool_params, iter_context)
+            
+            # Build command
+            command, dep_file = command_builder.build_command(
+                tool=tool,
+                source=source,
+                output=output,
+                **resolved_params
+            )
+            
+            # Build outputs list
+            outputs = [output]
+            if dep_file:
+                outputs.append(dep_file)
+            
+            # Create task
+            task_name = item_config.get('name', 'unnamed')
+            task = BuildTask(
+                task_id=f"{action}_{task_name}_{task_counter:03d}",
+                task_type=action,
+                inputs=[TaskInput(path=source)],
+                outputs=outputs,
+                dependencies=[setup_task_id],
+                command=command,
+                platform=platform,
+                architecture=architecture,
+                configuration=configuration,
+                estimated_time=DEFAULT_COMPILE_TIME_SECONDS,
+                resource_requirements=ResourceRequirements(cpu_cores=1, memory_mb=200, disk_mb=15)
+            )
+            tasks.append(task)
+            task_counter += 1
+        
+        return tasks
+    
+    def _expand_single_step(self, step: Dict[str, Any], context: Dict[str, Any],
+                           step_results: Dict[str, Any], item_config: Dict[str, Any],
+                           merged_config: Dict[str, Any], output_dir: str,
+                           task_counter: int, tool_matcher: 'ToolMatcher',
+                           command_builder: 'CommandBuilder', platform: str,
+                           architecture: str, configuration: str,
+                           existing_tasks: List['BuildTask']) -> Optional['BuildTask']:
+        """Expand a single (non-foreach) step into a task"""
+        action = step.get('action')
+        output_type = step.get('output_type')
+        
+        # Find appropriate tool
+        if output_type:
+            tool = tool_matcher.find_link_tool(output_type)
+        else:
+            # For non-link actions, we'd need a source file to match
+            # This is a limitation - single steps without for_each are typically link steps
+            tool = tool_matcher.find_link_tool(output_type) if output_type else None
+        
+        if not tool:
+            logger.warning(f"No tool found for action={action}, output_type={output_type}")
+            return None
+        
+        # Update context with tool info
+        step_context = {
+            **context,
+            **step_results,
+            'tool': {
+                'output_ext': tool.output_extension,
+                'output_pattern': tool.output_pattern.format(name=item_config.get('name', 'output'))
+            }
+        }
+        
+        # Resolve output path
+        output_template = step.get('output', '')
+        output = self._resolve_template_string(output_template, step_context)
+        
+        # Collect inputs from previous step
+        inputs_ref = step.get('inputs', '')
+        inputs = self._resolve_reference(inputs_ref, step_results)
+        if not isinstance(inputs, list):
+            inputs = [inputs] if inputs else []
+        
+        # Filter inputs to only include files matching tool's input extensions
+        filtered_inputs = [inp for inp in inputs 
+                          if any(inp.endswith(ext) for ext in tool.input_extensions)]
+        
+        # Resolve dependencies
+        depends_on_ref = step.get('depends_on', [])
+        if isinstance(depends_on_ref, str):
+            depends_on_ref = [depends_on_ref]
+        
+        dependencies = []
+        for dep_ref in depends_on_ref:
+            resolved_deps = self._resolve_reference(dep_ref, step_results)
+            if isinstance(resolved_deps, list):
+                dependencies.extend(resolved_deps)
+            elif resolved_deps:
+                dependencies.append(resolved_deps)
+        
+        # Handle library dependencies for executables
+        lib_dirs = []
+        lib_names = []
+        if output_type == 'executable':
+            depends_on_libs = item_config.get('depends_on', [])
+            if depends_on_libs:
+                lib_dirs.append(f"{output_dir}/lib")
+                
+                # Find library tasks and extract names
+                for dep in depends_on_libs:
+                    if dep.startswith('local(') and dep.endswith(')'):
+                        lib_name = dep[6:-1]
+                        # Find the library link task
+                        for task in existing_tasks:
+                            if task.task_type == 'link' and lib_name in task.task_id and 'link_' + lib_name in task.task_id:
+                                dependencies.append(task.task_id)
+                                lib_names.append(lib_name)
+                                break
+        
+        # Get tool parameters
+        tool_params = step.get('tool_params', {})
+        resolved_params = self._resolve_tool_params(tool_params, step_context)
+        
+        # Override with library linking info
+        if lib_dirs:
+            resolved_params['lib_dirs'] = lib_dirs
+        if lib_names:
+            resolved_params['libs'] = lib_names
+        
+        # Build command
+        command = command_builder.build_link_command(
+            tool=tool,
+            objects=filtered_inputs,
+            output=output,
+            **resolved_params
+        )
+        
+        # Create task
+        task_name = item_config.get('name', 'unnamed')
+        task = BuildTask(
+            task_id=f"{action}_{task_name}_{task_counter:03d}",
+            task_type=action,
+            inputs=[TaskInput(path=inp) for inp in filtered_inputs],
+            outputs=[output],
+            dependencies=dependencies,
+            command=command,
+            platform=platform,
+            architecture=architecture,
+            configuration=configuration,
+            estimated_time=DEFAULT_LINK_TIME_SECONDS,
+            resource_requirements=ResourceRequirements(cpu_cores=1, memory_mb=150, disk_mb=25)
+        )
+        
+        return task
+    
+    def _resolve_template_string(self, template: str, context: Dict[str, Any]) -> Any:
+        """Resolve template variables in a string
+        
+        Returns the resolved value - may be a string, list, or other type
+        """
+        if not template:
+            return ""
+        
+        # Check if the entire template is just a single reference
+        if template.startswith('{') and template.endswith('}') and template.count('{') == 1:
+            ref = template.strip('{}')
+            parts = ref.split('.')
+            obj = context
+            for part in parts:
+                if isinstance(obj, dict):
+                    obj = obj.get(part)
+                else:
+                    break
+            if obj is not None:
+                return obj
+        
+        # Otherwise do string replacement
+        result = template
+        for key, value in context.items():
+            if isinstance(value, dict):
+                for subkey, subvalue in value.items():
+                    if not isinstance(subvalue, (list, dict)):
+                        result = result.replace(f"{{{key}.{subkey}}}", str(subvalue))
+            elif not isinstance(value, (list, dict)):
+                result = result.replace(f"{{{key}}}", str(value))
+        
+        return result
+    
+    def _resolve_reference(self, ref: str, step_results: Dict[str, Any]) -> Any:
+        """Resolve a reference to previous step results"""
+        if not ref or not isinstance(ref, str):
+            return ref
+        
+        # Remove curly braces if present
+        ref = ref.strip('{}')
+        
+        # Parse reference like "compile.outputs" or "compile.task_ids"
+        parts = ref.split('.')
+        if len(parts) < 2:
+            return ref
+        
+        step_name = parts[0]
+        attr_name = parts[1]
+        
+        if step_name in step_results:
+            return step_results[step_name].get(attr_name, [])
+        
+        return []
+    
+    def _resolve_tool_params(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve tool parameters from template"""
+        resolved = {}
+        
+        for key, value in params.items():
+            if isinstance(value, str):
+                resolved_value = self._resolve_template_string(value, context)
+                resolved[key] = resolved_value
+            elif isinstance(value, list):
+                resolved[key] = [self._resolve_template_string(v, context) if isinstance(v, str) else v 
+                               for v in value]
+            else:
+                resolved[key] = value
+        
+        return resolved
+
+class ToolMatcher:
+    """Matches files to appropriate tools based on action and extension"""
+    
+    def __init__(self, toolchain: ToolchainConfig):
+        self.toolchain = toolchain
+        # Build lookup table: (action, extension) -> Tool
+        self._tool_map: Dict[tuple[str, str], Tool] = {}
+        self._build_tool_map()
+    
+    def _build_tool_map(self):
+        """Build action+extension lookup map"""
+        for tool in self.toolchain.tools.values():
+            # Only build map for non-link actions
+            # Link tools are handled separately by find_link_tool()
+            if tool.action != 'link':
+                for ext in tool.input_extensions:
+                    key = (tool.action, ext)
+                    if key in self._tool_map:
+                        existing = self._tool_map[key]
+                        logger.error(
+                            f"Ambiguous tool definition in toolchain '{self.toolchain.name}': "
+                            f"Both '{existing.name}' and '{tool.name}' handle action='{tool.action}' "
+                            f"with extension='{ext}'"
+                        )
+                        raise ValueError(f"Ambiguous tool mapping: {key}")
+                    self._tool_map[key] = tool
+    
+    def find_tool(self, action: str, file_path: str) -> Optional[Tool]:
+        """Find tool that matches action and file extension
+        
+        Args:
+            action: The action to perform (e.g., 'compile', 'link', 'convert')
+            file_path: Path to the file (extension will be extracted)
+        
+        Returns:
+            Matching Tool or None if no match found
+        """
+        ext = Path(file_path).suffix
+        if not ext:
+            return None
+        
+        key = (action, ext)
+        tool = self._tool_map.get(key)
+        
+        if tool:
+            logger.debug(f"Matched {file_path} ({action}) -> tool '{tool.name}'")
+        else:
+            logger.debug(f"No tool found for action='{action}' extension='{ext}'")
+        
+        return tool
+    
+    def find_link_tool(self, output_type: str) -> Optional[Tool]:
+        """Find tool for linking based on output type
+        
+        Args:
+            output_type: 'shared_library', 'static_library', or 'executable'
+        
+        Returns:
+            Matching Tool or None
+        """
+        # Look for tool with action='link' and matching output type
+        for tool in self.toolchain.tools.values():
+            if tool.action == 'link':
+                # Check if tool name or supports indicates it handles this output type
+                if output_type in tool.name or tool.supports.get('output_type') == output_type:
+                    logger.debug(f"Matched link tool for '{output_type}' -> '{tool.name}'")
+                    return tool
+        
+        logger.warning(f"No link tool found for output_type='{output_type}'")
+        return None
 
 class ToolchainManager:
     """Manages toolchain selection and loading"""
@@ -232,74 +705,106 @@ class ToolchainManager:
         return [(tc.name, tc.description) for tc in self._toolchains.values()]
 
 class CommandBuilder:
-    """Builds commands using toolchain templates"""
+    """Builds commands using tool-based approach"""
     
-    def __init__(self, toolchain: ToolchainConfig):
+    def __init__(self, toolchain: ToolchainConfig, tool_matcher: ToolMatcher, config_type: str = 'debug'):
         self.toolchain = toolchain
+        self.tool_matcher = tool_matcher
+        self.config_type = config_type
     
-    def build_compile_command(self, source: str, output: str, 
-                            cpp_standard: str, defines: List[str],
-                            include_dirs: List[str], is_shared_library: bool,
-                            config_type: str = 'debug',
-                            extra_flags: List[str] = None) -> tuple[str, str]:
-        """Build compilation command from toolchain template
+    def build_command(self, tool: Tool, source: str, output: str,
+                     defines: List[str] = None, include_dirs: List[str] = None,
+                     extra_flags: List[str] = None, **kwargs) -> tuple[str, str]:
+        """Build command using tool template
+        
+        Args:
+            tool: The Tool to use
+            source: Input file path
+            output: Output file path
+            defines: Preprocessor defines (if tool supports)
+            include_dirs: Include directories (if tool supports)
+            extra_flags: Additional flags
+            **kwargs: Additional template variables (std, pic, etc.)
         
         Returns:
-            tuple: (command, dep_file) - The compile command and dependency file path
+            tuple: (command, dep_file) - The command and dependency file path (if applicable)
         """
+        defines = defines or []
+        include_dirs = include_dirs or []
         extra_flags = extra_flags or []
         
-        # Get toolchain-specific flags
-        common_flags = self.toolchain.compile_flags.get('flags', {}).get('common', [])
-        config_flags = self.toolchain.compile_flags.get('flags', {}).get(config_type, [])
+        # Normalize extra_flags to list if it's a string
+        if isinstance(extra_flags, str):
+            extra_flags = [extra_flags] if extra_flags else []
+        
+        # Get flags for current configuration
+        common_flags = tool.flags.get('common', [])
+        config_flags = tool.flags.get(self.config_type, [])
         all_flags = common_flags + config_flags + extra_flags
         
-        # Build define flags
-        define_flag = self.toolchain.compile_flags.get('define_flag', '-D')
-        define_str = ' '.join(f"{define_flag}{d}" for d in defines)
+        # Build template variables
+        template_vars = {
+            'input': source,
+            'output': output,
+            'flags': ' '.join(all_flags),
+        }
         
-        # Build include flags
-        include_flag = self.toolchain.compile_flags.get('include_flag', '-I')
-        include_str = ' '.join(f"{include_flag}{inc}" for inc in include_dirs)
+        # Add defines if tool supports them
+        if tool.supports.get('defines') and defines:
+            define_flag = tool.supports.get('define_flag', '-D')
+            template_vars['defines'] = ' '.join(f"{define_flag}{d}" for d in defines)
+        else:
+            template_vars['defines'] = ''
         
-        # PIC flag for shared libraries
-        pic_flag = self.toolchain.compile_flags.get('pic_flag', '')
-        pic = pic_flag if is_shared_library else ''
+        # Add includes if tool supports them
+        if tool.supports.get('includes') and include_dirs:
+            include_flag = tool.supports.get('include_flag', '-I')
+            template_vars['includes'] = ' '.join(f"{include_flag}{inc}" for inc in include_dirs)
+        else:
+            template_vars['includes'] = ''
         
-        # Dependency file
-        dep_ext = self.toolchain.extensions.get('dependency', '.d')
-        obj_ext = self.toolchain.extensions.get('object', '.o')
-        dep_file = output.replace(obj_ext, dep_ext) if dep_ext else ""
+        # Add PIC flag if tool supports it and requested
+        if tool.supports.get('pic') and kwargs.get('is_shared_library'):
+            template_vars['pic'] = tool.supports.get('pic_flag', '-fPIC')
+        else:
+            template_vars['pic'] = ''
         
-        # Dependency flags
-        dep_flags_template = self.toolchain.compile_flags.get('dep_flags', '')
-        dep_flags = dep_flags_template.format(dep_file=dep_file) if dep_file and dep_flags_template else ''
+        # Handle dependency generation if tool supports it
+        dep_file = ''
+        if tool.supports.get('dependencies'):
+            dep_template = tool.supports.get('dependencies')
+            if dep_template:
+                dep_file = output.replace(tool.output_extension, '.d')
+                template_vars['dep_file'] = dep_file
+                template_vars['dep_flags'] = dep_template.format(dep_file=dep_file)
+            else:
+                template_vars['dep_flags'] = ''
+        else:
+            template_vars['dep_flags'] = ''
+        
+        # Add any additional kwargs
+        for key, value in kwargs.items():
+            if key not in template_vars:
+                template_vars[key] = value
         
         # Build command from template
-        command = self.toolchain.compile_template.format(
-            cxx_compiler=self.toolchain.tools['cxx_compiler'],
-            dep_flags=dep_flags,
-            std=cpp_standard,
-            flags=' '.join(all_flags),
-            defines=define_str,
-            pic=pic,
-            includes=include_str,
-            input=source,
-            output=output
-        )
+        try:
+            command = tool.command.format(**template_vars)
+        except KeyError as e:
+            logger.error(f"Missing template variable {e} for tool '{tool.name}'")
+            raise
         
         # Clean up extra spaces
         command = ' '.join(command.split())
         
         return command, dep_file
     
-    def build_link_command(self, link_type: str, objects: List[str],
-                          output: str, lib_dirs: List[str] = None,
-                          libs: List[str] = None) -> str:
-        """Build link command from toolchain template
+    def build_link_command(self, tool: Tool, objects: List[str], output: str,
+                          lib_dirs: List[str] = None, libs: List[str] = None) -> str:
+        """Build link command using tool template
         
         Args:
-            link_type: 'shared_library', 'static_library', or 'executable'
+            tool: The link tool to use
             objects: List of object files to link
             output: Output file path
             lib_dirs: Library search directories
@@ -308,57 +813,47 @@ class CommandBuilder:
         lib_dirs = lib_dirs or []
         libs = libs or []
         
-        # Get link template for this type
-        link_config = self.toolchain.link_templates.get(link_type, {})
-        template = link_config.get('command', '')
+        # Build template variables
+        template_vars = {
+            'objects': ' '.join(objects),
+            'output': output,
+        }
         
-        if not template:
-            raise ValueError(f"No link template for type '{link_type}' in toolchain '{self.toolchain.name}'")
-        
-        # Build library directory flags
-        lib_dir_flag = self.toolchain.link_templates.get('lib_dir_flag', '-L')
-        lib_dir_str = ' '.join(f"{lib_dir_flag}{d}" for d in lib_dirs)
-        
-        # Build library link flags
-        lib_flag = self.toolchain.link_templates.get('lib_flag', '-l')
-        if lib_flag:
-            lib_str = ' '.join(f"{lib_flag}{lib}" for lib in libs)
+        # Add library directories if tool supports them
+        if tool.supports.get('lib_dirs') and lib_dirs:
+            lib_dir_flag = tool.supports.get('lib_dir_flag', '-L')
+            template_vars['lib_dirs'] = ' '.join(f"{lib_dir_flag}{d}" for d in lib_dirs)
         else:
-            # MSVC-style: use full library names
-            lib_str = ' '.join(libs)
+            template_vars['lib_dirs'] = ''
         
-        # PIC flag for shared libraries
-        pic_flag = link_config.get('pic_flag', '')
+        # Add libraries if tool supports them
+        if tool.supports.get('libs') and libs:
+            lib_flag = tool.supports.get('lib_flag', '-l')
+            if lib_flag:
+                template_vars['libs'] = ' '.join(f"{lib_flag}{lib}" for lib in libs)
+            else:
+                # No prefix (e.g., MSVC style)
+                template_vars['libs'] = ' '.join(libs)
+        else:
+            template_vars['libs'] = ''
+        
+        # Get flags for current configuration
+        common_flags = tool.flags.get('common', [])
+        config_flags = tool.flags.get(self.config_type, [])
+        all_flags = common_flags + config_flags
+        template_vars['flags'] = ' '.join(all_flags)
         
         # Build command
-        command = template.format(
-            linker=self.toolchain.tools.get('linker', self.toolchain.tools['cxx_compiler']),
-            archiver=self.toolchain.tools.get('archiver', 'ar'),
-            objects=' '.join(objects),
-            lib_dirs=lib_dir_str,
-            libs=lib_str,
-            output=output,
-            pic=pic_flag
-        )
+        try:
+            command = tool.command.format(**template_vars)
+        except KeyError as e:
+            logger.error(f"Missing template variable {e} for link tool '{tool.name}'")
+            raise
         
         # Clean up extra spaces
         command = ' '.join(command.split())
         
         return command
-    
-    def get_output_pattern(self, link_type: str, name: str) -> str:
-        """Get output filename pattern for link type
-        
-        Args:
-            link_type: 'shared_library', 'static_library', or 'executable'
-            name: Base name (e.g., 'mylib')
-        
-        Returns:
-            Formatted output filename (e.g., 'libmylib.so', 'mylib.exe')
-        """
-        link_config = self.toolchain.link_templates.get(link_type, {})
-        pattern = link_config.get('output_pattern', '{name}')
-        return pattern.format(name=name)
 
 class ExecutionEnvironment:
     """Base class for different execution environments (native, docker, etc.)"""
@@ -719,7 +1214,7 @@ class BuildCache:
             # Parse header dependencies from .d file if this is a compile task
             header_deps = []
             header_hashes = {}
-            if dep_file and task.task_type == 'compile_cpp':
+            if dep_file and task.task_type == 'compile':
                 header_deps = self._parse_dependency_file(dep_file)
                 # Calculate and store hashes for all header dependencies
                 for header_path in header_deps:
@@ -915,7 +1410,7 @@ class ConfigParser:
 
     def __init__(self, platform: str = "linux", architecture: str = "x86_64", configuration: str = "debug", 
                  cli_defines: Dict[str, str] = None, toolchain_manager: ToolchainManager = None,
-                 default_toolchain: str = None):
+                 default_toolchain: str = None, template_engine: BuildTemplateEngine = None):
         self.platform = platform
         self.architecture = architecture  
         self.configuration = configuration
@@ -928,7 +1423,9 @@ class ConfigParser:
         self.cli_defines = cli_defines or {}  # CLI-provided variable overrides
         self.toolchain_manager = toolchain_manager  # Toolchain manager
         self.default_toolchain = default_toolchain  # Default toolchain name
+        self.template_engine = template_engine or BuildTemplateEngine()  # Build template engine
         self.current_toolchain: Optional[ToolchainConfig] = None  # Current active toolchain
+        self.tool_matcher: Optional[ToolMatcher] = None  # Tool matcher for current toolchain
         self.command_builder: Optional[CommandBuilder] = None  # Command builder for current toolchain
         self.exec_env: Optional[ExecutionEnvironment] = None  # Execution environment
 
@@ -1073,7 +1570,8 @@ class ConfigParser:
         
         # Select and initialize toolchain
         self.current_toolchain = self._select_toolchain(config)
-        self.command_builder = CommandBuilder(self.current_toolchain)
+        self.tool_matcher = ToolMatcher(self.current_toolchain)
+        self.command_builder = CommandBuilder(self.current_toolchain, self.tool_matcher, self.configuration)
         self.exec_env = ExecutionEnvironment.create(self.current_toolchain)
         
         logger.info(f"Using toolchain: {self.current_toolchain.name} ({self.current_toolchain.description})")
@@ -1260,22 +1758,22 @@ class ConfigParser:
 
     def _generate_library_tasks(self, lib_config: Dict[str, Any], merged_config: Dict[str, Any], 
                                output_dir: str, setup_task_id: str, task_counter: int) -> List[BuildTask]:
-        """Generate tasks for a library"""
-        tasks = []
-        lib_name = lib_config.get('name', f'lib_{task_counter}')
+        """Generate tasks for a library using template engine"""
+        # Determine library type (default to shared_library)
+        lib_type = lib_config.get('type', 'shared_library')
+        
+        # Expand glob patterns in sources
         sources = lib_config.get('sources', [])
-        include_dirs = lib_config.get('include_dirs', [])
-
         if isinstance(sources, str):
-            # Simple glob pattern - expand it
             sources = self._expand_glob(sources)
+        lib_config['sources'] = sources
         
         # Process include directories (resolve relative to config file)
+        include_dirs = lib_config.get('include_dirs', [])
         resolved_include_dirs = []
         if isinstance(include_dirs, list):
             for inc_dir in include_dirs:
                 if self.config_file_dir:
-                    # Make include path relative to config file, then relative to cwd
                     abs_inc_path = self.config_file_dir / inc_dir
                     try:
                         rel_inc_path = abs_inc_path.relative_to(Path.cwd())
@@ -1284,49 +1782,44 @@ class ConfigParser:
                         resolved_include_dirs.append(str(abs_inc_path))
                 else:
                     resolved_include_dirs.append(inc_dir)
-
-        compile_task_objs = []
-
-        # Generate compile tasks for each source file
-        for source in sources:
-            if source.endswith('.cpp') or source.endswith('.c'):
-                compile_task = self._create_compile_task(
-                    task_counter, source, lib_name, merged_config, output_dir, setup_task_id,
-                    include_dirs=resolved_include_dirs,
-                    is_shared_library=True  # Add -fPIC for shared libraries
-                )
-                tasks.append(compile_task)
-                compile_task_objs.append(compile_task)
-                task_counter += 1
-
-        # Generate link task
-        if compile_task_objs:
-            link_task = self._create_library_link_task(
-                task_counter, lib_name, compile_task_objs, merged_config, output_dir
-            )
-            tasks.append(link_task)
-
+        lib_config['include_dirs'] = resolved_include_dirs
+        
+        # Use template engine to generate tasks
+        tasks = self.template_engine.expand_template(
+            template_name=lib_type,
+            item_config=lib_config,
+            merged_config=merged_config,
+            output_dir=output_dir,
+            setup_task_id=setup_task_id,
+            task_counter=task_counter,
+            tool_matcher=self.tool_matcher,
+            command_builder=self.command_builder,
+            platform=self.platform,
+            architecture=self.architecture,
+            configuration=self.configuration
+        )
+        
         return tasks
 
     def _generate_executable_tasks(self, exe_config: Dict[str, Any], merged_config: Dict[str, Any],
                                   output_dir: str, setup_task_id: str, task_counter: int, 
                                   existing_tasks: List[BuildTask]) -> List[BuildTask]:
-        """Generate tasks for an executable"""
-        tasks = []
-        exe_name = exe_config.get('name', f'exe_{task_counter}')
+        """Generate tasks for an executable using template engine"""
+        # Determine executable type (default to executable)
+        exe_type = exe_config.get('type', 'executable')
+        
+        # Expand glob patterns in sources
         sources = exe_config.get('sources', [])
-        dependencies = exe_config.get('depends_on', [])
-        include_dirs = exe_config.get('include_dirs', [])
-
         if isinstance(sources, str):
             sources = self._expand_glob(sources)
+        exe_config['sources'] = sources
         
         # Process include directories (resolve relative to config file)
+        include_dirs = exe_config.get('include_dirs', [])
         resolved_include_dirs = []
         if isinstance(include_dirs, list):
             for inc_dir in include_dirs:
                 if self.config_file_dir:
-                    # Make include path relative to config file, then relative to cwd
                     abs_inc_path = self.config_file_dir / inc_dir
                     try:
                         rel_inc_path = abs_inc_path.relative_to(Path.cwd())
@@ -1335,52 +1828,39 @@ class ConfigParser:
                         resolved_include_dirs.append(str(abs_inc_path))
                 else:
                     resolved_include_dirs.append(inc_dir)
-
-        compile_task_objs = []
-
-        # Generate compile tasks
-        for source in sources:
-            if source.endswith('.cpp') or source.endswith('.c'):
-                compile_task = self._create_compile_task(
-                    task_counter, source, exe_name, merged_config, output_dir, setup_task_id,
-                    include_dirs=resolved_include_dirs
-                )
-                tasks.append(compile_task)
-                compile_task_objs.append(compile_task)
-                task_counter += 1
-
-        # Find library dependencies
-        lib_task_objs = []
-        lib_dep_ids = []
-        for dep in dependencies:
-            if dep.startswith('local(') and dep.endswith(')'):
-                lib_name = dep[6:-1]  # Extract name from local("name")
-                # Find the library link task
-                for task in existing_tasks:
-                    if task.task_type == 'link_library' and lib_name in task.task_id:
-                        lib_task_objs.append(task)
-                        lib_dep_ids.append(task.task_id)
-                        break
-
-        # Generate executable link task
-        if compile_task_objs:
-            link_task = self._create_executable_link_task(
-                task_counter, exe_name, compile_task_objs, lib_task_objs, 
-                lib_dep_ids, merged_config, output_dir
-            )
-            tasks.append(link_task)
-
+        exe_config['include_dirs'] = resolved_include_dirs
+        
+        # Use template engine to generate tasks
+        tasks = self.template_engine.expand_template(
+            template_name=exe_type,
+            item_config=exe_config,
+            merged_config=merged_config,
+            output_dir=output_dir,
+            setup_task_id=setup_task_id,
+            task_counter=task_counter,
+            tool_matcher=self.tool_matcher,
+            command_builder=self.command_builder,
+            platform=self.platform,
+            architecture=self.architecture,
+            configuration=self.configuration,
+            existing_tasks=existing_tasks
+        )
+        
         return tasks
 
     def _create_compile_task(self, task_id: int, source_file: str, target_name: str,
                            config: Dict[str, Any], output_dir: str, setup_dep: str,
                            include_dirs: List[str] = None, is_shared_library: bool = False) -> BuildTask:
-        """Create a compilation task using toolchain"""
+        """Create a compilation task using tool matching"""
         include_dirs = include_dirs or []
         
-        # Get object file extension from toolchain
-        obj_ext = self.current_toolchain.extensions.get('object', '.o')
-        obj_file = f"{output_dir}/obj/{Path(source_file).stem}{obj_ext}"
+        # Find appropriate compile tool for this source file
+        tool = self.tool_matcher.find_tool('compile', source_file)
+        if not tool:
+            raise ValueError(f"No compile tool found for file: {source_file}")
+        
+        # Build output file path
+        obj_file = f"{output_dir}/obj/{Path(source_file).stem}{tool.output_extension}"
 
         # Extract configuration
         cpp_standard = config.get('cpp_standard', 'c++20')
@@ -1397,16 +1877,16 @@ class ConfigParser:
         elif not isinstance(compiler_flags, list):
             compiler_flags = []
         
-        # Build compile command using toolchain
-        command, dep_file = self.command_builder.build_compile_command(
+        # Build compile command using tool
+        command, dep_file = self.command_builder.build_command(
+            tool=tool,
             source=source_file,
             output=obj_file,
-            cpp_standard=cpp_standard,
             defines=defines,
             include_dirs=include_dirs,
+            extra_flags=compiler_flags,
             is_shared_library=is_shared_library,
-            config_type=self.configuration,
-            extra_flags=compiler_flags
+            std=cpp_standard
         )
         
         # Build outputs list
@@ -1416,7 +1896,7 @@ class ConfigParser:
 
         return BuildTask(
             task_id=f"compile_{target_name}_{task_id:03d}",
-            task_type="compile_cpp",
+            task_type="compile",
             inputs=[TaskInput(path=source_file)],
             outputs=outputs,
             dependencies=[setup_dep],
@@ -1430,30 +1910,36 @@ class ConfigParser:
 
     def _create_library_link_task(self, task_id: int, lib_name: str, compile_tasks: List[BuildTask],
                                  config: Dict[str, Any], output_dir: str) -> BuildTask:
-        """Create library linking task using toolchain"""
-        # Get library filename from toolchain
-        lib_filename = self.command_builder.get_output_pattern('shared_library', lib_name)
+        """Create library linking task using tool matching"""
+        # Find link tool for shared libraries
+        link_tool = self.tool_matcher.find_link_tool('shared_library')
+        if not link_tool:
+            raise ValueError(f"No link tool found for shared_library")
+        
+        # Get library filename from tool
+        lib_filename = link_tool.output_pattern.format(name=lib_name)
         lib_file = f"{output_dir}/lib/{lib_filename}"
 
         # Collect actual object files from compile tasks (exclude .d files)
-        obj_ext = self.current_toolchain.extensions.get('object', '.o')
         obj_files = []
         dep_ids = []
         for compile_task in compile_tasks:
-            # Only include object files, not dependency files
-            obj_files.extend([out for out in compile_task.outputs if out.endswith(obj_ext)])
+            # Only include files with object extension
+            for output in compile_task.outputs:
+                if any(output.endswith(ext) for ext in link_tool.input_extensions):
+                    obj_files.append(output)
             dep_ids.append(compile_task.task_id)
 
-        # Build link command using toolchain
+        # Build link command using tool
         command = self.command_builder.build_link_command(
-            link_type='shared_library',
+            tool=link_tool,
             objects=obj_files,
             output=lib_file
         )
 
         return BuildTask(
             task_id=f"link_{lib_name}_{task_id:03d}",
-            task_type="link_library",
+            task_type="link",
             inputs=[TaskInput(path=obj) for obj in obj_files],
             outputs=[lib_file],
             dependencies=dep_ids,
@@ -1469,18 +1955,24 @@ class ConfigParser:
                                    compile_tasks: List[BuildTask], lib_tasks: List[BuildTask],
                                    lib_dep_ids: List[str], config: Dict[str, Any], 
                                    output_dir: str) -> BuildTask:
-        """Create executable linking task using toolchain"""
-        # Get executable filename from toolchain
-        exe_filename = self.command_builder.get_output_pattern('executable', exe_name)
+        """Create executable linking task using tool matching"""
+        # Find link tool for executables
+        link_tool = self.tool_matcher.find_link_tool('executable')
+        if not link_tool:
+            raise ValueError(f"No link tool found for executable")
+        
+        # Get executable filename from tool
+        exe_filename = link_tool.output_pattern.format(name=exe_name)
         exe_file = f"{output_dir}/bin/{exe_filename}"
 
-        # Collect object files from compile tasks (exclude .d files)
-        obj_ext = self.current_toolchain.extensions.get('object', '.o')
+        # Collect object files from compile tasks
         obj_files = []
         dep_ids = []
         for compile_task in compile_tasks:
-            # Only include object files, not dependency files
-            obj_files.extend([out for out in compile_task.outputs if out.endswith(obj_ext)])
+            # Only include files with object extension
+            for output in compile_task.outputs:
+                if any(output.endswith(ext) for ext in link_tool.input_extensions):
+                    obj_files.append(output)
             dep_ids.append(compile_task.task_id)
         
         # Add library dependencies
@@ -1506,9 +1998,9 @@ class ConfigParser:
                     else:
                         lib_names.append(lib_filename)
         
-        # Build link command using toolchain
+        # Build link command using tool
         command = self.command_builder.build_link_command(
-            link_type='executable',
+            tool=link_tool,
             objects=obj_files,
             output=exe_file,
             lib_dirs=lib_dirs,
@@ -1517,7 +2009,7 @@ class ConfigParser:
 
         return BuildTask(
             task_id=f"link_exe_{exe_name}_{task_id:03d}",
-            task_type="link_executable",
+            task_type="link",
             inputs=[TaskInput(path=obj) for obj in obj_files],
             outputs=[exe_file],
             dependencies=dep_ids,
@@ -1573,7 +2065,7 @@ class ConfigParser:
     
     def _generate_shader_tasks(self, shader_config: Dict[str, Any], merged_config: Dict[str, Any],
                                output_dir: str, setup_task_id: str, task_counter: int) -> List[BuildTask]:
-        """Generate shader compilation tasks
+        """Generate shader compilation tasks using tool matching
         
         Example shader_config:
         {
@@ -1598,9 +2090,10 @@ class ConfigParser:
             if not shader_toolchain:
                 logger.warning(f"Shader toolchain '{shader_toolchain_name}' not found, using current toolchain")
                 shader_toolchain = self.current_toolchain
-            shader_cmd_builder = CommandBuilder(shader_toolchain)
+            shader_tool_matcher = ToolMatcher(shader_toolchain)
+            shader_cmd_builder = CommandBuilder(shader_toolchain, shader_tool_matcher, self.configuration)
         else:
-            shader_toolchain = self.current_toolchain
+            shader_tool_matcher = self.tool_matcher
             shader_cmd_builder = self.command_builder
         
         # Expand source patterns
@@ -1609,24 +2102,25 @@ class ConfigParser:
         
         # Generate compilation task for each shader
         for source in sources:
-            shader_ext = shader_toolchain.extensions.get('object', '.spv')
-            output_file = f"{shader_output_dir}/{Path(source).stem}{shader_ext}"
+            # Find appropriate tool for this shader file
+            tool = shader_tool_matcher.find_tool('compile', source)
+            if not tool:
+                logger.warning(f"No compile tool found for shader: {source}, skipping")
+                continue
+            
+            output_file = f"{shader_output_dir}/{Path(source).stem}{tool.output_extension}"
             
             # Build shader compile command
-            command, _ = shader_cmd_builder.build_compile_command(
+            command, _ = shader_cmd_builder.build_command(
+                tool=tool,
                 source=source,
                 output=output_file,
-                cpp_standard='',  # Not applicable for shaders
-                defines=[],
-                include_dirs=[],
-                is_shared_library=False,
-                config_type=self.configuration,
                 extra_flags=custom_flags
             )
             
             task = BuildTask(
                 task_id=f"shader_{shader_name}_{task_counter:03d}",
-                task_type="compile_shader",
+                task_type="compile",
                 inputs=[TaskInput(path=source)],
                 outputs=[output_file],
                 dependencies=[setup_task_id],
@@ -1644,7 +2138,7 @@ class ConfigParser:
     
     def _generate_texture_tasks(self, texture_config: Dict[str, Any], merged_config: Dict[str, Any],
                                 output_dir: str, setup_task_id: str, task_counter: int) -> List[BuildTask]:
-        """Generate texture conversion tasks
+        """Generate texture conversion tasks using tool matching
         
         Example texture_config:
         {
@@ -1669,9 +2163,10 @@ class ConfigParser:
             if not texture_toolchain:
                 logger.warning(f"Texture toolchain '{texture_toolchain_name}' not found, using current toolchain")
                 texture_toolchain = self.current_toolchain
-            texture_cmd_builder = CommandBuilder(texture_toolchain)
+            texture_tool_matcher = ToolMatcher(texture_toolchain)
+            texture_cmd_builder = CommandBuilder(texture_toolchain, texture_tool_matcher, self.configuration)
         else:
-            texture_toolchain = self.current_toolchain
+            texture_tool_matcher = self.tool_matcher
             texture_cmd_builder = self.command_builder
         
         # Expand source patterns
@@ -1680,24 +2175,25 @@ class ConfigParser:
         
         # Generate conversion task for each texture
         for source in sources:
-            texture_ext = texture_toolchain.extensions.get('object', '.dds')
-            output_file = f"{texture_output_dir}/{Path(source).stem}{texture_ext}"
+            # Find appropriate tool for this texture file
+            tool = texture_tool_matcher.find_tool('convert', source)
+            if not tool:
+                logger.warning(f"No convert tool found for texture: {source}, skipping")
+                continue
+            
+            output_file = f"{texture_output_dir}/{Path(source).stem}{tool.output_extension}"
             
             # Build texture conversion command
-            command, _ = texture_cmd_builder.build_compile_command(
+            command, _ = texture_cmd_builder.build_command(
+                tool=tool,
                 source=source,
                 output=output_file,
-                cpp_standard='',  # Not applicable for textures
-                defines=[],
-                include_dirs=[],
-                is_shared_library=False,
-                config_type=self.configuration,
                 extra_flags=custom_flags
             )
             
             task = BuildTask(
                 task_id=f"texture_{texture_name}_{task_counter:03d}",
-                task_type="convert_texture",
+                task_type="convert",
                 inputs=[TaskInput(path=source)],
                 outputs=[output_file],
                 dependencies=[setup_task_id],

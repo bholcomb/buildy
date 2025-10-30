@@ -14,60 +14,16 @@ toolchain:
     type: native
   
   tools:
-    c_compiler: texconv
-    cxx_compiler: texconv
-    linker: ""
-    archiver: ""
-  
-  # Texture conversion configuration
-  compile:
-    # Command template for texture conversion
-    # Variables: {cxx_compiler}, {flags}, {defines}, {input}, {output}
-    # Note: texconv uses -o for output directory, not output file
-    command: "{cxx_compiler} {flags} {input} -o {output_dir} -y"
-    
-    # Configuration-specific flags
-    flags:
-      common: ["-f", "BC7_UNORM"]  # Default to BC7 compression
-      debug: ["-f", "BC7_UNORM"]
-      release: ["-f", "BC7_UNORM"]
-    
-    # No dependency generation
-    dep_flags: ""
-    
-    # Not applicable
-    pic_flag: ""
-    
-    # Not applicable for textures
-    include_flag: ""
-    
-    # Not applicable for textures
-    define_flag: ""
-  
-  # Linking not applicable for textures
-  link:
-    shared_library:
-      command: ""
-      output_pattern: ""
-      pic_flag: ""
-    
-    static_library:
-      command: ""
-      output_pattern: ""
-    
-    executable:
-      command: ""
-      output_pattern: ""
-    
-    lib_dir_flag: ""
-    lib_flag: ""
-  
-  # File extensions for textures
-  extensions:
-    object: ".dds"        # DDS output
-    dependency: ""        # No dependency files
-    shared_library: ""
-    static_library: ""
-    executable: ""
-
-
+    # Texture compression/conversion
+    convert:
+      action: convert
+      command: "texconv {flags} {input} -o {output_dir} -y"
+      input_extensions: [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".dds", ".hdr", ".exr"]
+      output_extension: ".dds"
+      flags:
+        common: ["-f", "BC7_UNORM"]
+        debug: ["-f", "BC7_UNORM"]
+        release: ["-f", "BC7_UNORM"]
+      supports:
+        defines: false
+        includes: false

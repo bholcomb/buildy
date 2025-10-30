@@ -1,0 +1,109 @@
+# Universal Build Templates for Buildy
+# These templates work across all platforms and toolchains
+# The template engine will select appropriate tools based on file extensions and output types
+
+templates:
+  # Shared library: compile sources with PIC, link into shared library
+  shared_library:
+    description: "Compile sources and link into shared library (.so, .dll, .dylib)"
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "{output_dir}/obj/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          defines: "{config.defines}"
+          include_dirs: "{item.include_dirs}"
+          extra_flags: "{config.compiler_flags}"
+          is_shared_library: true
+          std: "{config.cpp_standard}"
+      
+      - name: link
+        action: link
+        output_type: shared_library
+        output: "{output_dir}/lib/{tool.output_pattern}"
+        inputs: "{compile.outputs}"
+        depends_on: ["{compile.task_ids}"]
+        tool_params:
+          lib_dirs: []
+          libs: []
+  
+  # Static library: compile sources, archive into static library
+  static_library:
+    description: "Compile sources and archive into static library (.a, .lib)"
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "{output_dir}/obj/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          defines: "{config.defines}"
+          include_dirs: "{item.include_dirs}"
+          extra_flags: "{config.compiler_flags}"
+          is_shared_library: false
+          std: "{config.cpp_standard}"
+      
+      - name: link
+        action: link
+        output_type: static_library
+        output: "{output_dir}/lib/{tool.output_pattern}"
+        inputs: "{compile.outputs}"
+        depends_on: ["{compile.task_ids}"]
+        tool_params:
+          lib_dirs: []
+          libs: []
+  
+  # Executable: compile sources, link with libraries into executable
+  executable:
+    description: "Compile sources and link into executable"
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "{output_dir}/obj/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          defines: "{config.defines}"
+          include_dirs: "{item.include_dirs}"
+          extra_flags: "{config.compiler_flags}"
+          is_shared_library: false
+          std: "{config.cpp_standard}"
+      
+      - name: link
+        action: link
+        output_type: executable
+        output: "{output_dir}/bin/{tool.output_pattern}"
+        inputs: "{compile.outputs}"
+        depends_on: ["{compile.task_ids}", "{item.depends_on.link_tasks}"]
+        tool_params:
+          lib_dirs: ["{output_dir}/lib"]
+          libs: "{item.depends_on.library_names}"
+  
+  # Shader compilation: compile shaders to intermediate format
+  shaders:
+    description: "Compile shader sources to target format (SPIR-V, etc.)"
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          defines: "{item.defines}"
+          include_dirs: "{item.include_dirs}"
+          extra_flags: "{item.flags}"
+  
+  # Texture conversion: convert textures to target format
+  textures:
+    description: "Convert texture sources to target format (DDS, etc.)"
+    steps:
+      - name: convert
+        action: convert
+        for_each: source
+        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          extra_flags: "{item.flags}"
+

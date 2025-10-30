@@ -14,48 +14,93 @@ toolchain:
     type: native
   
   tools:
-    c_compiler: arm-linux-gnueabihf-gcc
-    cxx_compiler: arm-linux-gnueabihf-g++
-    linker: arm-linux-gnueabihf-g++
-    archiver: arm-linux-gnueabihf-ar
-    strip: arm-linux-gnueabihf-strip
-    objcopy: arm-linux-gnueabihf-objcopy
-  
-  compile:
-    command: "{cxx_compiler} {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+    # C compilation
+    c_compile:
+      action: compile
+      command: "arm-linux-gnueabihf-gcc {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      input_extensions: [".c"]
+      output_extension: ".o"
+      flags:
+        common: ["-Wall", "-Wextra"]
+        debug: ["-g", "-O0"]
+        release: ["-O3", "-DNDEBUG"]
+      supports:
+        defines: true
+        define_flag: "-D"
+        includes: true
+        include_flag: "-I"
+        pic: true
+        pic_flag: "-fPIC"
+        dependencies: "-MMD -MP -MF {dep_file}"
     
-    flags:
-      common: ["-Wall", "-Wextra"]
-      debug: ["-g", "-O0"]
-      release: ["-O3", "-DNDEBUG"]
+    # C++ compilation
+    cpp_compile:
+      action: compile
+      command: "arm-linux-gnueabihf-g++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
+      output_extension: ".o"
+      flags:
+        common: ["-Wall", "-Wextra"]
+        debug: ["-g", "-O0"]
+        release: ["-O3", "-DNDEBUG"]
+      supports:
+        defines: true
+        define_flag: "-D"
+        includes: true
+        include_flag: "-I"
+        pic: true
+        pic_flag: "-fPIC"
+        dependencies: "-MMD -MP -MF {dep_file}"
+        std: true
     
-    dep_flags: "-MMD -MP -MF {dep_file}"
-    pic_flag: "-fPIC"
-    include_flag: "-I"
-    define_flag: "-D"
-  
-  link:
-    shared_library:
-      command: "{linker} -shared {pic} {objects} {lib_dirs} {libs} -o {output}"
+    # Shared library linking
+    link_shared_library:
+      action: link
+      command: "arm-linux-gnueabihf-g++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      input_extensions: [".o"]
+      output_extension: ".so"
       output_pattern: "lib{name}.so"
-      pic_flag: "-fPIC"
+      flags:
+        common: []
+        debug: []
+        release: ["-s"]
+      supports:
+        output_type: "shared_library"
+        lib_dirs: true
+        lib_dir_flag: "-L"
+        libs: true
+        lib_flag: "-l"
     
-    static_library:
-      command: "{archiver} rcs {output} {objects}"
+    # Static library archiving
+    link_static_library:
+      action: link
+      command: "arm-linux-gnueabihf-ar rcs {output} {objects}"
+      input_extensions: [".o"]
+      output_extension: ".a"
       output_pattern: "lib{name}.a"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        output_type: "static_library"
+        lib_dirs: false
+        libs: false
     
-    executable:
-      command: "{linker} {objects} {lib_dirs} {libs} -o {output}"
+    # Executable linking
+    link_executable:
+      action: link
+      command: "arm-linux-gnueabihf-g++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      input_extensions: [".o"]
+      output_extension: ""
       output_pattern: "{name}"
-    
-    lib_dir_flag: "-L"
-    lib_flag: "-l"
-  
-  extensions:
-    object: ".o"
-    dependency: ".d"
-    shared_library: ".so"
-    static_library: ".a"
-    executable: ""
-
-
+      flags:
+        common: []
+        debug: []
+        release: ["-s"]
+      supports:
+        output_type: "executable"
+        lib_dirs: true
+        lib_dir_flag: "-L"
+        libs: true
+        lib_flag: "-l"
