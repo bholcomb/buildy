@@ -250,50 +250,62 @@ class ConfigParser:
             # Generate tasks for this module
             module_tasks = module_parser.generate_tasks(module_info.config)
             
-            # Resolve cross-module dependencies
-            module_tasks = self._resolve_module_dependencies(module_tasks, module_path)
-            
             all_tasks.extend(module_tasks)
+        
+        # Second pass: resolve cross-module dependencies
+        all_tasks = self._resolve_cross_module_dependencies(all_tasks)
         
         logger.info(f"Generated {len(all_tasks)} tasks from {len(self.workspace.modules)} modules")
         return all_tasks
     
-    def _resolve_module_dependencies(self, tasks: List[BuildTask], current_module: str) -> List[BuildTask]:
+    def _resolve_cross_module_dependencies(self, all_tasks: List[BuildTask]) -> List[BuildTask]:
         """
-        Resolve dependency strings to actual task IDs.
+        Resolve cross-module dependencies by finding the actual link tasks.
+        
+        This is called after all modules have generated their tasks, so we can
+        look up dependencies across the entire task list.
         
         Args:
-            tasks: List of tasks from current module
-            current_module: Module path for context
+            all_tasks: All tasks from all modules
             
         Returns:
-            Tasks with resolved dependencies
+            Tasks with resolved cross-module dependencies
         """
-        if not self.target_registry:
-            return tasks
+        # Build a mapping of target names to their link task IDs
+        target_to_link_task = {}
+        for task in all_tasks:
+            # Link tasks have task_type='link' and task_id like "link_<target_name>_<counter>"
+            if task.task_type == 'link':
+                # Extract target name from task_id (e.g., "link_engine_core_005" -> "engine_core")
+                parts = task.task_id.split('_')
+                if len(parts) >= 3 and parts[0] == 'link':
+                    # Reconstruct target name (everything between 'link_' and the final '_<number>')
+                    target_name = '_'.join(parts[1:-1])
+                    target_to_link_task[target_name] = task.task_id
+                    logger.debug(f"Mapped target '{target_name}' to link task '{task.task_id}'")
         
-        for task in tasks:
+        # Now resolve dependencies in all tasks
+        for task in all_tasks:
             resolved_deps = []
             for dep in task.dependencies:
-                # If dependency is already a task ID (internal), keep it
-                if any(t.task_id == dep for t in tasks):
+                # If it's already a task ID (starts with a task type), keep it
+                if any(dep.startswith(prefix) for prefix in ['setup_', 'compile_', 'link_']):
                     resolved_deps.append(dep)
                     continue
                 
-                # Try to resolve as target reference
-                try:
-                    target_ref = self.target_registry.resolve_dependency(dep, current_module)
-                    # Convert target reference to task ID
-                    # For now, use target name as task ID (will need refinement)
-                    resolved_deps.append(target_ref.name)
-                    logger.debug(f"Resolved dependency '{dep}' to '{target_ref.full_name}'")
-                except Exception as e:
-                    logger.warning(f"Failed to resolve dependency '{dep}': {e}")
-                    resolved_deps.append(dep)  # Keep original
+                # Try to resolve as a target name
+                if dep in target_to_link_task:
+                    link_task_id = target_to_link_task[dep]
+                    resolved_deps.append(link_task_id)
+                    logger.debug(f"Resolved dependency '{dep}' to link task '{link_task_id}' in task '{task.task_id}'")
+                else:
+                    # Keep original if we can't resolve it
+                    logger.warning(f"Could not resolve dependency '{dep}' in task '{task.task_id}'")
+                    resolved_deps.append(dep)
             
             task.dependencies = resolved_deps
         
-        return tasks
+        return all_tasks
 
     def generate_tasks(self, config: Dict[str, Any]) -> List[BuildTask]:
         """Generate tasks from configuration with variable resolution"""

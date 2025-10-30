@@ -26,7 +26,7 @@ executable:
     include_dirs:
       - "include"
     depends_on:
-      - "local(mathcore)"
+      - "mathcore"
 
 output:
   base_dir: "build"
