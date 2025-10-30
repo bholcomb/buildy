@@ -38,16 +38,27 @@ class VariableEnvironment:
         
         self.variables[name] = (value, source)
     
-    def get_variable(self, name: str) -> Optional[tuple[str, str]]:
+    def get_variable(self, name: str) -> Optional[str]:
+        """Get a variable value, returns None if not found"""
+        result = self.variables.get(name)
+        return result[0] if result else None
+    
+    def get_provenance(self, name: str) -> Optional[str]:
+        """Get the source/provenance of a variable"""
+        result = self.variables.get(name)
+        return result[1] if result else None
+    
+    def get_variable_with_source(self, name: str) -> Optional[tuple[str, str]]:
         """Get a variable and its source, returns None if not found"""
         return self.variables.get(name)
     
-    def resolve_string(self, text: str, collected_errors: List[str] = None) -> str:
+    def resolve_string(self, text: str, collected_errors: List[str] = None, max_iterations: int = 10) -> str:
         """Resolve all ${variable} references in a string
         
         Args:
             text: String to resolve
             collected_errors: List to collect unresolved variable errors
+            max_iterations: Maximum number of resolution passes (prevents infinite loops)
             
         Returns:
             Resolved string
@@ -59,24 +70,37 @@ class VariableEnvironment:
         
         # Find all ${variable} patterns
         pattern = r'\$\{([^}]+)\}'
-        unresolved = []
         
-        def replace_var(match):
-            var_name = match.group(1)
-            result = self.get_variable(var_name)
-            if result is None:
-                unresolved.append(var_name)
-                return match.group(0)  # Keep original if not found
-            return result[0]  # Return just the value
-        
-        resolved = re.sub(pattern, replace_var, text)
+        # Resolve iteratively to handle nested variables
+        for iteration in range(max_iterations):
+            unresolved = []
+            
+            def replace_var(match):
+                var_name = match.group(1)
+                value = self.get_variable(var_name)
+                if value is None:
+                    unresolved.append(var_name)
+                    return match.group(0)  # Keep original if not found
+                return value
+            
+            new_text = re.sub(pattern, replace_var, text)
+            
+            # If nothing changed, we're done
+            if new_text == text:
+                break
+            
+            text = new_text
+            
+            # If we still have unresolved variables and nothing changed, stop
+            if unresolved:
+                break
         
         # Collect errors if requested
         if unresolved and collected_errors is not None:
             for var in unresolved:
                 collected_errors.append(f"Unresolved variable '${{${var}}}' in: {text}")
         
-        return resolved
+        return text
     
     def resolve_recursive(self, value: Any, collected_errors: List[str] = None) -> Any:
         """Recursively resolve variables in nested data structures"""

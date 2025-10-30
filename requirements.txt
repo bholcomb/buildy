@@ -1,8 +1,12 @@
 # Buildy - Task-Based Build System
 # Python dependencies
 
-# YAML parsing for build configuration files
+# Runtime dependencies
 PyYAML>=6.0.0,<7.0.0
+
+# Development/testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
 
 # Note: The following are part of Python standard library (no installation needed):
 # - hashlib (cryptographic hashing)

@@ -40,6 +40,47 @@ class ToolchainConfig:
     tools: Dict[str, Tool]  # tool_name -> Tool object
     
     @staticmethod
+    def from_dict(config_dict: Dict[str, Any]) -> 'ToolchainConfig':
+        """Create ToolchainConfig from dictionary (for testing)"""
+        # Parse tools from list format
+        tools = {}
+        for tool_data in config_dict.get('tools', []):
+            tool_name = tool_data['name']
+            input_exts = tool_data.get('input_extensions', [])
+            if isinstance(input_exts, str):
+                input_exts = [input_exts]
+            
+            # Handle output_type for link tools
+            tool = Tool(
+                name=tool_name,
+                action=tool_data.get('action', 'compile'),
+                command=tool_data.get('command', ''),
+                input_extensions=input_exts,
+                output_extension=tool_data.get('output_extension', ''),
+                output_pattern=tool_data.get('output_pattern', '{name}'),
+                flags=tool_data.get('flags', {}),
+                supports=tool_data.get('supports', {})
+            )
+            
+            # Add output_type for link tools
+            if 'output_type' in tool_data:
+                tool.supports['output_type'] = tool_data['output_type']
+            
+            tools[tool_name] = tool
+        
+        return ToolchainConfig(
+            name=config_dict['name'],
+            description=config_dict.get('description', ''),
+            target_platform=config_dict.get('target_platform', 'linux'),
+            target_architecture=config_dict.get('target_architecture', 'x86_64'),
+            host_platform=config_dict.get('host_platform', 'linux'),
+            host_architecture=config_dict.get('host_architecture', 'x86_64'),
+            execution_type=config_dict.get('execution_type', 'native'),
+            execution_config={'type': config_dict.get('execution_type', 'native')},
+            tools=tools
+        )
+    
+    @staticmethod
     def load(toolchain_file: str) -> 'ToolchainConfig':
         """Load toolchain configuration from YAML"""
         try:
@@ -236,6 +277,7 @@ class CommandBuilder:
         
         # Build template variables
         template_vars = {
+            'source': source,  # For backward compatibility
             'input': source,
             'output': output,
             'flags': ' '.join(all_flags),
