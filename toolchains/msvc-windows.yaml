@@ -1,0 +1,61 @@
+toolchain:
+  name: "msvc-windows"
+  description: "Microsoft Visual C++ for Windows x86_64"
+  
+  target:
+    platform: windows
+    architecture: x86_64
+  
+  host:
+    platform: windows
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    c_compiler: cl.exe
+    cxx_compiler: cl.exe
+    linker: link.exe
+    archiver: lib.exe
+  
+  compile:
+    # MSVC uses /flags instead of -flags
+    command: "{cxx_compiler} /std:{std} {flags} {defines} {includes} /c {input} /Fo{output}"
+    
+    flags:
+      common: ["/W4", "/EHsc", "/nologo"]
+      debug: ["/Od", "/Zi", "/MDd"]
+      release: ["/O2", "/DNDEBUG", "/MD"]
+    
+    # MSVC doesn't have -MMD, uses /showIncludes (would need custom parsing)
+    dep_flags: ""
+    
+    pic_flag: ""  # Not needed on Windows
+    include_flag: "/I"
+    define_flag: "/D"
+  
+  link:
+    shared_library:
+      command: "{linker} /DLL {objects} {lib_dirs} {libs} /OUT:{output} /NOLOGO"
+      output_pattern: "{name}.dll"
+      pic_flag: ""
+    
+    static_library:
+      command: "{archiver} {objects} /OUT:{output} /NOLOGO"
+      output_pattern: "{name}.lib"
+    
+    executable:
+      command: "{linker} {objects} {lib_dirs} {libs} /OUT:{output} /NOLOGO"
+      output_pattern: "{name}.exe"
+    
+    lib_dir_flag: "/LIBPATH:"
+    lib_flag: ""  # MSVC uses full library names like "mylib.lib"
+  
+  extensions:
+    object: ".obj"
+    dependency: ""  # MSVC doesn't generate .d files by default
+    shared_library: ".dll"
+    static_library: ".lib"
+    executable: ".exe"
+

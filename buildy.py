@@ -144,6 +144,348 @@ class VariableEnvironment:
             self.set_variable(name, value, source_name)
 
 @dataclass
+class ToolchainConfig:
+    """Toolchain configuration loaded from YAML"""
+    name: str
+    description: str
+    target_platform: str
+    target_architecture: str
+    host_platform: str
+    host_architecture: str
+    execution_type: str
+    execution_config: Dict[str, Any]
+    tools: Dict[str, str]
+    compile_template: str
+    compile_flags: Dict[str, Any]
+    link_templates: Dict[str, Dict[str, str]]
+    extensions: Dict[str, str]
+    
+    @staticmethod
+    def load(toolchain_file: str) -> 'ToolchainConfig':
+        """Load toolchain configuration from YAML"""
+        try:
+            with open(toolchain_file, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            tc = data['toolchain']
+            
+            return ToolchainConfig(
+                name=tc['name'],
+                description=tc.get('description', ''),
+                target_platform=tc['target']['platform'],
+                target_architecture=tc['target']['architecture'],
+                host_platform=tc['host']['platform'],
+                host_architecture=tc['host']['architecture'],
+                execution_type=tc['execution']['type'],
+                execution_config=tc['execution'],
+                tools=tc['tools'],
+                compile_template=tc['compile']['command'],
+                compile_flags=tc['compile'],
+                link_templates=tc['link'],
+                extensions=tc['extensions']
+            )
+        except Exception as e:
+            logger.error(f"Failed to load toolchain from {toolchain_file}: {e}")
+            raise
+
+class ToolchainManager:
+    """Manages toolchain selection and loading"""
+    
+    def __init__(self, toolchains_dir: str = "toolchains"):
+        self.toolchains_dir = Path(toolchains_dir)
+        self._toolchains: Dict[str, ToolchainConfig] = {}
+        self._load_toolchains()
+    
+    def _load_toolchains(self):
+        """Load all toolchain configurations"""
+        if not self.toolchains_dir.exists():
+            logger.warning(f"Toolchains directory not found: {self.toolchains_dir}")
+            return
+        
+        for tc_file in self.toolchains_dir.glob("*.yaml"):
+            try:
+                tc = ToolchainConfig.load(tc_file)
+                self._toolchains[tc.name] = tc
+                logger.debug(f"Loaded toolchain: {tc.name} - {tc.description}")
+            except Exception as e:
+                logger.error(f"Failed to load toolchain {tc_file}: {e}")
+    
+    def get_toolchain(self, name: str) -> Optional[ToolchainConfig]:
+        """Get toolchain by name"""
+        return self._toolchains.get(name)
+    
+    def auto_detect(self, platform: str, architecture: str) -> Optional[ToolchainConfig]:
+        """Auto-detect best toolchain for platform/architecture"""
+        # Try to find matching native toolchain
+        for tc in self._toolchains.values():
+            if (tc.target_platform == platform and 
+                tc.target_architecture == architecture and
+                tc.execution_type == 'native'):
+                logger.info(f"Auto-detected toolchain: {tc.name}")
+                return tc
+        
+        logger.warning(f"No native toolchain found for {platform}-{architecture}")
+        return None
+    
+    def list_toolchains(self) -> List[tuple[str, str]]:
+        """List available toolchains with descriptions"""
+        return [(tc.name, tc.description) for tc in self._toolchains.values()]
+
+class CommandBuilder:
+    """Builds commands using toolchain templates"""
+    
+    def __init__(self, toolchain: ToolchainConfig):
+        self.toolchain = toolchain
+    
+    def build_compile_command(self, source: str, output: str, 
+                            cpp_standard: str, defines: List[str],
+                            include_dirs: List[str], is_shared_library: bool,
+                            config_type: str = 'debug',
+                            extra_flags: List[str] = None) -> tuple[str, str]:
+        """Build compilation command from toolchain template
+        
+        Returns:
+            tuple: (command, dep_file) - The compile command and dependency file path
+        """
+        extra_flags = extra_flags or []
+        
+        # Get toolchain-specific flags
+        common_flags = self.toolchain.compile_flags.get('flags', {}).get('common', [])
+        config_flags = self.toolchain.compile_flags.get('flags', {}).get(config_type, [])
+        all_flags = common_flags + config_flags + extra_flags
+        
+        # Build define flags
+        define_flag = self.toolchain.compile_flags.get('define_flag', '-D')
+        define_str = ' '.join(f"{define_flag}{d}" for d in defines)
+        
+        # Build include flags
+        include_flag = self.toolchain.compile_flags.get('include_flag', '-I')
+        include_str = ' '.join(f"{include_flag}{inc}" for inc in include_dirs)
+        
+        # PIC flag for shared libraries
+        pic_flag = self.toolchain.compile_flags.get('pic_flag', '')
+        pic = pic_flag if is_shared_library else ''
+        
+        # Dependency file
+        dep_ext = self.toolchain.extensions.get('dependency', '.d')
+        obj_ext = self.toolchain.extensions.get('object', '.o')
+        dep_file = output.replace(obj_ext, dep_ext) if dep_ext else ""
+        
+        # Dependency flags
+        dep_flags_template = self.toolchain.compile_flags.get('dep_flags', '')
+        dep_flags = dep_flags_template.format(dep_file=dep_file) if dep_file and dep_flags_template else ''
+        
+        # Build command from template
+        command = self.toolchain.compile_template.format(
+            cxx_compiler=self.toolchain.tools['cxx_compiler'],
+            dep_flags=dep_flags,
+            std=cpp_standard,
+            flags=' '.join(all_flags),
+            defines=define_str,
+            pic=pic,
+            includes=include_str,
+            input=source,
+            output=output
+        )
+        
+        # Clean up extra spaces
+        command = ' '.join(command.split())
+        
+        return command, dep_file
+    
+    def build_link_command(self, link_type: str, objects: List[str],
+                          output: str, lib_dirs: List[str] = None,
+                          libs: List[str] = None) -> str:
+        """Build link command from toolchain template
+        
+        Args:
+            link_type: 'shared_library', 'static_library', or 'executable'
+            objects: List of object files to link
+            output: Output file path
+            lib_dirs: Library search directories
+            libs: Library names to link against
+        """
+        lib_dirs = lib_dirs or []
+        libs = libs or []
+        
+        # Get link template for this type
+        link_config = self.toolchain.link_templates.get(link_type, {})
+        template = link_config.get('command', '')
+        
+        if not template:
+            raise ValueError(f"No link template for type '{link_type}' in toolchain '{self.toolchain.name}'")
+        
+        # Build library directory flags
+        lib_dir_flag = self.toolchain.link_templates.get('lib_dir_flag', '-L')
+        lib_dir_str = ' '.join(f"{lib_dir_flag}{d}" for d in lib_dirs)
+        
+        # Build library link flags
+        lib_flag = self.toolchain.link_templates.get('lib_flag', '-l')
+        if lib_flag:
+            lib_str = ' '.join(f"{lib_flag}{lib}" for lib in libs)
+        else:
+            # MSVC-style: use full library names
+            lib_str = ' '.join(libs)
+        
+        # PIC flag for shared libraries
+        pic_flag = link_config.get('pic_flag', '')
+        
+        # Build command
+        command = template.format(
+            linker=self.toolchain.tools.get('linker', self.toolchain.tools['cxx_compiler']),
+            archiver=self.toolchain.tools.get('archiver', 'ar'),
+            objects=' '.join(objects),
+            lib_dirs=lib_dir_str,
+            libs=lib_str,
+            output=output,
+            pic=pic_flag
+        )
+        
+        # Clean up extra spaces
+        command = ' '.join(command.split())
+        
+        return command
+    
+    def get_output_pattern(self, link_type: str, name: str) -> str:
+        """Get output filename pattern for link type
+        
+        Args:
+            link_type: 'shared_library', 'static_library', or 'executable'
+            name: Base name (e.g., 'mylib')
+        
+        Returns:
+            Formatted output filename (e.g., 'libmylib.so', 'mylib.exe')
+        """
+        link_config = self.toolchain.link_templates.get(link_type, {})
+        pattern = link_config.get('output_pattern', '{name}')
+        return pattern.format(name=name)
+
+class ExecutionEnvironment:
+    """Base class for different execution environments (native, docker, etc.)"""
+    
+    @staticmethod
+    def create(toolchain: ToolchainConfig) -> 'ExecutionEnvironment':
+        """Factory method to create appropriate execution environment"""
+        exec_type = toolchain.execution_type
+        
+        if exec_type == 'native':
+            return NativeExecution()
+        elif exec_type == 'docker':
+            return DockerExecution(toolchain.execution_config)
+        elif exec_type == 'wsl':
+            return WSLExecution(toolchain.execution_config)
+        else:
+            logger.warning(f"Unknown execution type '{exec_type}', falling back to native")
+            return NativeExecution()
+    
+    def execute(self, command: str, cwd: str = None, timeout: int = DEFAULT_TASK_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+        """Execute command in the environment
+        
+        Args:
+            command: Command to execute
+            cwd: Working directory
+            timeout: Timeout in seconds
+            
+        Returns:
+            CompletedProcess result
+        """
+        raise NotImplementedError
+
+class NativeExecution(ExecutionEnvironment):
+    """Execute commands natively on the host system"""
+    
+    def execute(self, command: str, cwd: str = None, timeout: int = DEFAULT_TASK_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+        """Execute command directly on host"""
+        return subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd or os.getcwd()
+        )
+
+class DockerExecution(ExecutionEnvironment):
+    """Execute commands inside Docker container"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.image = config.get('image', 'gcc:13')
+        self.volumes = config.get('volumes', [])
+        self.working_dir = config.get('working_dir', '/workspace')
+        self.user = config.get('user', f"{os.getuid()}:{os.getgid()}")
+    
+    def execute(self, command: str, cwd: str = None, timeout: int = DEFAULT_TASK_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+        """Execute command inside Docker container"""
+        # Expand environment variables in volume mounts
+        expanded_volumes = []
+        for vol in self.volumes:
+            # Replace ${PWD} with current directory
+            expanded = vol.replace('${PWD}', os.getcwd())
+            # Replace ${UID} and ${GID}
+            expanded = expanded.replace('${UID}', str(os.getuid()))
+            expanded = expanded.replace('${GID}', str(os.getgid()))
+            expanded_volumes.append(expanded)
+        
+        # Expand user string
+        user = self.user.replace('${UID}', str(os.getuid())).replace('${GID}', str(os.getgid()))
+        
+        # Build docker run command
+        volume_args = ' '.join(f"-v {v}" for v in expanded_volumes)
+        
+        # Escape single quotes in command for shell
+        escaped_command = command.replace("'", "'\"'\"'")
+        
+        docker_cmd = (
+            f"docker run --rm "
+            f"{volume_args} "
+            f"-w {self.working_dir} "
+            f"-u {user} "
+            f"{self.image} "
+            f"sh -c '{escaped_command}'"
+        )
+        
+        logger.debug(f"Docker command: {docker_cmd}")
+        
+        return subprocess.run(
+            docker_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd or os.getcwd()
+        )
+
+class WSLExecution(ExecutionEnvironment):
+    """Execute commands inside Windows Subsystem for Linux"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.distribution = config.get('distribution', 'Ubuntu')
+        self.user = config.get('user', None)
+    
+    def execute(self, command: str, cwd: str = None, timeout: int = DEFAULT_TASK_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+        """Execute command inside WSL"""
+        # Build wsl command
+        wsl_cmd = f"wsl -d {self.distribution}"
+        
+        if self.user:
+            wsl_cmd += f" -u {self.user}"
+        
+        # Escape command for WSL
+        escaped_command = command.replace('"', '\\"')
+        wsl_cmd += f' -- bash -c "{escaped_command}"'
+        
+        logger.debug(f"WSL command: {wsl_cmd}")
+        
+        return subprocess.run(
+            wsl_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd or os.getcwd()
+        )
+
+@dataclass
 class ResourceRequirements:
     """Resource requirements for a task"""
     cpu_cores: int = 1
@@ -572,7 +914,8 @@ class ConfigParser:
     """Parse build configuration files with hierarchical variable support"""
 
     def __init__(self, platform: str = "linux", architecture: str = "x86_64", configuration: str = "debug", 
-                 cli_defines: Dict[str, str] = None):
+                 cli_defines: Dict[str, str] = None, toolchain_manager: ToolchainManager = None,
+                 default_toolchain: str = None):
         self.platform = platform
         self.architecture = architecture  
         self.configuration = configuration
@@ -583,6 +926,11 @@ class ConfigParser:
         self.config_file_dir = None  # Track the directory of the config file
         self.var_env = VariableEnvironment()  # Variable environment
         self.cli_defines = cli_defines or {}  # CLI-provided variable overrides
+        self.toolchain_manager = toolchain_manager  # Toolchain manager
+        self.default_toolchain = default_toolchain  # Default toolchain name
+        self.current_toolchain: Optional[ToolchainConfig] = None  # Current active toolchain
+        self.command_builder: Optional[CommandBuilder] = None  # Command builder for current toolchain
+        self.exec_env: Optional[ExecutionEnvironment] = None  # Execution environment
 
     def parse_config_file(self, config_file: str) -> Dict[str, Any]:
         """Parse YAML build configuration file"""
@@ -667,10 +1015,69 @@ class ConfigParser:
         
         return errors
 
+    def _select_toolchain(self, config: Dict[str, Any]) -> ToolchainConfig:
+        """Select toolchain based on hierarchical configuration
+        
+        Priority (highest to lowest):
+        1. CLI --toolchain argument (self.default_toolchain)
+        2. Project-level toolchain field
+        3. Workspace-level toolchain field
+        4. Auto-detect based on platform/architecture
+        """
+        if not self.toolchain_manager:
+            raise ValueError("ToolchainManager not initialized")
+        
+        # Check CLI override first
+        if self.default_toolchain:
+            tc = self.toolchain_manager.get_toolchain(self.default_toolchain)
+            if tc:
+                logger.info(f"Using CLI-specified toolchain: {tc.name}")
+                return tc
+            else:
+                logger.warning(f"CLI toolchain '{self.default_toolchain}' not found, falling back")
+        
+        # Check project-level toolchain
+        project = config.get('project', {})
+        project_toolchain = project.get('toolchain')
+        if project_toolchain:
+            tc = self.toolchain_manager.get_toolchain(project_toolchain)
+            if tc:
+                logger.info(f"Using project-specified toolchain: {tc.name}")
+                return tc
+            else:
+                logger.warning(f"Project toolchain '{project_toolchain}' not found, falling back")
+        
+        # Check workspace-level toolchain
+        workspace_toolchain = config.get('toolchain')
+        if workspace_toolchain:
+            tc = self.toolchain_manager.get_toolchain(workspace_toolchain)
+            if tc:
+                logger.info(f"Using workspace-specified toolchain: {tc.name}")
+                return tc
+            else:
+                logger.warning(f"Workspace toolchain '{workspace_toolchain}' not found, falling back")
+        
+        # Auto-detect based on platform/architecture
+        tc = self.toolchain_manager.auto_detect(self.platform, self.architecture)
+        if tc:
+            return tc
+        
+        # No toolchain found
+        raise ValueError(f"No suitable toolchain found for {self.platform}-{self.architecture}. "
+                        f"Available toolchains: {[name for name, _ in self.toolchain_manager.list_toolchains()]}")
+
     def generate_tasks(self, config: Dict[str, Any]) -> List[BuildTask]:
         """Generate tasks from configuration with variable resolution"""
         tasks = []
         task_counter = 1
+        
+        # Select and initialize toolchain
+        self.current_toolchain = self._select_toolchain(config)
+        self.command_builder = CommandBuilder(self.current_toolchain)
+        self.exec_env = ExecutionEnvironment.create(self.current_toolchain)
+        
+        logger.info(f"Using toolchain: {self.current_toolchain.name} ({self.current_toolchain.description})")
+        logger.debug(f"Execution environment: {self.current_toolchain.execution_type}")
         
         # Build variable environment hierarchy
         # Priority (lowest to highest): workspace -> project -> platform -> arch -> config -> built-ins -> CLI
@@ -948,44 +1355,50 @@ class ConfigParser:
     def _create_compile_task(self, task_id: int, source_file: str, target_name: str,
                            config: Dict[str, Any], output_dir: str, setup_dep: str,
                            include_dirs: List[str] = None, is_shared_library: bool = False) -> BuildTask:
-        """Create a compilation task"""
-        obj_file = f"{output_dir}/obj/{Path(source_file).stem}.o"
+        """Create a compilation task using toolchain"""
+        include_dirs = include_dirs or []
+        
+        # Get object file extension from toolchain
+        obj_ext = self.current_toolchain.extensions.get('object', '.o')
+        obj_file = f"{output_dir}/obj/{Path(source_file).stem}{obj_ext}"
 
-        # Build compiler command
+        # Extract configuration
         cpp_standard = config.get('cpp_standard', 'c++20')
-        optimization = config.get('optimization', '-O0')
         defines = config.get('defines', [])
         compiler_flags = config.get('compiler_flags', [])
-
-        if isinstance(defines, list):
-            define_flags = ' '.join(f'-D{define}' for define in defines)
-        else:
-            define_flags = ''
-
-        if isinstance(compiler_flags, list):
-            flag_str = ' '.join(compiler_flags)
-        else:
-            flag_str = str(compiler_flags) if compiler_flags else ''
         
-        # Build include directory flags
-        include_flags = ''
-        if include_dirs:
-            include_flags = ' '.join(f'-I{inc_dir}' for inc_dir in include_dirs)
+        # Normalize defines to list
+        if not isinstance(defines, list):
+            defines = [defines] if defines else []
         
-        # Add -fPIC for shared libraries
-        pic_flag = '-fPIC' if is_shared_library else ''
+        # Normalize compiler flags to list
+        if isinstance(compiler_flags, str):
+            compiler_flags = [compiler_flags]
+        elif not isinstance(compiler_flags, list):
+            compiler_flags = []
         
-        # Generate dependency file for header tracking
-        dep_file = obj_file.replace('.o', '.d')
-        dep_flags = f"-MMD -MP -MF {dep_file}"
-
-        command = f"g++ {dep_flags} -std={cpp_standard} {flag_str} {define_flags} {pic_flag} {include_flags} -c {source_file} -o {obj_file}"
+        # Build compile command using toolchain
+        command, dep_file = self.command_builder.build_compile_command(
+            source=source_file,
+            output=obj_file,
+            cpp_standard=cpp_standard,
+            defines=defines,
+            include_dirs=include_dirs,
+            is_shared_library=is_shared_library,
+            config_type=self.configuration,
+            extra_flags=compiler_flags
+        )
+        
+        # Build outputs list
+        outputs = [obj_file]
+        if dep_file:
+            outputs.append(dep_file)
 
         return BuildTask(
             task_id=f"compile_{target_name}_{task_id:03d}",
             task_type="compile_cpp",
             inputs=[TaskInput(path=source_file)],
-            outputs=[obj_file, dep_file],  # Include .d file as output
+            outputs=outputs,
             dependencies=[setup_dep],
             command=command,
             platform=self.platform,
@@ -997,20 +1410,26 @@ class ConfigParser:
 
     def _create_library_link_task(self, task_id: int, lib_name: str, compile_tasks: List[BuildTask],
                                  config: Dict[str, Any], output_dir: str) -> BuildTask:
-        """Create library linking task"""
-        lib_file = f"{output_dir}/lib/lib{lib_name}.so"
+        """Create library linking task using toolchain"""
+        # Get library filename from toolchain
+        lib_filename = self.command_builder.get_output_pattern('shared_library', lib_name)
+        lib_file = f"{output_dir}/lib/{lib_filename}"
 
         # Collect actual object files from compile tasks (exclude .d files)
+        obj_ext = self.current_toolchain.extensions.get('object', '.o')
         obj_files = []
         dep_ids = []
         for compile_task in compile_tasks:
-            # Only include .o files, not .d dependency files
-            obj_files.extend([out for out in compile_task.outputs if out.endswith('.o')])
+            # Only include object files, not dependency files
+            obj_files.extend([out for out in compile_task.outputs if out.endswith(obj_ext)])
             dep_ids.append(compile_task.task_id)
 
-        # Build command with specific object files
-        obj_files_str = ' '.join(obj_files)
-        command = f"g++ -shared -fPIC {obj_files_str} -o {lib_file}"
+        # Build link command using toolchain
+        command = self.command_builder.build_link_command(
+            link_type='shared_library',
+            objects=obj_files,
+            output=lib_file
+        )
 
         return BuildTask(
             task_id=f"link_{lib_name}_{task_id:03d}",
@@ -1030,39 +1449,51 @@ class ConfigParser:
                                    compile_tasks: List[BuildTask], lib_tasks: List[BuildTask],
                                    lib_dep_ids: List[str], config: Dict[str, Any], 
                                    output_dir: str) -> BuildTask:
-        """Create executable linking task"""
-        exe_file = f"{output_dir}/bin/{exe_name}"
+        """Create executable linking task using toolchain"""
+        # Get executable filename from toolchain
+        exe_filename = self.command_builder.get_output_pattern('executable', exe_name)
+        exe_file = f"{output_dir}/bin/{exe_filename}"
 
         # Collect object files from compile tasks (exclude .d files)
+        obj_ext = self.current_toolchain.extensions.get('object', '.o')
         obj_files = []
         dep_ids = []
         for compile_task in compile_tasks:
-            # Only include .o files, not .d dependency files
-            obj_files.extend([out for out in compile_task.outputs if out.endswith('.o')])
+            # Only include object files, not dependency files
+            obj_files.extend([out for out in compile_task.outputs if out.endswith(obj_ext)])
             dep_ids.append(compile_task.task_id)
         
         # Add library dependencies
         dep_ids.extend(lib_dep_ids)
         
-        # Collect library files for linking
-        lib_files = []
-        for lib_task in lib_tasks:
-            lib_files.extend(lib_task.outputs)
+        # Collect library files and extract library names
+        lib_dirs = []
+        lib_names = []
         
-        # Build command with specific files
-        obj_files_str = ' '.join(obj_files)
-        lib_flags = f"-L{output_dir}/lib" if lib_files else ""
+        if lib_tasks:
+            lib_dirs.append(f"{output_dir}/lib")
+            
+            for lib_task in lib_tasks:
+                for lib_file in lib_task.outputs:
+                    # Extract library name from filename
+                    lib_filename = Path(lib_file).stem
+                    
+                    # Handle different naming conventions
+                    # Unix: libXXX.so -> XXX
+                    # Windows: XXX.dll or XXX.lib -> XXX
+                    if lib_filename.startswith('lib'):
+                        lib_names.append(lib_filename[3:])
+                    else:
+                        lib_names.append(lib_filename)
         
-        # Extract library names from library files for -l flags
-        lib_link_flags = []
-        for lib_file in lib_files:
-            # Extract lib name from libXXX.so -> -lXXX
-            lib_name = Path(lib_file).stem
-            if lib_name.startswith('lib'):
-                lib_link_flags.append(f"-l{lib_name[3:]}")
-        
-        lib_link_str = ' '.join(lib_link_flags)
-        command = f"g++ {obj_files_str} {lib_flags} {lib_link_str} -o {exe_file}"
+        # Build link command using toolchain
+        command = self.command_builder.build_link_command(
+            link_type='executable',
+            objects=obj_files,
+            output=exe_file,
+            lib_dirs=lib_dirs,
+            libs=lib_names
+        )
 
         return BuildTask(
             task_id=f"link_exe_{exe_name}_{task_id:03d}",
@@ -1123,10 +1554,12 @@ class ConfigParser:
 class TaskExecutor:
     """Execute tasks with caching, parallel execution, and resource-aware scheduling"""
 
-    def __init__(self, cache: BuildCache, max_workers: int = 4, max_memory_mb: int = 8192):
+    def __init__(self, cache: BuildCache, max_workers: int = 4, max_memory_mb: int = 8192,
+                 exec_env: ExecutionEnvironment = None):
         self.cache = cache
         self.max_workers = max_workers
         self.max_memory_mb = max_memory_mb
+        self.exec_env = exec_env or NativeExecution()  # Default to native execution
         self.execution_stats = {
             'total_tasks': 0,
             'cache_hits': 0,
@@ -1230,16 +1663,11 @@ class TaskExecutor:
                 if output_dir:
                     os.makedirs(output_dir, exist_ok=True)
 
-            # Execute command
-            # Note: Using shell=True for compatibility with existing command format
-            # TODO: Migrate to command lists for better security
-            result = subprocess.run(
-                task.command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TASK_TIMEOUT_SECONDS,
-                cwd=os.getcwd()
+            # Execute command using execution environment
+            result = self.exec_env.execute(
+                command=task.command,
+                cwd=os.getcwd(),
+                timeout=DEFAULT_TASK_TIMEOUT_SECONDS
             )
 
             execution_time = time.time() - start_time
@@ -1297,7 +1725,7 @@ class TaskExecutor:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Buildy - Task-based build system prototype')
-    parser.add_argument('config_files', nargs='+', help='Build configuration files')
+    parser.add_argument('config_files', nargs='*', help='Build configuration files')
     parser.add_argument('--platform', default='linux', help='Target platform')
     parser.add_argument('--architecture', default='x86_64', help='Target architecture') 
     parser.add_argument('--configuration', default='debug', help='Build configuration')
@@ -1308,6 +1736,12 @@ def main():
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     parser.add_argument('--define', '-D', action='append', dest='defines', metavar='VAR=VALUE',
                        help='Define a variable (can be used multiple times, e.g. -D MY_VAR=value)')
+    parser.add_argument('--toolchain', '-t', dest='toolchain', metavar='NAME',
+                       help='Specify toolchain to use (overrides config file)')
+    parser.add_argument('--list-toolchains', action='store_true',
+                       help='List available toolchains and exit')
+    parser.add_argument('--toolchains-dir', default='toolchains',
+                       help='Directory containing toolchain configurations')
 
     args = parser.parse_args()
 
@@ -1327,9 +1761,26 @@ def main():
             logger.debug(f"CLI define: {var.strip()}={value.strip()}")
 
     try:
+        # Initialize toolchain manager
+        toolchain_manager = ToolchainManager(args.toolchains_dir)
+        
+        # Handle --list-toolchains
+        if args.list_toolchains:
+            logger.info("Available toolchains:")
+            for name, description in toolchain_manager.list_toolchains():
+                logger.info(f"  {name:20s} - {description}")
+            return 0
+        
         # Initialize components
         cache = BuildCache(args.cache_dir)
-        config_parser = ConfigParser(args.platform, args.architecture, args.configuration, cli_defines)
+        config_parser = ConfigParser(
+            args.platform, 
+            args.architecture, 
+            args.configuration, 
+            cli_defines,
+            toolchain_manager,
+            args.toolchain
+        )
         graph = TaskGraph()
 
         # Show cache stats if requested
@@ -1340,6 +1791,12 @@ def main():
             logger.info(f"  Total size: {stats['total_size_mb']:.1f} MB")
             logger.info(f"  Cache directory: {stats['cache_directory']}")
             return 0
+        
+        # Ensure config files are provided
+        if not args.config_files:
+            logger.error("No configuration files provided")
+            parser.print_help()
+            return 1
 
         # Parse configuration files and generate tasks
         all_tasks = []
@@ -1373,13 +1830,23 @@ def main():
 
         # Always output task graph to cache directory
         try:
+            # Get toolchain info
+            toolchain_info = {
+                'name': config_parser.current_toolchain.name,
+                'description': config_parser.current_toolchain.description,
+                'target_platform': config_parser.current_toolchain.target_platform,
+                'target_architecture': config_parser.current_toolchain.target_architecture,
+                'execution_type': config_parser.current_toolchain.execution_type
+            }
+            
             output_data = {
                 'metadata': {
                     'platform': args.platform,
                     'architecture': args.architecture,
                     'configuration': args.configuration,
                     'generated_at': time.time(),
-                    'total_tasks': len(all_tasks)
+                    'total_tasks': len(all_tasks),
+                    'toolchain': toolchain_info
                 },
                 'resolved_variables': config_parser.var_env.get_all_variables(),
                 'tasks': [asdict(task) for task in all_tasks],
@@ -1397,8 +1864,8 @@ def main():
             logger.warning(f"Failed to write task graph: {e}")
             # Don't fail the build if we can't write the task graph
 
-        # Execute tasks
-        executor = TaskExecutor(cache, args.workers)
+        # Execute tasks with execution environment from config parser
+        executor = TaskExecutor(cache, args.workers, exec_env=config_parser.exec_env)
         success = executor.execute_task_graph(graph, args.dry_run)
 
         return 0 if success else 1

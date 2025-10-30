@@ -1,0 +1,58 @@
+toolchain:
+  name: "emscripten"
+  description: "Emscripten for WebAssembly compilation"
+  
+  target:
+    platform: wasm
+    architecture: wasm32
+  
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    c_compiler: emcc
+    cxx_compiler: em++
+    linker: em++
+    archiver: emar
+  
+  compile:
+    command: "{cxx_compiler} {dep_flags} -std={std} {flags} {defines} {includes} -c {input} -o {output}"
+    
+    flags:
+      common: ["-Wall", "-Wextra"]
+      debug: ["-g", "-O0"]
+      release: ["-O3", "-DNDEBUG"]
+    
+    dep_flags: "-MMD -MP -MF {dep_file}"
+    pic_flag: ""  # Not applicable for WebAssembly
+    include_flag: "-I"
+    define_flag: "-D"
+  
+  link:
+    shared_library:
+      command: "{linker} -shared {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "lib{name}.wasm"
+      pic_flag: ""
+    
+    static_library:
+      command: "{archiver} rcs {output} {objects}"
+      output_pattern: "lib{name}.a"
+    
+    executable:
+      command: "{linker} {objects} {lib_dirs} {libs} -o {output}"
+      output_pattern: "{name}.js"
+    
+    lib_dir_flag: "-L"
+    lib_flag: "-l"
+  
+  extensions:
+    object: ".o"
+    dependency: ".d"
+    shared_library: ".wasm"
+    static_library: ".a"
+    executable: ".js"
+
