@@ -1,0 +1,72 @@
+toolchain:
+  name: "compressonator"
+  description: "AMD Compressonator CLI for texture compression (cross-platform)"
+  
+  target:
+    platform: any
+    architecture: any
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+  
+  tools:
+    c_compiler: compressonatorcli
+    cxx_compiler: compressonatorcli
+    linker: ""
+    archiver: ""
+  
+  # Texture compression configuration
+  compile:
+    # Command template
+    # Variables: {cxx_compiler}, {flags}, {input}, {output}
+    command: "{cxx_compiler} {input} {output} {flags}"
+    
+    # Configuration-specific flags
+    flags:
+      common: ["-fd", "BC7"]  # BC7 compression
+      debug: ["-fd", "BC7", "-Quality", "1.0"]
+      release: ["-fd", "BC7", "-Quality", "0.8"]
+    
+    # No dependency generation
+    dep_flags: ""
+    
+    # Not applicable
+    pic_flag: ""
+    
+    # Not applicable
+    include_flag: ""
+    
+    # Not applicable
+    define_flag: ""
+  
+  # Linking not applicable
+  link:
+    shared_library:
+      command: ""
+      output_pattern: ""
+      pic_flag: ""
+    
+    static_library:
+      command: ""
+      output_pattern: ""
+    
+    executable:
+      command: ""
+      output_pattern: ""
+    
+    lib_dir_flag: ""
+    lib_flag: ""
+  
+  # File extensions
+  extensions:
+    object: ".dds"
+    dependency: ""
+    shared_library: ""
+    static_library: ""
+    executable: ""
+
+
