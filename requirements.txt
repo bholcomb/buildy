@@ -1,0 +1,17 @@
+# Buildy - Task-Based Build System
+# Python dependencies
+
+# YAML parsing for build configuration files
+PyYAML>=6.0.0,<7.0.0
+
+# Note: The following are part of Python standard library (no installation needed):
+# - hashlib (cryptographic hashing)
+# - subprocess (command execution)
+# - pathlib (path manipulation)
+# - dataclasses (data structures)
+# - typing (type hints)
+# - concurrent.futures (parallel execution)
+# - argparse (CLI argument parsing)
+# - json (JSON serialization)
+# - os, sys, time, shutil (system utilities)
+

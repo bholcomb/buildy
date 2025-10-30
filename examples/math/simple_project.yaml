@@ -1,0 +1,33 @@
+
+project:
+  name: "math-library"
+  version: "1.0.0"
+
+config:
+  cpp_standard: "c++20"
+  optimization: "-O0"
+  defines:
+    - "DEBUG=1"
+    - "MATH_LIB_VERSION=1"
+  compiler_flags:
+    - "-Wall"
+    - "-Wextra"
+    - "-g"
+
+libraries:
+  - name: "mathcore"
+    sources: "libsrc/*.cpp"
+    include_dirs:
+      - "include"
+
+executables:
+  - name: "calculator"
+    sources: "appsrc/main.cpp"
+    include_dirs:
+      - "include"
+    depends_on:
+      - "local(mathcore)"
+
+output:
+  base_dir: "build"
+  pattern: "${base_dir}/${platform}-${arch}-${config}"
