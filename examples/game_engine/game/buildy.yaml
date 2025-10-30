@@ -11,9 +11,12 @@ tasks:
     sources:
       - "src/main.cpp"
       - "src/game.cpp"
+    include_dirs:
+      - "../core/include"
+      - "../renderer/include"
+      - "../audio/include"
     dependencies:
       - engine_core
       - engine_renderer
       - engine_audio
-    public: true
 

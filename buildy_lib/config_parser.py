@@ -241,6 +241,9 @@ class ConfigParser:
             module_parser.current_module = module_path
             module_parser.target_registry = self.target_registry
             
+            # Set config file directory for base_dir resolution
+            module_parser.config_file_dir = module_info.path.parent
+            
             # Generate tasks for this module
             module_tasks = module_parser.generate_tasks(module_info.config)
             
@@ -344,10 +347,10 @@ class ConfigParser:
         self.var_env.set_variable("project_name", project.get('name', 'unknown'), "built-in")
         self.var_env.set_variable("project_version", str(project.get('version', '0.0.0')), "built-in")
         
-        # Also set base_dir early from output config if it exists
+        # Also set base_dir early from output config (defaults to "build")
         output_config = config.get('output', {})
-        if 'base_dir' in output_config:
-            self.var_env.set_variable("base_dir", output_config['base_dir'], "output.base_dir")
+        base_dir = output_config.get('base_dir', 'build')
+        self.var_env.set_variable("base_dir", base_dir, "output.base_dir")
         
         # 7. CLI-provided overrides (highest priority)
         if self.cli_defines:
