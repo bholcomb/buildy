@@ -143,11 +143,18 @@ def main():
             workspace.discover_modules()
             logger.info(f"Found {len(workspace.modules)} module(s)")
         else:
-            # Config file(s) specified - check if it's a workspace root
+            # Config file(s) specified - could be a file or directory
             config_file = args.config_files[0]
             if not os.path.exists(config_file):
                 logger.error(f"Configuration file not found: {config_file}")
                 return 1
+            
+            # If it's a directory, look for buildy.yaml in it
+            if os.path.isdir(config_file):
+                config_file = os.path.join(config_file, 'buildy.yaml')
+                if not os.path.exists(config_file):
+                    logger.error(f"No buildy.yaml found in directory: {args.config_files[0]}")
+                    return 1
             
             # Check if this is a workspace root (has modules defined)
             config_path = Path(config_file).resolve()
@@ -155,6 +162,7 @@ def main():
                 # Try to load as workspace
                 try:
                     workspace = Workspace(config_path.parent)
+                    workspace.discover_modules()
                     if workspace.modules:
                         logger.info(f"Loaded workspace from: {workspace.root_dir}")
                         logger.info(f"Found {len(workspace.modules)} module(s)")
