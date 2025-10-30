@@ -1,0 +1,19 @@
+project:
+  name: game
+  description: "Game executable"
+
+variables:
+  GAME_NAME: "MyGame"
+
+tasks:
+  - name: mygame
+    type: executable
+    sources:
+      - "src/main.cpp"
+      - "src/game.cpp"
+    dependencies:
+      - engine_core
+      - engine_renderer
+      - engine_audio
+    public: true
+

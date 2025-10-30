@@ -1,0 +1,16 @@
+project:
+  name: core
+  description: "Core engine library"
+
+# Module-specific variables
+variables:
+  MODULE_NAME: "engine_core"
+
+tasks:
+  - name: engine_core
+    type: static_library
+    sources:
+      - "src/engine.cpp"
+      - "src/math.cpp"
+      - "src/memory.cpp"
+
