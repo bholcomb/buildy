@@ -202,7 +202,9 @@ def main():
                 workspace=workspace
             )
             
-            builder = IncrementalBuilder(args.cache_dir, args.workers)
+            # Set cache directory relative to workspace root
+            cache_dir = workspace.root_dir / args.cache_dir
+            builder = IncrementalBuilder(str(cache_dir), args.workers)
             success = builder.build_workspace(
                 workspace,
                 config_parser,

@@ -268,15 +268,20 @@ class BuildTemplateEngine:
                 lib_dirs.append(f"{output_dir}/lib")
                 
                 # Find library tasks and extract names
+                # Dependencies can be plain target names (e.g., "engine_core") or
+                # scoped references (e.g., "path:target" or ":local")
                 for dep in depends_on_libs:
-                    if dep.startswith('local(') and dep.endswith(')'):
-                        lib_name = dep[6:-1]
-                        # Find the library link task
-                        for task in existing_tasks:
-                            if task.task_type == 'link' and lib_name in task.task_id and 'link_' + lib_name in task.task_id:
-                                dependencies.append(task.task_id)
-                                lib_names.append(lib_name)
-                                break
+                    # Extract the target name (handle scoped references)
+                    if ':' in dep:
+                        # Scoped reference like "path:target" or ":local"
+                        lib_name = dep.split(':')[-1]
+                    else:
+                        # Plain target name
+                        lib_name = dep
+                    
+                    # Add the dependency as-is (will be resolved later by _resolve_cross_module_dependencies)
+                    dependencies.append(dep)
+                    lib_names.append(lib_name)
         
         # Get tool parameters
         tool_params = step.get('tool_params', {})
