@@ -55,11 +55,16 @@ func VerifyEmbeddedData() error {
 	}
 	log.Printf("Found %d toolchain file(s)", len(toolchains))
 	
-	// Verify we can read a specific file
-	_, err = GetEmbeddedFile("templates/buildy_templates.yaml")
-	if err != nil {
-		return fmt.Errorf("failed to read buildy_templates.yaml: %w", err)
+	// Verify we can read at least one template file
+	if len(templates) == 0 {
+		return fmt.Errorf("no template files found in embedded data")
 	}
+	
+	// Verify we can read at least one toolchain file
+	if len(toolchains) == 0 {
+		return fmt.Errorf("no toolchain files found in embedded data")
+	}
+	
 	log.Println("Successfully verified embedded data access")
 	
 	return nil

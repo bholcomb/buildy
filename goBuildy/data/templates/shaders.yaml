@@ -1,0 +1,18 @@
+# Shader Build Templates
+# Templates for compiling shaders to various formats
+
+templates:
+  # Shader compilation: compile shaders to intermediate format
+  shaders:
+    description: "Compile shader sources to target format (SPIR-V, etc.)"
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          defines: "{item.defines}"
+          include_dirs: "{item.include_dirs}"
+          extra_flags: "{item.flags}"
+

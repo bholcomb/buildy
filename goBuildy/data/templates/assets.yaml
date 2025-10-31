@@ -1,0 +1,16 @@
+# Asset Build Templates
+# Templates for converting and processing game assets
+
+templates:
+  # Texture conversion: convert textures to target format
+  textures:
+    description: "Convert texture sources to target format (DDS, etc.)"
+    steps:
+      - name: convert
+        action: convert
+        for_each: source
+        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
+        inputs: ["{source}"]
+        tool_params:
+          extra_flags: "{item.flags}"
+

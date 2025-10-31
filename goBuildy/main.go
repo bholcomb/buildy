@@ -32,7 +32,7 @@ func main() {
 	toolchainShort := flag.String("t", "", "Specify toolchain to use (short)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
 	toolchainsDir := flag.String("toolchains-dir", filepath.Join(buildyDir, "data", "toolchains"), "Directory containing toolchain configurations")
-	templatesFile := flag.String("templates-file", filepath.Join(buildyDir, "data", "templates", "buildy_templates.yaml"), "Path to build templates file")
+	templatesDir := flag.String("templates-dir", filepath.Join(buildyDir, "data", "templates"), "Directory containing build template files")
 	force := flag.Bool("force", false, "Force full rebuild, ignore cache and build state")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 
@@ -117,7 +117,7 @@ func main() {
 	}
 
 	// Initialize template engine
-	templateEngine, err := NewBuildTemplateEngine(*templatesFile)
+	templateEngine, err := NewBuildTemplateEngine(*templatesDir)
 	if err != nil {
 		log.Fatalf("Failed to initialize template engine: %v", err)
 	}
