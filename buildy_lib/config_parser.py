@@ -247,8 +247,23 @@ class ConfigParser:
             # Set config file directory for base_dir resolution
             module_parser.config_file_dir = module_info.path.parent
             
+            # Merge workspace root config into module config
+            module_config = module_info.config.copy()
+            workspace_config = self.workspace.config.raw_config.get('config', {})
+            if workspace_config:
+                # Workspace config is the base, module config overrides
+                merged_module_config = {**workspace_config}
+                if 'config' in module_config:
+                    # Merge lists (like defines, compiler_flags)
+                    for key, value in module_config['config'].items():
+                        if isinstance(value, list) and key in merged_module_config and isinstance(merged_module_config[key], list):
+                            merged_module_config[key] = merged_module_config[key] + value
+                        else:
+                            merged_module_config[key] = value
+                module_config['config'] = merged_module_config
+            
             # Generate tasks for this module
-            module_tasks = module_parser.generate_tasks(module_info.config)
+            module_tasks = module_parser.generate_tasks(module_config)
             
             all_tasks.extend(module_tasks)
         
@@ -477,6 +492,11 @@ class ConfigParser:
             logger.error(f"Unresolved variables in output pattern: {errors}")
             raise ValueError(f"Output pattern contains unresolved variables")
         
+        # In workspace mode, make paths absolute relative to workspace root
+        # This ensures all modules output to the same location
+        if self.workspace and not Path(resolved_pattern).is_absolute():
+            resolved_pattern = str(self.workspace.root_dir / resolved_pattern)
+        
         logger.debug(f"Output directory pattern '{pattern}' resolved to '{resolved_pattern}'")
         return resolved_pattern
 
@@ -506,10 +526,24 @@ class ConfigParser:
         # Determine library type (default to shared_library)
         lib_type = lib_config.get('type', 'shared_library')
         
-        # Expand glob patterns in sources
+        # Expand glob patterns in sources and resolve paths
         sources = lib_config.get('sources', [])
         if isinstance(sources, str):
             sources = self._expand_glob(sources)
+        elif isinstance(sources, list):
+            # Resolve individual source paths relative to config file directory
+            resolved_sources = []
+            for src in sources:
+                if self.config_file_dir:
+                    abs_src_path = self.config_file_dir / src
+                    try:
+                        rel_src_path = abs_src_path.relative_to(Path.cwd())
+                        resolved_sources.append(str(rel_src_path))
+                    except ValueError:
+                        resolved_sources.append(str(abs_src_path))
+                else:
+                    resolved_sources.append(src)
+            sources = resolved_sources
         lib_config['sources'] = sources
         
         # Process include directories (resolve relative to config file)
@@ -552,10 +586,24 @@ class ConfigParser:
         # Determine executable type (default to executable)
         exe_type = exe_config.get('type', 'executable')
         
-        # Expand glob patterns in sources
+        # Expand glob patterns in sources and resolve paths
         sources = exe_config.get('sources', [])
         if isinstance(sources, str):
             sources = self._expand_glob(sources)
+        elif isinstance(sources, list):
+            # Resolve individual source paths relative to config file directory
+            resolved_sources = []
+            for src in sources:
+                if self.config_file_dir:
+                    abs_src_path = self.config_file_dir / src
+                    try:
+                        rel_src_path = abs_src_path.relative_to(Path.cwd())
+                        resolved_sources.append(str(rel_src_path))
+                    except ValueError:
+                        resolved_sources.append(str(abs_src_path))
+                else:
+                    resolved_sources.append(src)
+            sources = resolved_sources
         exe_config['sources'] = sources
         
         # Process include directories (resolve relative to config file)

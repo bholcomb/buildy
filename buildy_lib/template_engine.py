@@ -267,21 +267,40 @@ class BuildTemplateEngine:
             if depends_on_libs:
                 lib_dirs.append(f"{output_dir}/lib")
                 
-                # Find library tasks and extract names
-                # Dependencies can be plain target names (e.g., "engine_core") or
-                # scoped references (e.g., "path:target" or ":local")
+                # Build dependency graph for libraries to determine correct link order
+                # Libraries must be in reverse dependency order (dependents before dependencies)
+                lib_deps = {}  # lib_name -> list of dependencies
+                
                 for dep in depends_on_libs:
                     # Extract the target name (handle scoped references)
                     if ':' in dep:
-                        # Scoped reference like "path:target" or ":local"
                         lib_name = dep.split(':')[-1]
                     else:
-                        # Plain target name
                         lib_name = dep
                     
-                    # Add the dependency as-is (will be resolved later by _resolve_cross_module_dependencies)
+                    # Find this library's dependencies from existing_tasks
+                    lib_dependencies = []
+                    for task in existing_tasks:
+                        if task.task_type == 'link' and lib_name in task.task_id:
+                            # This is the library's link task, check its dependencies
+                            for task_dep in task.dependencies:
+                                # If dependency is another library link task, extract its name
+                                if task_dep.startswith('link_') and task_dep != task.task_id:
+                                    # Extract library name from task_id like "link_engine_core_005"
+                                    parts = task_dep.split('_')
+                                    if len(parts) >= 3:
+                                        dep_lib_name = '_'.join(parts[1:-1])
+                                        if dep_lib_name in [d.split(':')[-1] if ':' in d else d for d in depends_on_libs]:
+                                            lib_dependencies.append(dep_lib_name)
+                            break
+                    
+                    lib_deps[lib_name] = lib_dependencies
                     dependencies.append(dep)
-                    lib_names.append(lib_name)
+                
+                # Topological sort to get correct link order (reverse dependency order)
+                lib_names = self._topological_sort_libs(lib_deps)
+                
+                logger.debug(f"Library link order: {lib_names}")
         
         # Get tool parameters
         tool_params = step.get('tool_params', {})
@@ -318,6 +337,48 @@ class BuildTemplateEngine:
         )
         
         return task
+    
+    def _topological_sort_libs(self, lib_deps: Dict[str, List[str]]) -> List[str]:
+        """
+        Topologically sort libraries in reverse dependency order.
+        Libraries that depend on others come BEFORE their dependencies.
+        
+        Args:
+            lib_deps: Dictionary mapping library names to their dependencies
+            
+        Returns:
+            List of library names in correct link order
+        """
+        # Build in-degree map (how many libraries depend on each library)
+        in_degree = {lib: 0 for lib in lib_deps}
+        for lib, deps in lib_deps.items():
+            for dep in deps:
+                if dep in in_degree:
+                    in_degree[dep] += 1
+        
+        # Start with libraries that have no dependents (highest in dependency tree)
+        queue = [lib for lib, degree in in_degree.items() if degree == 0]
+        result = []
+        
+        while queue:
+            # Sort for deterministic output
+            queue.sort()
+            lib = queue.pop(0)
+            result.append(lib)
+            
+            # Remove this library from the graph
+            for dep in lib_deps[lib]:
+                if dep in in_degree:
+                    in_degree[dep] -= 1
+                    if in_degree[dep] == 0:
+                        queue.append(dep)
+        
+        # Check for cycles
+        if len(result) != len(lib_deps):
+            logger.warning(f"Circular dependency detected in libraries, using original order")
+            return list(lib_deps.keys())
+        
+        return result
     
     def _resolve_template_string(self, template: str, context: Dict[str, Any]) -> Any:
         """Resolve template variables in a string
