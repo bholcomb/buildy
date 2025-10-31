@@ -13,15 +13,20 @@ import (
 
 // BuildTemplateEngine expands universal build templates into concrete tasks
 type BuildTemplateEngine struct {
-	templatesDir string
-	templates    map[string]any
+	templatesDirs []string
+	templates     map[string]any
 }
 
-// NewBuildTemplateEngine creates a new BuildTemplateEngine
+// NewBuildTemplateEngine creates a new BuildTemplateEngine from a single directory
 func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
+	return NewBuildTemplateEngineMulti([]string{templatesDir})
+}
+
+// NewBuildTemplateEngineMulti creates a new BuildTemplateEngine from multiple directories
+func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, error) {
 	engine := &BuildTemplateEngine{
-		templatesDir: templatesDir,
-		templates:    make(map[string]any),
+		templatesDirs: templatesDirs,
+		templates:     make(map[string]any),
 	}
 
 	if err := engine.loadTemplates(); err != nil {
@@ -31,32 +36,45 @@ func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
 	return engine, nil
 }
 
-// loadTemplates loads all build templates from YAML files in the templates directory
+// loadTemplates loads all build templates from YAML files in all template directories
 func (bte *BuildTemplateEngine) loadTemplates() error {
-	// Find all .yaml files in templates directory
-	entries, err := os.ReadDir(bte.templatesDir)
-	if err != nil {
-		log.Printf("WARNING: Templates directory not found: %s", bte.templatesDir)
-		return nil // Not fatal
+	totalTemplates := 0
+
+	// Load templates from each directory in order
+	for _, templatesDir := range bte.templatesDirs {
+		// Find all .yaml files in templates directory
+		entries, err := os.ReadDir(templatesDir)
+		if err != nil {
+			log.Printf("WARNING: Templates directory not found: %s", templatesDir)
+			continue // Not fatal, try next directory
+		}
+
+		dirTemplateCount := len(bte.templates)
+
+		// Load each template file
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			if !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
+				continue
+			}
+
+			templateFile := filepath.Join(templatesDir, entry.Name())
+			if err := bte.loadTemplateFile(templateFile); err != nil {
+				return fmt.Errorf("failed to load template file %s: %w", entry.Name(), err)
+			}
+		}
+
+		newTemplates := len(bte.templates) - dirTemplateCount
+		if newTemplates > 0 {
+			log.Printf("Loaded %d template(s) from %s", newTemplates, templatesDir)
+		}
+		totalTemplates = len(bte.templates)
 	}
 
-	// Load each template file
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		if !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
-			continue
-		}
-
-		templateFile := filepath.Join(bte.templatesDir, entry.Name())
-		if err := bte.loadTemplateFile(templateFile); err != nil {
-			return fmt.Errorf("failed to load template file %s: %w", entry.Name(), err)
-		}
-	}
-
-	log.Printf("Loaded %d templates from %s", len(bte.templates), bte.templatesDir)
+	log.Printf("Total templates loaded: %d", totalTemplates)
 	return nil
 }
 

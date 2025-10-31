@@ -402,15 +402,20 @@ func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
 
 // ToolchainManager manages toolchain selection and loading
 type ToolchainManager struct {
-	toolchainsDir string
-	toolchains    map[string]*ToolchainConfig
+	toolchainsDirs []string
+	toolchains     map[string]*ToolchainConfig
 }
 
-// NewToolchainManager creates a new ToolchainManager
+// NewToolchainManager creates a new ToolchainManager from a single directory
 func NewToolchainManager(toolchainsDir string) (*ToolchainManager, error) {
+	return NewToolchainManagerMulti([]string{toolchainsDir})
+}
+
+// NewToolchainManagerMulti creates a new ToolchainManager from multiple directories
+func NewToolchainManagerMulti(toolchainsDirs []string) (*ToolchainManager, error) {
 	tm := &ToolchainManager{
-		toolchainsDir: toolchainsDir,
-		toolchains:    make(map[string]*ToolchainConfig),
+		toolchainsDirs: toolchainsDirs,
+		toolchains:     make(map[string]*ToolchainConfig),
 	}
 
 	if err := tm.loadToolchains(); err != nil {
@@ -420,35 +425,43 @@ func NewToolchainManager(toolchainsDir string) (*ToolchainManager, error) {
 	return tm, nil
 }
 
-// loadToolchains loads all toolchain configurations from the toolchains directory
+// loadToolchains loads all toolchain configurations from all toolchain directories
 func (tm *ToolchainManager) loadToolchains() error {
-	// Check if directory exists
-	if _, err := os.Stat(tm.toolchainsDir); os.IsNotExist(err) {
-		log.Printf("WARNING: Toolchains directory not found: %s", tm.toolchainsDir)
-		return nil
-	}
+	// Load toolchains from each directory in order
+	for _, toolchainsDir := range tm.toolchainsDirs {
+		// Check if directory exists
+		if _, err := os.Stat(toolchainsDir); os.IsNotExist(err) {
+			log.Printf("WARNING: Toolchains directory not found: %s", toolchainsDir)
+			continue // Not fatal, try next directory
+		}
 
-	// Read all .yaml files
-	entries, err := os.ReadDir(tm.toolchainsDir)
-	if err != nil {
-		return fmt.Errorf("failed to read toolchains directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
+		// Read all .yaml files
+		entries, err := os.ReadDir(toolchainsDir)
+		if err != nil {
+			log.Printf("WARNING: Failed to read toolchains directory %s: %v", toolchainsDir, err)
 			continue
 		}
 
-		if filepath.Ext(entry.Name()) == ".yaml" {
-			tcFile := filepath.Join(tm.toolchainsDir, entry.Name())
-			tc, err := LoadToolchainConfig(tcFile)
-			if err != nil {
-				log.Printf("ERROR: Failed to load toolchain %s: %v", tcFile, err)
+		for _, entry := range entries {
+			if entry.IsDir() {
 				continue
 			}
 
-			tm.toolchains[tc.Name] = tc
-			log.Printf("Loaded toolchain: %s - %s", tc.Name, tc.Description)
+			if filepath.Ext(entry.Name()) == ".yaml" {
+				tcFile := filepath.Join(toolchainsDir, entry.Name())
+				tc, err := LoadToolchainConfig(tcFile)
+				if err != nil {
+					log.Printf("ERROR: Failed to load toolchain %s: %v", tcFile, err)
+					continue
+				}
+
+				if _, exists := tm.toolchains[tc.Name]; exists {
+					log.Printf("WARNING: Toolchain '%s' from %s overrides existing toolchain", tc.Name, toolchainsDir)
+				}
+
+				tm.toolchains[tc.Name] = tc
+				log.Printf("Loaded toolchain: %s - %s", tc.Name, tc.Description)
+			}
 		}
 	}
 
