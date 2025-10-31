@@ -45,12 +45,9 @@ func main() {
 	var targets multiStringFlag
 	flag.Var(&targets, "target", "Build specific target(s) (workspace mode only, can be used multiple times)")
 
-	// Custom flags for additional template and toolchain directories
-	var additionalTemplateDirs multiStringFlag
-	flag.Var(&additionalTemplateDirs, "add-templates-dir", "Additional directory containing template files (can be used multiple times, parsed in order)")
-
-	var additionalToolchainDirs multiStringFlag
-	flag.Var(&additionalToolchainDirs, "add-toolchains-dir", "Additional directory containing toolchain files (can be used multiple times, parsed in order)")
+	// Custom flag for additional data directories
+	var additionalDataDirs multiStringFlag
+	flag.Var(&additionalDataDirs, "add-data-dir", "Additional data directory (looks for templates/ and toolchains/ subdirectories, can be used multiple times, parsed in order)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n\n", Version)
@@ -94,7 +91,9 @@ func main() {
 
 	// Initialize toolchain manager with base directory and additional directories
 	toolchainDirs := []string{*toolchainsDir}
-	toolchainDirs = append(toolchainDirs, additionalToolchainDirs...)
+	for _, dataDir := range additionalDataDirs {
+		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
+	}
 	toolchainManager, err := NewToolchainManagerMulti(toolchainDirs)
 	if err != nil {
 		log.Fatalf("Failed to initialize toolchain manager: %v", err)
@@ -127,7 +126,9 @@ func main() {
 
 	// Initialize template engine with base directory and additional directories
 	templateDirs := []string{*templatesDir}
-	templateDirs = append(templateDirs, additionalTemplateDirs...)
+	for _, dataDir := range additionalDataDirs {
+		templateDirs = append(templateDirs, filepath.Join(dataDir, "templates"))
+	}
 	templateEngine, err := NewBuildTemplateEngineMulti(templateDirs)
 	if err != nil {
 		log.Fatalf("Failed to initialize template engine: %v", err)
