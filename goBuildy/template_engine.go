@@ -13,15 +13,15 @@ import (
 
 // BuildTemplateEngine expands universal build templates into concrete tasks
 type BuildTemplateEngine struct {
-	templatesFile string
-	templates     map[string]any
+	templatesDir string
+	templates    map[string]any
 }
 
 // NewBuildTemplateEngine creates a new BuildTemplateEngine
-func NewBuildTemplateEngine(templatesFile string) (*BuildTemplateEngine, error) {
+func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
 	engine := &BuildTemplateEngine{
-		templatesFile: templatesFile,
-		templates:     make(map[string]any),
+		templatesDir: templatesDir,
+		templates:    make(map[string]any),
 	}
 
 	if err := engine.loadTemplates(); err != nil {
@@ -31,21 +31,55 @@ func NewBuildTemplateEngine(templatesFile string) (*BuildTemplateEngine, error) 
 	return engine, nil
 }
 
-// loadTemplates loads build templates from YAML file
+// loadTemplates loads all build templates from YAML files in the templates directory
 func (bte *BuildTemplateEngine) loadTemplates() error {
-	data, err := os.ReadFile(bte.templatesFile)
+	// Find all .yaml files in templates directory
+	entries, err := os.ReadDir(bte.templatesDir)
 	if err != nil {
-		log.Printf("WARNING: Templates file not found: %s", bte.templatesFile)
+		log.Printf("WARNING: Templates directory not found: %s", bte.templatesDir)
 		return nil // Not fatal
+	}
+
+	// Load each template file
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		if !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
+			continue
+		}
+
+		templateFile := filepath.Join(bte.templatesDir, entry.Name())
+		if err := bte.loadTemplateFile(templateFile); err != nil {
+			return fmt.Errorf("failed to load template file %s: %w", entry.Name(), err)
+		}
+	}
+
+	log.Printf("Loaded %d templates from %s", len(bte.templates), bte.templatesDir)
+	return nil
+}
+
+// loadTemplateFile loads templates from a single YAML file
+func (bte *BuildTemplateEngine) loadTemplateFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
 	}
 
 	var rawData map[string]any
 	if err := yaml.Unmarshal(data, &rawData); err != nil {
-		return fmt.Errorf("failed to parse templates YAML: %w", err)
+		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
 	if templates, ok := rawData["templates"].(map[string]any); ok {
-		bte.templates = templates
+		// Merge templates into the engine's template map
+		for name, tmpl := range templates {
+			if _, exists := bte.templates[name]; exists {
+				log.Printf("WARNING: Template '%s' in %s overrides existing template", name, filepath.Base(filePath))
+			}
+			bte.templates[name] = tmpl
+		}
 	}
 
 	return nil
