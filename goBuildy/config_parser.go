@@ -13,27 +13,28 @@ import (
 
 // ConfigParser parses build configuration files with hierarchical variable support
 type ConfigParser struct {
-	Platform          string
-	Architecture      string
-	Configuration     string
-	GlobalConfig      map[string]any
-	PlatformConfig    map[string]any
-	ArchConfig        map[string]any
-	ConfigConfig      map[string]any
-	ConfigFileDir     string
-	VarEnv            *VariableEnvironment
-	CLIDefines        map[string]string
-	ToolchainManager  *ToolchainManager
-	DefaultToolchain  string
-	TemplateEngine    *BuildTemplateEngine
-	CurrentToolchain  *ToolchainConfig
-	ToolMatcher       *ToolMatcher
-	CommandBuilder    *CommandBuilder
-	ExecEnv           *ExecutionEnvironment
-	Workspace         *Workspace
-	TargetRegistry    *TargetRegistry
-	CurrentModule     string
-	PackageManager    *PackageManager
+	Platform         string
+	Architecture     string
+	Configuration    string
+	GlobalConfig     map[string]any
+	PlatformConfig   map[string]any
+	ArchConfig       map[string]any
+	ConfigConfig     map[string]any
+	ConfigFileDir    string
+	VarEnv           *VariableEnvironment
+	CLIDefines       map[string]string
+	ToolchainManager *ToolchainManager
+	DefaultToolchain string
+	TemplateEngine   *BuildTemplateEngine
+	CurrentToolchain *ToolchainConfig
+	ToolMatcher      *ToolMatcher
+	CommandBuilder   *CommandBuilder
+	ExecEnv          *ExecutionEnvironment
+	Workspace        *Workspace
+	TargetRegistry   *TargetRegistry
+	CurrentModule    string
+	PackageManager   *PackageManager
+	TaskIDGen        *TaskIDGenerator
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -64,6 +65,7 @@ func NewConfigParser(
 		TemplateEngine:   templateEngine,
 		Workspace:        workspace,
 		PackageManager:   packageManager,
+		TaskIDGen:        NewTaskIDGenerator("workspace"),
 	}
 }
 
@@ -300,6 +302,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 		// Set current module for dependency resolution
 		moduleParser.CurrentModule = modulePath
 		moduleParser.TargetRegistry = cp.TargetRegistry
+		moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
 
 		// Set config file directory for base_dir resolution
 		moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
@@ -357,8 +360,8 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 	for _, task := range allTasks {
 		// Link tasks have task_type='link' and task_id like "link_<target_name>_<counter>"
 		if task.TaskType == "link" {
-			// Extract target name from task_id (e.g., "link_engine_core_005" -> "engine_core")
-			parts := strings.Split(task.TaskID, "_")
+			baseID := stripModuleSuffix(task.TaskID)
+			parts := strings.Split(baseID, "_")
 			if len(parts) >= 3 && parts[0] == "link" {
 				// Reconstruct target name (everything between 'link_' and the final '_<number>')
 				targetName := strings.Join(parts[1:len(parts)-1], "_")
@@ -373,7 +376,8 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 		resolvedDeps := []string{}
 		for _, dep := range task.Dependencies {
 			// If it's already a task ID (starts with a task type), keep it
-			if strings.HasPrefix(dep, "setup_") || strings.HasPrefix(dep, "compile_") || strings.HasPrefix(dep, "link_") {
+			baseDep := stripModuleSuffix(dep)
+			if strings.HasPrefix(baseDep, "setup_") || strings.HasPrefix(baseDep, "compile_") || strings.HasPrefix(baseDep, "link_") {
 				resolvedDeps = append(resolvedDeps, dep)
 				continue
 			}
@@ -395,10 +399,24 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 	return allTasks
 }
 
+func stripModuleSuffix(taskID string) string {
+	if idx := strings.Index(taskID, "__"); idx != -1 {
+		return taskID[:idx]
+	}
+	return taskID
+}
+
 // GenerateTasks generates tasks from configuration with variable resolution
 func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
-	taskCounter := 1
+
+	if cp.TaskIDGen == nil {
+		moduleName := cp.CurrentModule
+		if moduleName == "" {
+			moduleName = "workspace"
+		}
+		cp.TaskIDGen = NewTaskIDGenerator(moduleName)
+	}
 
 	// Select and initialize toolchain
 	tc, err := cp.selectToolchain(config)
@@ -565,9 +583,8 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 		return nil, err
 	}
 
-	setupTask := cp.createSetupTask(taskCounter, outputDir)
+	setupTask := cp.createSetupTask(outputDir)
 	tasks = append(tasks, &setupTask)
-	taskCounter++
 
 	// Generate library tasks
 	if library, ok := resolvedConfig["library"]; ok {
@@ -581,12 +598,11 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 
 		for _, libRaw := range libraries {
 			if lib, ok := libRaw.(map[string]any); ok {
-				libTasks, err := cp.generateLibraryTasks(lib, mergedConfig, outputDir, setupTask.TaskID, taskCounter)
+				libTasks, err := cp.generateLibraryTasks(lib, mergedConfig, outputDir, setupTask.TaskID)
 				if err != nil {
 					return nil, err
 				}
 				tasks = append(tasks, libTasks...)
-				taskCounter += len(libTasks)
 			}
 		}
 	}
@@ -603,12 +619,11 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 
 		for _, exeRaw := range executables {
 			if exe, ok := exeRaw.(map[string]any); ok {
-				exeTasks, err := cp.generateExecutableTasks(exe, mergedConfig, outputDir, setupTask.TaskID, taskCounter, tasks)
+				exeTasks, err := cp.generateExecutableTasks(exe, mergedConfig, outputDir, setupTask.TaskID, tasks)
 				if err != nil {
 					return nil, err
 				}
 				tasks = append(tasks, exeTasks...)
-				taskCounter += len(exeTasks)
 			}
 		}
 	}
@@ -669,12 +684,12 @@ func (cp *ConfigParser) getOutputDir(config map[string]any) (string, error) {
 }
 
 // createSetupTask creates directory setup task
-func (cp *ConfigParser) createSetupTask(taskID int, outputDir string) BuildTask {
+func (cp *ConfigParser) createSetupTask(outputDir string) BuildTask {
 	// Build platform-appropriate mkdir command
 	libDir := filepath.Join(outputDir, "lib")
 	binDir := filepath.Join(outputDir, "bin")
 	objDir := filepath.Join(outputDir, "obj")
-	
+
 	var command string
 	if strings.Contains(strings.ToLower(cp.Platform), "windows") {
 		// Windows: use cmd /c mkdir (creates parent dirs automatically)
@@ -684,9 +699,10 @@ func (cp *ConfigParser) createSetupTask(taskID int, outputDir string) BuildTask 
 		// Unix/Mac: use mkdir -p
 		command = fmt.Sprintf("mkdir -p %s %s %s", libDir, binDir, objDir)
 	}
-	
+
+	taskID := cp.TaskIDGen.Next("setup", "dirs")
 	task := NewBuildTask(
-		fmt.Sprintf("setup_dirs_%03d", taskID),
+		taskID,
 		"setup",
 		[]TaskInput{},
 		[]string{
@@ -872,7 +888,6 @@ func (cp *ConfigParser) generateLibraryTasks(
 	mergedConfig map[string]any,
 	outputDir string,
 	setupTaskID string,
-	taskCounter int,
 ) ([]*BuildTask, error) {
 	// Determine library type (default to shared_library)
 	libType := "shared_library"
@@ -906,7 +921,7 @@ func (cp *ConfigParser) generateLibraryTasks(
 		mergedConfig,
 		outputDir,
 		setupTaskID,
-		taskCounter,
+		cp.TaskIDGen,
 		cp.ToolMatcher,
 		cp.CommandBuilder,
 		cp.Platform,
@@ -927,7 +942,6 @@ func (cp *ConfigParser) generateExecutableTasks(
 	mergedConfig map[string]any,
 	outputDir string,
 	setupTaskID string,
-	taskCounter int,
 	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
 	// Determine executable type (default to executable)
@@ -962,7 +976,7 @@ func (cp *ConfigParser) generateExecutableTasks(
 		mergedConfig,
 		outputDir,
 		setupTaskID,
-		taskCounter,
+		cp.TaskIDGen,
 		cp.ToolMatcher,
 		cp.CommandBuilder,
 		cp.Platform,
@@ -1116,4 +1130,3 @@ func (cp *ConfigParser) expandGlob(pattern string) []string {
 	log.Printf("Pattern '%s' matched %d files: %v", pattern, len(relativeResults), relativeResults)
 	return relativeResults
 }
-

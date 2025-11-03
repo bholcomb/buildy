@@ -42,6 +42,21 @@ func (b *Builder) BuildWorkspace(
 	log.Printf("Starting workspace build...")
 	startTime := time.Now()
 
+	workspaceStateFile := filepath.Join(b.CacheDir, "workspace_state.json")
+	existingState, err := LoadBuildState(workspaceStateFile)
+	if err != nil {
+		log.Printf("WARNING: Failed to load previous build state: %v", err)
+	}
+
+	var buildState *BuildState
+	if existingState != nil {
+		buildState = existingState
+	} else {
+		buildState = NewBuildState()
+	}
+
+	changeDetector := NewChangeDetector(buildState, b.Cache)
+
 	// Task Generation Phase
 	log.Printf("Phase 1: Task Generation")
 	taskGenStart := time.Now()
@@ -54,6 +69,26 @@ func (b *Builder) BuildWorkspace(
 	// Save discovery cache
 	if err := workspace.SaveDiscoveryCache(b.CacheDir); err != nil {
 		log.Printf("WARNING: Failed to save discovery cache: %v", err)
+	}
+
+	// If we have prior build state and we're not forcing, check for changes first
+	if !force && buildState != nil && buildState.ConfigHash != "" && !dryRun {
+		var currentConfig map[string]any
+		if workspace != nil && workspace.Config != nil {
+			currentConfig = workspace.Config.RawConfig
+		}
+
+		configFile := filepath.Join(workspace.RootDir, "buildy.yaml")
+		changes, detectErr := changeDetector.DetectChanges(configFile, currentConfig, "")
+		if detectErr != nil {
+			log.Printf("WARNING: Change detection failed: %v", detectErr)
+		} else if !changes.HasChanges() {
+			log.Printf("No source or config changes detected; verifying cache state before execution.")
+		} else if changes.RequiresFullRebuild() {
+			log.Printf("Detected configuration/toolchain changes. Performing full rebuild.")
+		} else {
+			log.Printf("Detected source changes. Rebuilding affected tasks.")
+		}
 	}
 
 	// Generate tasks for all modules
@@ -79,7 +114,7 @@ func (b *Builder) BuildWorkspace(
 	execStart := time.Now()
 
 	// Execute all tasks (cache will handle skipping unchanged tasks)
-	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, 8192, nil, force)
+	executor := NewTaskExecutor(b.Cache, changeDetector, b.MaxWorkers, 8192, nil, force)
 	success := executor.ExecuteTaskGraph(graph, dryRun)
 
 	execDuration := time.Since(execStart)
@@ -91,7 +126,6 @@ func (b *Builder) BuildWorkspace(
 
 	// Save build state for future reference
 	if success && !dryRun {
-		workspaceStateFile := filepath.Join(b.CacheDir, "workspace_state.json")
 		workspaceConfigHash, err := HashConfig(workspace.Config.RawConfig)
 		if err != nil {
 			log.Printf("WARNING: Failed to hash workspace config: %v", err)
@@ -118,12 +152,12 @@ func (b *Builder) BuildWorkspace(
 		}
 
 		newState := &BuildState{
-			LastBuildTime:   float64(time.Now().Unix()),
-			TaskGraphHash:   b.hashGraph(graph),
-			CompletedTasks:  completedTasks,
-			FileMtimes:      fileMtimes,
-			ConfigHash:      workspaceConfigHash,
-			ToolchainHash:   "", // TODO: Track toolchain per module
+			LastBuildTime:  float64(time.Now().Unix()),
+			TaskGraphHash:  b.hashGraph(graph),
+			CompletedTasks: completedTasks,
+			FileMtimes:     fileMtimes,
+			ConfigHash:     workspaceConfigHash,
+			ToolchainHash:  "", // TODO: Track toolchain per module
 		}
 
 		if err := newState.Save(workspaceStateFile); err != nil {

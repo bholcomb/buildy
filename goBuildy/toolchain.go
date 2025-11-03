@@ -13,41 +13,41 @@ import (
 
 // Tool represents an individual tool within a toolchain
 type Tool struct {
-	Name             string              `yaml:"name"`
-	Action           string              `yaml:"action"`
-	Command          string              `yaml:"command"`
-	InputExtensions  []string            `yaml:"input_extensions"`
-	OutputExtension  string              `yaml:"output_extension"`
-	OutputPattern    string              `yaml:"output_pattern"`
-	Flags            map[string][]string `yaml:"flags"`
-	Supports         map[string]any      `yaml:"supports"`
+	Name            string              `yaml:"name"`
+	Action          string              `yaml:"action"`
+	Command         string              `yaml:"command"`
+	InputExtensions []string            `yaml:"input_extensions"`
+	OutputExtension string              `yaml:"output_extension"`
+	OutputPattern   string              `yaml:"output_pattern"`
+	Flags           map[string][]string `yaml:"flags"`
+	Supports        map[string]any      `yaml:"supports"`
 }
 
 // NewTool creates a new Tool with defaults
 func NewTool(name, action, command string, inputExts []string, outputExt string) *Tool {
 	return &Tool{
-		Name:             name,
-		Action:           action,
-		Command:          command,
-		InputExtensions:  inputExts,
-		OutputExtension:  outputExt,
-		OutputPattern:    "{name}",
-		Flags:            make(map[string][]string),
-		Supports:         make(map[string]any),
+		Name:            name,
+		Action:          action,
+		Command:         command,
+		InputExtensions: inputExts,
+		OutputExtension: outputExt,
+		OutputPattern:   "{name}",
+		Flags:           make(map[string][]string),
+		Supports:        make(map[string]any),
 	}
 }
 
 // ToolchainConfig represents a toolchain configuration loaded from YAML
 type ToolchainConfig struct {
-	Name               string            `yaml:"name"`
-	Description        string            `yaml:"description"`
-	TargetPlatform     string            `yaml:"-"`
-	TargetArchitecture string            `yaml:"-"`
-	HostPlatform       string            `yaml:"-"`
-	HostArchitecture   string            `yaml:"-"`
-	ExecutionType      string            `yaml:"-"`
-	ExecutionConfig    map[string]any    `yaml:"-"`
-	Tools              map[string]*Tool  `yaml:"-"`
+	Name               string           `yaml:"name"`
+	Description        string           `yaml:"description"`
+	TargetPlatform     string           `yaml:"-"`
+	TargetArchitecture string           `yaml:"-"`
+	HostPlatform       string           `yaml:"-"`
+	HostArchitecture   string           `yaml:"-"`
+	ExecutionType      string           `yaml:"-"`
+	ExecutionConfig    map[string]any   `yaml:"-"`
+	Tools              map[string]*Tool `yaml:"-"`
 }
 
 // NewToolchainConfig creates a new ToolchainConfig
@@ -669,8 +669,7 @@ func (cb *CommandBuilder) BuildCommand(
 		command = strings.ReplaceAll(command, placeholder, value)
 	}
 
-	// Clean up extra spaces
-	command = strings.Join(strings.Fields(command), " ")
+	command = strings.TrimSpace(command)
 
 	return command, depFile, nil
 }
@@ -763,9 +762,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		command = strings.ReplaceAll(command, placeholder, value)
 	}
 
-	// Clean up extra spaces
-	command = strings.Join(strings.Fields(command), " ")
+	command = strings.TrimSpace(command)
 
 	return command, nil
 }
-

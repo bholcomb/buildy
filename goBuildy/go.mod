@@ -2,4 +2,7 @@ module buildy
 
 go 1.22.2
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require (
+	github.com/bmatcuk/doublestar/v4 v4.9.1
+	gopkg.in/yaml.v3 v3.0.1
+)
