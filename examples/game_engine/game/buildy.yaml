@@ -14,6 +14,8 @@ executable:
     - "../core/include"
     - "../renderer/include"
     - "../audio/include"
+  packages:
+    - glfw3
   depends_on:
     - engine_core
     - engine_renderer

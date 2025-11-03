@@ -1,0 +1,52 @@
+package:
+  name: glfw3
+  description: "GLFW - OpenGL window and input library"
+  
+  # Include directories
+  include_dirs:
+    linux:
+      - /usr/include/GLFW
+    windows:
+      - ${3RD_PARTY_DIR}/GLFW3/include
+    macos:
+      - /opt/homebrew/include
+  
+  # Library directories (platform-specific)
+  lib_dirs:
+    linux-x86_64:
+      - /usr/lib/x86_64-linux-gnu
+    linux-arm64:
+      - /usr/lib/aarch64-linux-gnu
+    windows:
+      -${3RD_PARTY_DIR}/GLFW3/lib
+    macos:
+      - /opt/homebrew/lib
+  
+  # Libraries to link (includes system libraries)
+  libs:
+    linux:
+      - glfw
+    windows:
+      - glfw3
+    macos:
+      - glfw
+  
+  # macOS frameworks
+  frameworks:
+    macos:
+      - Cocoa
+      - IOKit
+      - CoreVideo
+      - OpenGL
+  
+  # Preprocessor defines
+  defines:
+    linux:
+      - GLFW_ENABLED
+      - GLFW_EXPOSE_NATIVE_X11
+    windows:
+      - GLFW_ENABLED
+      - GLFW_EXPOSE_NATIVE_WIN32
+    macos:
+      - GLFW_ENABLED
+      - GLFW_EXPOSE_NATIVE_COCOA

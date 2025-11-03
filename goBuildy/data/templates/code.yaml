@@ -77,6 +77,7 @@ templates:
         inputs: "{compile.outputs}"
         depends_on: ["{compile.task_ids}", "{item.depends_on.link_tasks}"]
         tool_params:
-          lib_dirs: ["{output_dir}/lib"]
-          libs: "{item.depends_on.library_names}"
+          lib_dirs: ["{output_dir}/lib", "{item.lib_dirs}"]
+          libs: ["{item.depends_on.library_names}", "{item.libs}"]
+          frameworks: "{item.frameworks}"
 

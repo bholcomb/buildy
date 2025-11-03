@@ -6,10 +6,49 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 const Version = "0.1.0-go"
+
+// Global verbose flag and logger
+var Verbose bool
+
+// getAutoBuildyDirs returns automatic buildy/ directory search paths
+func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
+	dirs := []string{}
+	
+	// 1. Workspace buildy/<subdir>
+	if workspaceRoot != "" {
+		dirs = append(dirs, filepath.Join(workspaceRoot, "buildy", subdir))
+	}
+	
+	// 2. System locations
+	switch runtime.GOOS {
+	case "linux":
+		dirs = append(dirs,
+			filepath.Join("/usr/local/lib/buildy", subdir),
+			filepath.Join("/usr/lib/buildy", subdir),
+			filepath.Join("/opt/buildy", subdir),
+		)
+	case "darwin": // macOS
+		dirs = append(dirs,
+			filepath.Join("/usr/local/lib/buildy", subdir),
+			filepath.Join("/opt/buildy", subdir),
+		)
+	case "windows":
+		dirs = append(dirs,
+			filepath.Join(os.Getenv("ProgramFiles"), "buildy", subdir),
+			filepath.Join("C:\\buildy", subdir),
+		)
+	}
+	
+	// 3. Executable location
+	dirs = append(dirs, filepath.Join(buildyDir, "buildy", subdir))
+	
+	return dirs
+}
 
 func main() {
 	// Get the directory where the buildy executable is located
@@ -26,13 +65,12 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Generate tasks but don't execute")
 	workers := flag.Int("workers", DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
+	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	verboseShort := flag.Bool("v", false, "Enable verbose logging (short)")
 	toolchain := flag.String("toolchain", "", "Specify toolchain to use (overrides config file)")
 	toolchainShort := flag.String("t", "", "Specify toolchain to use (short)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
-	toolchainsDir := flag.String("toolchains-dir", filepath.Join(buildyDir, "data", "toolchains"), "Directory containing toolchain configurations")
-	templatesDir := flag.String("templates-dir", filepath.Join(buildyDir, "data", "templates"), "Directory containing build template files")
 	force := flag.Bool("force", false, "Force full rebuild, ignore cache and build state")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 
@@ -48,6 +86,10 @@ func main() {
 	// Custom flag for additional data directories
 	var additionalDataDirs multiStringFlag
 	flag.Var(&additionalDataDirs, "add-data-dir", "Additional data directory (looks for templates/ and toolchains/ subdirectories, can be used multiple times, parsed in order)")
+
+	// Custom flag for package directories
+	var packageDirs multiStringFlag
+	flag.Var(&packageDirs, "package-dir", "Additional package directory (can be used multiple times, parsed in order)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n\n", Version)
@@ -84,13 +126,75 @@ func main() {
 		log.Printf("CLI define: %s=%s", varName, value)
 	}
 
+	// Handle --clean flag
+	if *clean {
+		// Determine workspace root
+		var workspaceRoot string
+		configFiles := flag.Args()
+		
+		if len(configFiles) == 0 {
+			// No config files specified - use current directory
+			workspaceRoot, err = os.Getwd()
+			if err != nil {
+				log.Fatalf("Failed to get current directory: %v", err)
+			}
+		} else {
+			// Use directory of first config file
+			configPath := configFiles[0]
+			absPath, err := filepath.Abs(configPath)
+			if err != nil {
+				log.Fatalf("Failed to resolve config path: %v", err)
+			}
+			
+			// If it's a file, use its directory; if it's a directory, use it
+			info, err := os.Stat(absPath)
+			if err != nil {
+				log.Fatalf("Failed to stat config path: %v", err)
+			}
+			
+			if info.IsDir() {
+				workspaceRoot = absPath
+			} else {
+				workspaceRoot = filepath.Dir(absPath)
+			}
+		}
+		
+		// Clean cache directory
+		cachePath := filepath.Join(workspaceRoot, *cacheDir)
+		if _, err := os.Stat(cachePath); err == nil {
+			log.Printf("Removing cache directory: %s", cachePath)
+			if err := os.RemoveAll(cachePath); err != nil {
+				log.Fatalf("Failed to remove cache directory: %v", err)
+			}
+			log.Printf("✓ Cache directory removed")
+		} else {
+			log.Printf("Cache directory not found: %s", cachePath)
+		}
+		
+		// Clean build directory
+		buildPath := filepath.Join(workspaceRoot, "build")
+		if _, err := os.Stat(buildPath); err == nil {
+			log.Printf("Removing build directory: %s", buildPath)
+			if err := os.RemoveAll(buildPath); err != nil {
+				log.Fatalf("Failed to remove build directory: %v", err)
+			}
+			log.Printf("✓ Build directory removed")
+		} else {
+			log.Printf("Build directory not found: %s", buildPath)
+		}
+		
+		log.Printf("✓ Clean complete")
+		os.Exit(0)
+	}
+
 	// Verify embedded data
 	if err := VerifyEmbeddedData(); err != nil {
 		log.Fatalf("Failed to verify embedded data: %v", err)
 	}
 
 	// Initialize toolchain manager with base directory and additional directories
-	toolchainDirs := []string{*toolchainsDir}
+	toolchainsDir := filepath.Join(buildyDir, "data", "toolchains")
+	toolchainDirs := []string{toolchainsDir}
 	for _, dataDir := range additionalDataDirs {
 		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
 	}
@@ -125,7 +229,8 @@ func main() {
 	}
 
 	// Initialize template engine with base directory and additional directories
-	templateDirs := []string{*templatesDir}
+	templatesDir := filepath.Join(buildyDir, "data", "templates")
+	templateDirs := []string{templatesDir}
 	for _, dataDir := range additionalDataDirs {
 		templateDirs = append(templateDirs, filepath.Join(dataDir, "templates"))
 	}
@@ -201,6 +306,20 @@ func main() {
 		targetFilter = targets
 	}
 
+	// Create variable environment for package resolution
+	rootVarEnv := NewVariableEnvironment(nil)
+	rootVarEnv.SetVariable("platform", *platform, "builtin")
+	rootVarEnv.SetVariable("architecture", *architecture, "builtin")
+	rootVarEnv.SetVariable("configuration", *configuration, "builtin")
+
+	// Initialize package manager
+	var workspacePackagePaths []string
+	if workspace.Config != nil {
+		workspacePackagePaths = workspace.Config.PackagePaths
+	}
+	allPackageDirs := append(workspacePackagePaths, packageDirs...)
+	packageManager := NewPackageManager(workspace.RootDir, allPackageDirs, rootVarEnv)
+
 	// Create workspace-aware config parser
 	configParser := NewConfigParser(
 		*platform,
@@ -211,6 +330,7 @@ func main() {
 		selectedToolchain,
 		templateEngine,
 		workspace,
+		packageManager,
 		nil, // No parent var env
 	)
 

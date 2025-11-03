@@ -22,11 +22,13 @@ type ModuleInfo struct {
 
 // WorkspaceConfig represents workspace configuration from root buildy.yaml
 type WorkspaceConfig struct {
-	RootDir          string         `json:"root"`
-	DiscoverPatterns []string       `json:"discover_patterns"`
-	ExcludePatterns  []string       `json:"exclude_patterns"`
-	Variables        map[string]any `json:"variables"`
-	RawConfig        map[string]any `json:"-"`
+	RootDir          string                       `json:"root"`
+	DiscoverPatterns []string                     `json:"discover_patterns"`
+	ExcludePatterns  []string                     `json:"exclude_patterns"`
+	Variables        map[string]any               `json:"variables"`
+	PackagePaths     []string                     `json:"package_paths"`
+	Packages         map[string]map[string]string `json:"packages"` // package_name -> {version, custom_vars}
+	RawConfig        map[string]any               `json:"-"`
 }
 
 // Workspace manages multi-module workspace with buildy.yaml files
@@ -160,11 +162,44 @@ func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
 		variables = vars
 	}
 
+	// Get package paths
+	packagePaths := []string{}
+	if paths, ok := workspaceSection["package_paths"]; ok {
+		switch v := paths.(type) {
+		case string:
+			packagePaths = []string{v}
+		case []any:
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					packagePaths = append(packagePaths, str)
+				}
+			}
+		}
+	}
+
+	// Get package configurations
+	packages := make(map[string]map[string]string)
+	if pkgs, ok := workspaceSection["packages"].(map[string]any); ok {
+		for pkgName, pkgData := range pkgs {
+			pkgVars := make(map[string]string)
+			if pkgMap, ok := pkgData.(map[string]any); ok {
+				for key, value := range pkgMap {
+					if strVal, ok := value.(string); ok {
+						pkgVars[key] = strVal
+					}
+				}
+			}
+			packages[pkgName] = pkgVars
+		}
+	}
+
 	config := &WorkspaceConfig{
 		RootDir:          ws.RootDir,
 		DiscoverPatterns: discoverPatterns,
 		ExcludePatterns:  excludePatterns,
 		Variables:        variables,
+		PackagePaths:     packagePaths,
+		Packages:         packages,
 		RawConfig:        rawConfig,
 	}
 

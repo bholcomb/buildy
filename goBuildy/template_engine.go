@@ -582,15 +582,22 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 	resolvedParams := bte.resolveToolParams(toolParams, stepContext)
 
-	// Override with library linking info
+	// Merge library linking info (prepend dependency libs, append item libs)
 	if len(libDirs) > 0 {
-		resolvedParams["lib_dirs"] = libDirs
+		// Merge lib_dirs from dependencies with existing lib_dirs
+		existingLibDirs := bte.flattenStringList(resolvedParams["lib_dirs"])
+		mergedLibDirs := append(libDirs, existingLibDirs...)
+		resolvedParams["lib_dirs"] = mergedLibDirs
 	}
 	if len(libNames) > 0 {
-		resolvedParams["libs"] = libNames
+		// Merge libs from dependencies with existing libs from packages
+		existingLibs := bte.flattenStringList(resolvedParams["libs"])
+		// Dependency libs first, then package/item libs
+		mergedLibs := append(libNames, existingLibs...)
+		resolvedParams["libs"] = mergedLibs
 	}
 
-	// Convert lib_dirs and libs to string slices
+	// Convert lib_dirs, libs, and frameworks to string slices
 	libDirsParam := []string{}
 	if ld, ok := resolvedParams["lib_dirs"].([]string); ok {
 		libDirsParam = ld
@@ -601,6 +608,11 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		libsParam = l
 	}
 
+	frameworksParam := []string{}
+	if f, ok := resolvedParams["frameworks"].([]string); ok {
+		frameworksParam = f
+	}
+
 	// Build command
 	command, err := commandBuilder.BuildLinkCommand(
 		tool,
@@ -608,6 +620,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		output,
 		libDirsParam,
 		libsParam,
+		frameworksParam,
 	)
 	if err != nil {
 		return nil, err
@@ -824,7 +837,26 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 			strList := []string{}
 			for _, item := range v {
 				if str, ok := item.(string); ok {
-					strList = append(strList, bte.resolveTemplateString(str, context))
+					resolvedStr := bte.resolveTemplateString(str, context)
+					// Check if the resolved string is actually a reference to an array
+					if strings.HasPrefix(str, "{") && strings.HasSuffix(str, "}") {
+						ref := strings.Trim(str, "{}")
+						parts := strings.Split(ref, ".")
+						obj := any(context)
+						for _, part := range parts {
+							if m, ok := obj.(map[string]any); ok {
+								obj = m[part]
+							} else {
+								break
+							}
+						}
+						// If it's an array, flatten it
+						if nestedList := bte.flattenStringList(obj); len(nestedList) > 0 {
+							strList = append(strList, nestedList...)
+							continue
+						}
+					}
+					strList = append(strList, resolvedStr)
 				}
 			}
 			resolved[key] = strList
@@ -834,6 +866,28 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 	}
 
 	return resolved
+}
+
+// flattenStringList flattens a value into a string slice, handling nested arrays
+func (bte *BuildTemplateEngine) flattenStringList(value any) []string {
+	result := []string{}
+	switch v := value.(type) {
+	case []string:
+		result = v
+	case []any:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			} else if nested := bte.flattenStringList(item); len(nested) > 0 {
+				result = append(result, nested...)
+			}
+		}
+	case string:
+		if v != "" {
+			result = append(result, v)
+		}
+	}
+	return result
 }
 
 // Helper function to convert resolved params to the format expected by BuildCommand
