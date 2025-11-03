@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 )
 
@@ -26,6 +27,11 @@ func NewVariableEnvironment(parent *VariableEnvironment) *VariableEnvironment {
 		scopes:    make([]string, 0),
 		parent:    parent,
 	}
+}
+
+// CreateChild creates a child variable environment
+func (ve *VariableEnvironment) CreateChild() *VariableEnvironment {
+	return NewVariableEnvironment(ve)
 }
 
 // PushScope pushes a new scope onto the stack
@@ -58,13 +64,14 @@ func (ve *VariableEnvironment) SetVariable(name, value, source string) {
 		log.Printf("Variable '%s' overridden: '%s' (%s) -> '%s' (%s)", 
 			name, oldVal.Value, oldVal.Source, value, source)
 	} else {
-		log.Printf("Variable '%s' set to '%s' (source: %s)", name, value, source)
+		log.Printf("Variable set: %s = %s (%s)", name, value, source)
 	}
 	
 	ve.variables[name] = VariableValue{Value: value, Source: source}
 }
 
 // GetVariable gets a variable value, searching parent chain if not found locally
+// Falls back to environment variables if not found in variable hierarchy
 func (ve *VariableEnvironment) GetVariable(name string) (string, bool) {
 	if val, exists := ve.variables[name]; exists {
 		return val.Value, true
@@ -73,6 +80,11 @@ func (ve *VariableEnvironment) GetVariable(name string) (string, bool) {
 	// Search parent environment if not found locally
 	if ve.parent != nil {
 		return ve.parent.GetVariable(name)
+	}
+	
+	// Fallback to environment variable
+	if envVal, exists := os.LookupEnv(name); exists {
+		return envVal, true
 	}
 	
 	return "", false

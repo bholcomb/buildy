@@ -680,13 +680,16 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	tool *Tool,
 	objects []string,
 	output string,
-	libDirs, libs []string,
+	libDirs, libs, frameworks []string,
 ) (string, error) {
 	if libDirs == nil {
 		libDirs = []string{}
 	}
 	if libs == nil {
 		libs = []string{}
+	}
+	if frameworks == nil {
+		frameworks = []string{}
 	}
 
 	// Build template variables
@@ -729,6 +732,21 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		}
 	} else {
 		templateVars["libs"] = ""
+	}
+
+	// Add frameworks if tool supports them (macOS only)
+	if supportsFrameworks, ok := tool.Supports["frameworks"].(bool); ok && supportsFrameworks && len(frameworks) > 0 {
+		frameworkFlag := "-framework "
+		if ff, ok := tool.Supports["framework_flag"].(string); ok {
+			frameworkFlag = ff
+		}
+		frameworkStrs := []string{}
+		for _, fw := range frameworks {
+			frameworkStrs = append(frameworkStrs, frameworkFlag+fw)
+		}
+		templateVars["frameworks"] = strings.Join(frameworkStrs, " ")
+	} else {
+		templateVars["frameworks"] = ""
 	}
 
 	// Get flags for current configuration

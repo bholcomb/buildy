@@ -56,7 +56,7 @@ toolchain:
     # Shared library linking
     link_shared_library:
       action: link
-      command: "g++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "g++ -shared {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
       output_extension: ".so"
       output_pattern: "lib{name}.so"
@@ -70,6 +70,7 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: false
     
     # Static library archiving
     link_static_library:
@@ -90,7 +91,7 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "g++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "g++ {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"
@@ -104,3 +105,4 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: false

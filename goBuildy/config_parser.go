@@ -33,6 +33,7 @@ type ConfigParser struct {
 	Workspace         *Workspace
 	TargetRegistry    *TargetRegistry
 	CurrentModule     string
+	PackageManager    *PackageManager
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -43,6 +44,7 @@ func NewConfigParser(
 	defaultToolchain string,
 	templateEngine *BuildTemplateEngine,
 	workspace *Workspace,
+	packageManager *PackageManager,
 	parentVarEnv *VariableEnvironment,
 ) *ConfigParser {
 	varEnv := NewVariableEnvironment(parentVarEnv)
@@ -61,6 +63,7 @@ func NewConfigParser(
 		DefaultToolchain: defaultToolchain,
 		TemplateEngine:   templateEngine,
 		Workspace:        workspace,
+		PackageManager:   packageManager,
 	}
 }
 
@@ -290,6 +293,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 			cp.DefaultToolchain,
 			cp.TemplateEngine,
 			cp.Workspace,
+			cp.PackageManager,
 			workspaceVarEnv, // Chain to workspace environment
 		)
 
@@ -702,6 +706,166 @@ func (cp *ConfigParser) createSetupTask(taskID int, outputDir string) BuildTask 
 	return task
 }
 
+// resolvePackages resolves package dependencies and merges their settings into the target config
+func (cp *ConfigParser) resolvePackages(targetConfig map[string]any) error {
+	if cp.PackageManager == nil {
+		return nil // No package manager, skip
+	}
+
+	// Get packages list from target config
+	var packageNames []string
+	if packages, ok := targetConfig["packages"]; ok {
+		switch v := packages.(type) {
+		case string:
+			packageNames = []string{v}
+		case []any:
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					packageNames = append(packageNames, str)
+				}
+			}
+		}
+	}
+
+	if len(packageNames) == 0 {
+		return nil // No packages to resolve
+	}
+
+	// Get workspace package configurations
+	var workspacePackages map[string]map[string]string
+	if cp.Workspace != nil && cp.Workspace.Config != nil {
+		workspacePackages = cp.Workspace.Config.Packages
+	}
+
+	// Resolve packages
+	mergedPackage, err := cp.PackageManager.ResolvePackages(
+		packageNames,
+		cp.Platform,
+		cp.Architecture,
+		workspacePackages,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to resolve packages: %w", err)
+	}
+
+	// Merge package settings into target config
+	if len(mergedPackage.IncludeDirs) > 0 {
+		existingIncludes := []string{}
+		if inc, ok := targetConfig["include_dirs"]; ok {
+			switch v := inc.(type) {
+			case string:
+				existingIncludes = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingIncludes = append(existingIncludes, str)
+					}
+				}
+			case []string:
+				existingIncludes = v
+			}
+		}
+		targetConfig["include_dirs"] = append(mergedPackage.IncludeDirs, existingIncludes...)
+	}
+
+	if len(mergedPackage.LibDirs) > 0 {
+		existingLibDirs := []string{}
+		if ld, ok := targetConfig["lib_dirs"]; ok {
+			switch v := ld.(type) {
+			case string:
+				existingLibDirs = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingLibDirs = append(existingLibDirs, str)
+					}
+				}
+			case []string:
+				existingLibDirs = v
+			}
+		}
+		targetConfig["lib_dirs"] = append(mergedPackage.LibDirs, existingLibDirs...)
+	}
+
+	if len(mergedPackage.Libs) > 0 {
+		existingLibs := []string{}
+		if libs, ok := targetConfig["libs"]; ok {
+			switch v := libs.(type) {
+			case string:
+				existingLibs = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingLibs = append(existingLibs, str)
+					}
+				}
+			case []string:
+				existingLibs = v
+			}
+		}
+		targetConfig["libs"] = append(mergedPackage.Libs, existingLibs...)
+	}
+
+	if len(mergedPackage.Frameworks) > 0 {
+		existingFrameworks := []string{}
+		if frameworks, ok := targetConfig["frameworks"]; ok {
+			switch v := frameworks.(type) {
+			case string:
+				existingFrameworks = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingFrameworks = append(existingFrameworks, str)
+					}
+				}
+			case []string:
+				existingFrameworks = v
+			}
+		}
+		targetConfig["frameworks"] = append(mergedPackage.Frameworks, existingFrameworks...)
+	}
+
+	if len(mergedPackage.Defines) > 0 {
+		existingDefines := []string{}
+		if defines, ok := targetConfig["defines"]; ok {
+			switch v := defines.(type) {
+			case string:
+				existingDefines = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingDefines = append(existingDefines, str)
+					}
+				}
+			case []string:
+				existingDefines = v
+			}
+		}
+		targetConfig["defines"] = append(mergedPackage.Defines, existingDefines...)
+	}
+
+	if len(mergedPackage.Sources) > 0 {
+		existingSources := []string{}
+		if sources, ok := targetConfig["sources"]; ok {
+			switch v := sources.(type) {
+			case string:
+				existingSources = []string{v}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						existingSources = append(existingSources, str)
+					}
+				}
+			case []string:
+				existingSources = v
+			}
+		}
+		targetConfig["sources"] = append(mergedPackage.Sources, existingSources...)
+	}
+
+	return nil
+}
+
 // generateLibraryTasks generates tasks for a library using template engine
 func (cp *ConfigParser) generateLibraryTasks(
 	libConfig map[string]any,
@@ -714,6 +878,11 @@ func (cp *ConfigParser) generateLibraryTasks(
 	libType := "shared_library"
 	if lt, ok := libConfig["type"].(string); ok {
 		libType = lt
+	}
+
+	// Resolve packages first
+	if err := cp.resolvePackages(libConfig); err != nil {
+		return nil, err
 	}
 
 	// Expand glob patterns in sources and resolve paths
@@ -765,6 +934,11 @@ func (cp *ConfigParser) generateExecutableTasks(
 	exeType := "executable"
 	if et, ok := exeConfig["type"].(string); ok {
 		exeType = et
+	}
+
+	// Resolve packages first
+	if err := cp.resolvePackages(exeConfig); err != nil {
+		return nil, err
 	}
 
 	// Expand glob patterns in sources and resolve paths

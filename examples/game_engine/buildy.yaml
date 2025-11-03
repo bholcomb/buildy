@@ -26,3 +26,8 @@ variables:
   BUILD_DIR: "build"
   INCLUDE_DIR: "include"
 
+# Package configuration
+packages:
+  glfw3:
+    version: "3.3.8"
+
