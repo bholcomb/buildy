@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -275,8 +276,11 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 		// Check if this directory should be excluded
 		if info.IsDir() {
 			for _, excludePattern := range ws.Config.ExcludePatterns {
-				pattern := strings.TrimPrefix(excludePattern, "**/")
-				if matchPattern(relPath, pattern) || matchPattern(filepath.Join(relPath, ""), pattern) {
+				pattern := strings.TrimSpace(excludePattern)
+				if pattern == "" {
+					continue
+				}
+				if matchPattern(relPath, pattern) {
 					return filepath.SkipDir
 				}
 			}
@@ -287,8 +291,11 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 		if filepath.Base(path) == "buildy.yaml" {
 			// Check if it matches any discovery pattern
 			for _, discoverPattern := range ws.Config.DiscoverPatterns {
-				pattern := strings.TrimPrefix(discoverPattern, "**/")
-				if matchPattern(relPath, pattern) || matchPattern(relPath, discoverPattern) {
+				pattern := strings.TrimSpace(discoverPattern)
+				if pattern == "" {
+					continue
+				}
+				if matchPattern(relPath, pattern) {
 					discovered[path] = true
 					break
 				}
@@ -314,8 +321,9 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 
 // matchPattern matches a path against a glob-like pattern
 func matchPattern(path, pattern string) bool {
-	matched, err := filepath.Match(pattern, path)
+	matched, err := doublestar.Match(pattern, path)
 	if err != nil {
+		log.Printf("Pattern match error for %s: %v", pattern, err)
 		return false
 	}
 	return matched
@@ -582,10 +590,10 @@ func (tr *TargetReference) FullName() string {
 
 // TargetRegistry manages all targets in a workspace
 type TargetRegistry struct {
-	workspace        *Workspace
-	targetsByName    map[string][]*TargetReference
-	targetsByModule  map[string]map[string]*TargetReference
-	initialized      bool
+	workspace       *Workspace
+	targetsByName   map[string][]*TargetReference
+	targetsByModule map[string]map[string]*TargetReference
+	initialized     bool
 }
 
 // NewTargetRegistry creates a new TargetRegistry
@@ -832,4 +840,3 @@ func (tr *TargetRegistry) FindTargetsByName(targetName string) []*TargetReferenc
 
 	return tr.targetsByName[targetName]
 }
-

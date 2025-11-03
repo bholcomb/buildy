@@ -10,13 +10,14 @@ import (
 
 // TaskExecutor executes tasks with caching, parallel execution, and resource-aware scheduling
 type TaskExecutor struct {
-	Cache         *BuildCache
-	MaxWorkers    int
-	MaxMemoryMB   int
-	ExecEnv       *ExecutionEnvironment
-	DisableCache  bool
+	Cache          *BuildCache
+	ChangeDetector *ChangeDetector
+	MaxWorkers     int
+	MaxMemoryMB    int
+	ExecEnv        *ExecutionEnvironment
+	DisableCache   bool
 	ExecutionStats ExecutionStats
-	mu            sync.Mutex
+	mu             sync.Mutex
 }
 
 // ExecutionStats tracks execution statistics
@@ -29,17 +30,18 @@ type ExecutionStats struct {
 }
 
 // NewTaskExecutor creates a new TaskExecutor
-func NewTaskExecutor(cache *BuildCache, maxWorkers, maxMemoryMB int, execEnv *ExecutionEnvironment, disableCache bool) *TaskExecutor {
+func NewTaskExecutor(cache *BuildCache, changeDetector *ChangeDetector, maxWorkers, maxMemoryMB int, execEnv *ExecutionEnvironment, disableCache bool) *TaskExecutor {
 	if execEnv == nil {
 		execEnv = NewNativeExecution()
 	}
 
 	return &TaskExecutor{
-		Cache:        cache,
-		MaxWorkers:   maxWorkers,
-		MaxMemoryMB:  maxMemoryMB,
-		ExecEnv:      execEnv,
-		DisableCache: disableCache,
+		Cache:          cache,
+		ChangeDetector: changeDetector,
+		MaxWorkers:     maxWorkers,
+		MaxMemoryMB:    maxMemoryMB,
+		ExecEnv:        execEnv,
+		DisableCache:   disableCache,
 		ExecutionStats: ExecutionStats{
 			TotalTasks:  0,
 			CacheHits:   0,
@@ -183,13 +185,14 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 	te.mu.Unlock()
 
 	// Check cache first (unless disabled by force flag)
-	if !te.DisableCache && te.Cache.HasCachedResult(task) {
+	if !te.DisableCache && te.ChangeDetector != nil && te.ChangeDetector.IsCachedResultValid(task) {
 		if err := te.Cache.RestoreCachedResult(task); err == nil {
 			te.mu.Lock()
 			te.ExecutionStats.CacheHits++
 			te.mu.Unlock()
 			return true
 		}
+		log.Printf("Cache restore failed for %s, falling back to execution", task.TaskID)
 	}
 
 	// Execute task
@@ -289,4 +292,3 @@ func (te *TaskExecutor) GetExecutionStats() ExecutionStats {
 	defer te.mu.Unlock()
 	return te.ExecutionStats
 }
-

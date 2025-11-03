@@ -15,16 +15,16 @@ import (
 
 // CacheEntry represents a cached build task result
 type CacheEntry struct {
-	TaskID             string             `json:"task_id"`
-	TaskType           string             `json:"task_type"`
-	CachedAt           float64            `json:"cached_at"`
-	ExecutionTime      float64            `json:"execution_time"`
-	Outputs            map[string]string  `json:"outputs"`             // path -> hash
-	HeaderDependencies []string           `json:"header_dependencies"` // list of header paths
-	HeaderHashes       map[string]string  `json:"header_hashes"`       // path -> hash
-	Platform           string             `json:"platform"`
-	Architecture       string             `json:"architecture"`
-	Configuration      string             `json:"configuration"`
+	TaskID             string            `json:"task_id"`
+	TaskType           string            `json:"task_type"`
+	CachedAt           float64           `json:"cached_at"`
+	ExecutionTime      float64           `json:"execution_time"`
+	Outputs            map[string]string `json:"outputs"`             // path -> hash
+	HeaderDependencies []string          `json:"header_dependencies"` // list of header paths
+	HeaderHashes       map[string]string `json:"header_hashes"`       // path -> hash
+	Platform           string            `json:"platform"`
+	Architecture       string            `json:"architecture"`
+	Configuration      string            `json:"configuration"`
 }
 
 // BuildCache provides content-addressable build cache with thread-safe operations
@@ -42,7 +42,7 @@ func NewBuildCache(cacheDir string) (*BuildCache, error) {
 	if cacheDir == "" {
 		cacheDir = ".buildy_cache"
 	}
-	
+
 	cache := &BuildCache{
 		cacheDir:       cacheDir,
 		cacheIndexFile: filepath.Join(cacheDir, "cache_index.json"),
@@ -50,21 +50,21 @@ func NewBuildCache(cacheDir string) (*BuildCache, error) {
 		objectsDir:     filepath.Join(cacheDir, "objects"),
 		cacheIndex:     make(map[string]CacheEntry),
 	}
-	
+
 	// Create cache directory structure
 	if err := os.MkdirAll(cache.cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
-	
+
 	if err := os.MkdirAll(cache.objectsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create objects directory: %w", err)
 	}
-	
+
 	// Load cache index
 	if err := cache.loadCacheIndex(); err != nil {
 		log.Printf("Warning: failed to load cache index: %v", err)
 	}
-	
+
 	return cache, nil
 }
 
@@ -83,20 +83,20 @@ func (bc *BuildCache) getCachePath(cacheKey string) string {
 func (bc *BuildCache) loadCacheIndex() error {
 	bc.mutex.Lock()
 	defer bc.mutex.Unlock()
-	
+
 	if _, err := os.Stat(bc.cacheIndexFile); os.IsNotExist(err) {
 		return nil // No cache index yet, that's fine
 	}
-	
+
 	data, err := os.ReadFile(bc.cacheIndexFile)
 	if err != nil {
 		return fmt.Errorf("failed to read cache index: %w", err)
 	}
-	
+
 	if err := json.Unmarshal(data, &bc.cacheIndex); err != nil {
 		return fmt.Errorf("failed to parse cache index: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -104,19 +104,19 @@ func (bc *BuildCache) loadCacheIndex() error {
 func (bc *BuildCache) saveCacheIndex() error {
 	bc.mutex.RLock()
 	defer bc.mutex.RUnlock()
-	
+
 	// Ensure cache directory exists
 	if err := os.MkdirAll(bc.cacheDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
-	
+
 	// Create temp file
 	tempFile, err := os.CreateTemp(bc.cacheDir, "cache_index_*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
-	
+
 	// Write JSON
 	encoder := json.NewEncoder(tempFile)
 	encoder.SetIndent("", "  ")
@@ -125,78 +125,34 @@ func (bc *BuildCache) saveCacheIndex() error {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to encode cache index: %w", err)
 	}
-	
+
 	// Sync and close
 	if err := tempFile.Sync(); err != nil {
 		tempFile.Close()
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to sync temp file: %w", err)
 	}
-	
+
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to close temp file: %w", err)
 	}
-	
+
 	// Atomic rename
 	if err := os.Rename(tempPath, bc.cacheIndexFile); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
-	
+
 	return nil
 }
 
-// HasCachedResult checks if task result is cached and all dependencies are unchanged
-func (bc *BuildCache) HasCachedResult(task *BuildTask) bool {
+// HasCacheEntry returns true if a cache entry exists for the given key
+func (bc *BuildCache) HasCacheEntry(cacheKey string) bool {
 	bc.mutex.RLock()
-	cacheEntry, exists := bc.cacheIndex[task.CacheKey]
-	bc.mutex.RUnlock()
-	
-	if !exists {
-		return false
-	}
-	
-	// Check if all output files exist and match cached hashes
-	for outputPath, expectedHash := range cacheEntry.Outputs {
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			log.Printf("Cache miss for %s: output %s not found", task.TaskID, outputPath)
-			return false
-		}
-		
-		// Directories are always considered valid if they exist
-		if expectedHash == "directory" {
-			continue
-		}
-		
-		actualHash, err := bc.calculateFileHash(outputPath)
-		if err != nil || actualHash != expectedHash {
-			log.Printf("Cache miss for %s: output %s hash changed", task.TaskID, outputPath)
-			return false
-		}
-	}
-	
-	// Check header dependencies (for compile tasks)
-	if len(cacheEntry.HeaderHashes) > 0 {
-		for headerPath, expectedHash := range cacheEntry.HeaderHashes {
-			// Check if header still exists
-			if _, err := os.Stat(headerPath); os.IsNotExist(err) {
-				log.Printf("Cache miss for %s: header %s deleted", task.TaskID, headerPath)
-				return false
-			}
-			
-			// Check if header content changed
-			actualHash, err := bc.calculateFileHash(headerPath)
-			if err != nil || actualHash != expectedHash {
-				log.Printf("Cache miss for %s: header %s modified", task.TaskID, headerPath)
-				return false
-			}
-		}
-		
-		log.Printf("Cache hit for %s: %d headers unchanged", task.TaskID, len(cacheEntry.HeaderHashes))
-	}
-	
-	return true
+	defer bc.mutex.RUnlock()
+	_, exists := bc.cacheIndex[cacheKey]
+	return exists
 }
 
 // RestoreCachedResult restores cached task outputs
@@ -204,16 +160,16 @@ func (bc *BuildCache) RestoreCachedResult(task *BuildTask) error {
 	bc.mutex.RLock()
 	_, exists := bc.cacheIndex[task.CacheKey]
 	bc.mutex.RUnlock()
-	
+
 	if !exists {
 		return fmt.Errorf("cache entry not found")
 	}
-	
+
 	cacheFilesDir := bc.getCachePath(task.CacheKey)
 	if _, err := os.Stat(cacheFilesDir); os.IsNotExist(err) {
 		return fmt.Errorf("cache directory not found")
 	}
-	
+
 	// Restore output files from cache (skip directories)
 	for _, outputPath := range task.Outputs {
 		// Skip directories - they should be created by the task if needed
@@ -223,7 +179,7 @@ func (bc *BuildCache) RestoreCachedResult(task *BuildTask) error {
 			}
 			continue
 		}
-		
+
 		cachedFile := filepath.Join(cacheFilesDir, filepath.Base(outputPath))
 		if _, err := os.Stat(cachedFile); err == nil {
 			outputDir := filepath.Dir(outputPath)
@@ -232,13 +188,13 @@ func (bc *BuildCache) RestoreCachedResult(task *BuildTask) error {
 					return fmt.Errorf("failed to create output directory: %w", err)
 				}
 			}
-			
+
 			if err := copyFile(cachedFile, outputPath); err != nil {
 				return fmt.Errorf("failed to copy cached file: %w", err)
 			}
 		}
 	}
-	
+
 	log.Printf("✓ %s - cache hit, restored outputs", task.TaskID)
 	return nil
 }
@@ -248,16 +204,16 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 	if !success {
 		return nil
 	}
-	
+
 	cacheFilesDir := bc.getCachePath(task.CacheKey)
 	if err := os.MkdirAll(cacheFilesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
-	
+
 	// Cache output files (skip directories)
 	outputHashes := make(map[string]string)
 	var depFile string
-	
+
 	for _, outputPath := range task.Outputs {
 		if _, err := os.Stat(outputPath); err == nil {
 			// Skip directories - they can't be cached as files
@@ -266,17 +222,17 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 				outputHashes[outputPath] = "directory"
 				continue
 			}
-			
+
 			// Track .d file for header dependency parsing
 			if strings.HasSuffix(outputPath, ".d") {
 				depFile = outputPath
 			}
-			
+
 			cachedFile := filepath.Join(cacheFilesDir, filepath.Base(outputPath))
 			if err := copyFile(outputPath, cachedFile); err != nil {
 				return fmt.Errorf("failed to cache file: %w", err)
 			}
-			
+
 			hash, err := bc.calculateFileHash(outputPath)
 			if err != nil {
 				return fmt.Errorf("failed to hash output: %w", err)
@@ -284,11 +240,11 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 			outputHashes[outputPath] = hash
 		}
 	}
-	
+
 	// Parse header dependencies from .d file if this is a compile task
 	var headerDeps []string
 	headerHashes := make(map[string]string)
-	
+
 	if depFile != "" && task.TaskType == "compile" {
 		headerDeps = bc.parseDependencyFile(depFile)
 		// Calculate and store hashes for all header dependencies
@@ -303,7 +259,7 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 			}
 		}
 	}
-	
+
 	// Update cache index
 	bc.mutex.Lock()
 	bc.cacheIndex[task.CacheKey] = CacheEntry{
@@ -319,7 +275,7 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 		Configuration:      task.Configuration,
 	}
 	bc.mutex.Unlock()
-	
+
 	return bc.saveCacheIndex()
 }
 
@@ -330,9 +286,9 @@ func (bc *BuildCache) calculateFileHash(filePath string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	
+
 	hash := sha256.New()
-	
+
 	// Read in 8KB chunks for memory efficiency with large files
 	buf := make([]byte, 8192)
 	for {
@@ -347,7 +303,7 @@ func (bc *BuildCache) calculateFileHash(filePath string) (string, error) {
 			return "", err
 		}
 	}
-	
+
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
@@ -356,7 +312,7 @@ func (bc *BuildCache) parseDependencyFile(depFile string) []string {
 	if _, err := os.Stat(depFile); os.IsNotExist(err) {
 		return nil
 	}
-	
+
 	// Detect format by extension
 	if strings.HasSuffix(depFile, ".json") {
 		return bc.parseMSVCJSONDeps(depFile)
@@ -371,23 +327,23 @@ func (bc *BuildCache) parseMakefileDeps(depFile string) []string {
 		log.Printf("Warning: failed to read dependency file %s: %v", depFile, err)
 		return nil
 	}
-	
+
 	content := string(data)
-	
+
 	// Remove target (everything before and including ':')
 	idx := strings.Index(content, ":")
 	if idx == -1 {
 		return nil
 	}
 	content = content[idx+1:]
-	
+
 	// Remove line continuations (backslash + newline)
 	content = strings.ReplaceAll(content, "\\\n", " ")
 	content = strings.ReplaceAll(content, "\\", "")
-	
+
 	// Split on whitespace
 	allDeps := strings.Fields(content)
-	
+
 	// Filter to only header files (skip .cpp, .c source files)
 	// Include .inl (inline implementation files) and .inc (include files)
 	var headers []string
@@ -403,7 +359,7 @@ func (bc *BuildCache) parseMakefileDeps(depFile string) []string {
 			headers = append(headers, dep)
 		}
 	}
-	
+
 	log.Printf("Parsed %d header dependencies from %s (Makefile format)", len(headers), depFile)
 	return headers
 }
@@ -415,7 +371,7 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 		log.Printf("Warning: failed to read dependency file %s: %v", depFile, err)
 		return nil
 	}
-	
+
 	var jsonData struct {
 		Version string `json:"Version"`
 		Data    struct {
@@ -423,19 +379,19 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 			Includes []string `json:"Includes"`
 		} `json:"Data"`
 	}
-	
+
 	if err := json.Unmarshal(data, &jsonData); err != nil {
 		log.Printf("Warning: failed to parse JSON dependency file %s: %v", depFile, err)
 		return nil
 	}
-	
+
 	// Filter to only user headers (skip system headers in common system paths)
 	var headers []string
 	for _, inc := range jsonData.Data.Includes {
 		// Normalize path separators
 		incNormalized := strings.ReplaceAll(inc, "\\", "/")
 		incLower := strings.ToLower(incNormalized)
-		
+
 		// Skip system headers in common locations
 		if strings.HasPrefix(incLower, "c:/program files") ||
 			strings.HasPrefix(incLower, "c:/windows") ||
@@ -443,7 +399,7 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 			strings.HasPrefix(incLower, "/usr/local/include") {
 			continue
 		}
-		
+
 		// Only include files with header extensions
 		if strings.HasSuffix(incNormalized, ".h") ||
 			strings.HasSuffix(incNormalized, ".hpp") ||
@@ -455,7 +411,7 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 			headers = append(headers, filepath.FromSlash(incNormalized))
 		}
 	}
-	
+
 	log.Printf("Parsed %d header dependencies from %s (MSVC JSON format)", len(headers), depFile)
 	return headers
 }
@@ -465,9 +421,9 @@ func (bc *BuildCache) GetCacheStats() map[string]interface{} {
 	bc.mutex.RLock()
 	totalEntries := len(bc.cacheIndex)
 	bc.mutex.RUnlock()
-	
+
 	var totalSize int64
-	
+
 	// Iterate through sharded cache directories
 	filepath.Walk(bc.objectsDir, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
@@ -475,7 +431,7 @@ func (bc *BuildCache) GetCacheStats() map[string]interface{} {
 		}
 		return nil
 	})
-	
+
 	return map[string]interface{}{
 		"total_entries":   totalEntries,
 		"total_size_mb":   float64(totalSize) / (1024 * 1024),
@@ -490,23 +446,22 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer sourceFile.Close()
-	
+
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
-	
+
 	if _, err := io.Copy(destFile, sourceFile); err != nil {
 		return err
 	}
-	
+
 	// Copy file permissions
 	sourceInfo, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
-	
+
 	return os.Chmod(dst, sourceInfo.Mode())
 }
-

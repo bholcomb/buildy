@@ -44,6 +44,58 @@ func NewChangeDetector(buildState *BuildState, cache *BuildCache) *ChangeDetecto
 	}
 }
 
+// IsCachedResultValid validates that the cached results for a task remain usable
+func (cd *ChangeDetector) IsCachedResultValid(task *BuildTask) bool {
+	if cd == nil || cd.cache == nil || task == nil {
+		return false
+	}
+
+	cd.cache.mutex.RLock()
+	cacheEntry, exists := cd.cache.cacheIndex[task.CacheKey]
+	cd.cache.mutex.RUnlock()
+	if !exists {
+		return false
+	}
+
+	// Ensure all outputs still exist and match expected hashes
+	for outputPath, expectedHash := range cacheEntry.Outputs {
+		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+			log.Printf("Cache miss for %s: output %s not found", task.TaskID, outputPath)
+			return false
+		}
+
+		if expectedHash == "directory" {
+			continue
+		}
+
+		actualHash, err := cd.cache.calculateFileHash(outputPath)
+		if err != nil || actualHash != expectedHash {
+			log.Printf("Cache miss for %s: output %s hash changed", task.TaskID, outputPath)
+			return false
+		}
+	}
+
+	// Validate header dependencies (for compile tasks)
+	if len(cacheEntry.HeaderHashes) > 0 {
+		for headerPath, expectedHash := range cacheEntry.HeaderHashes {
+			if _, err := os.Stat(headerPath); os.IsNotExist(err) {
+				log.Printf("Cache miss for %s: header %s deleted", task.TaskID, headerPath)
+				return false
+			}
+
+			actualHash, err := cd.cache.calculateFileHash(headerPath)
+			if err != nil || actualHash != expectedHash {
+				log.Printf("Cache miss for %s: header %s modified", task.TaskID, headerPath)
+				return false
+			}
+		}
+
+		log.Printf("Cache hit for %s: %d headers unchanged", task.TaskID, len(cacheEntry.HeaderHashes))
+	}
+
+	return true
+}
+
 // DetectChanges detects what changed since last build
 func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[string]interface{}, toolchainFile string) (*ChangeSet, error) {
 	changes := &ChangeSet{
@@ -51,19 +103,19 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 		NewFiles:      make([]string, 0),
 		DeletedFiles:  make([]string, 0),
 	}
-	
+
 	// Check config hash
 	configHash, err := HashConfig(currentConfig)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if configHash != cd.buildState.ConfigHash {
 		log.Println("Configuration changed")
 		changes.ConfigChanged = true
 		return changes, nil // Full rebuild needed
 	}
-	
+
 	// Check toolchain hash
 	currentToolchainHash := ""
 	if toolchainFile != "" {
@@ -72,7 +124,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 			currentToolchainHash = hash
 		}
 	}
-	
+
 	// Compare hashes - any difference triggers rebuild
 	if currentToolchainHash != cd.buildState.ToolchainHash {
 		if toolchainFile != "" {
@@ -86,7 +138,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 			return changes, nil // Full rebuild needed
 		}
 	}
-	
+
 	// Check file modifications
 	for filePath, oldMtime := range cd.buildState.FileMtimes {
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -94,43 +146,43 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 			log.Printf("Deleted: %s", filePath)
 			continue
 		}
-		
+
 		info, err := os.Stat(filePath)
 		if err != nil {
 			continue
 		}
-		
+
 		currentMtime := float64(info.ModTime().Unix())
 		if currentMtime > oldMtime {
 			changes.ModifiedFiles = append(changes.ModifiedFiles, filePath)
 			log.Printf("Modified: %s", filePath)
 		}
 	}
-	
+
 	// Check for new files
 	currentFiles := cd.getAllSourceFiles(currentConfig)
 	oldFiles := make(map[string]bool)
 	for file := range cd.buildState.FileMtimes {
 		oldFiles[file] = true
 	}
-	
+
 	for file := range currentFiles {
 		if !oldFiles[file] {
 			changes.NewFiles = append(changes.NewFiles, file)
 		}
 	}
-	
+
 	if len(changes.NewFiles) > 0 {
 		log.Printf("New files: %d", len(changes.NewFiles))
 	}
-	
+
 	return changes, nil
 }
 
 // GetAffectedTasks gets task IDs that need to be rebuilt
 func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *TaskGraph) map[string]bool {
 	affected := make(map[string]bool)
-	
+
 	// Direct dependencies: tasks that use modified files as inputs
 	for taskID, task := range taskGraph.Tasks {
 		for _, inputFile := range task.Inputs {
@@ -143,7 +195,7 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *TaskGr
 			}
 		}
 	}
-	
+
 	// Header dependencies: check .d files
 	for _, modifiedFile := range changes.ModifiedFiles {
 		if isHeaderFile(modifiedFile) {
@@ -156,13 +208,13 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *TaskGr
 			}
 		}
 	}
-	
+
 	// Transitive dependencies: tasks that depend on affected tasks
 	originalAffected := make(map[string]bool)
 	for taskID := range affected {
 		originalAffected[taskID] = true
 	}
-	
+
 	for taskID := range originalAffected {
 		dependentTasks := cd.getDependentTasks(taskID, taskGraph)
 		for depTaskID := range dependentTasks {
@@ -172,7 +224,7 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *TaskGr
 			log.Printf("Task %s has %d dependent tasks", taskID, len(dependentTasks))
 		}
 	}
-	
+
 	return affected
 }
 
@@ -190,13 +242,13 @@ func isHeaderFile(filePath string) bool {
 // findTasksUsingHeader finds all tasks that depend on a header file
 func (cd *ChangeDetector) findTasksUsingHeader(headerPath string) map[string]bool {
 	affected := make(map[string]bool)
-	
+
 	// Normalize the header path for comparison
 	headerPathNormalized := filepath.Clean(headerPath)
-	
+
 	cd.cache.mutex.RLock()
 	defer cd.cache.mutex.RUnlock()
-	
+
 	for _, cacheEntry := range cd.cache.cacheIndex {
 		// Normalize each dependency path for comparison
 		for _, dep := range cacheEntry.HeaderDependencies {
@@ -209,38 +261,38 @@ func (cd *ChangeDetector) findTasksUsingHeader(headerPath string) map[string]boo
 			}
 		}
 	}
-	
+
 	return affected
 }
 
 // getDependentTasks gets all tasks that depend on the given task
 func (cd *ChangeDetector) getDependentTasks(taskID string, taskGraph *TaskGraph) map[string]bool {
 	dependent := make(map[string]bool)
-	
+
 	// Get the task's outputs
 	task, exists := taskGraph.Tasks[taskID]
 	if !exists {
 		return dependent
 	}
-	
+
 	// Build set of task outputs
 	taskOutputs := make(map[string]bool)
 	for _, out := range task.Outputs {
 		taskOutputs[out] = true
 	}
-	
+
 	// Find tasks that use these outputs as inputs
 	for otherID, otherTask := range taskGraph.Tasks {
 		if otherID == taskID {
 			continue
 		}
-		
+
 		// Build set of other task's inputs
 		otherInputs := make(map[string]bool)
 		for _, inp := range otherTask.Inputs {
 			otherInputs[inp.Path] = true
 		}
-		
+
 		// Check for intersection
 		hasIntersection := false
 		for output := range taskOutputs {
@@ -249,7 +301,7 @@ func (cd *ChangeDetector) getDependentTasks(taskID string, taskGraph *TaskGraph)
 				break
 			}
 		}
-		
+
 		if hasIntersection {
 			dependent[otherID] = true
 			// Recursively get dependents
@@ -259,14 +311,14 @@ func (cd *ChangeDetector) getDependentTasks(taskID string, taskGraph *TaskGraph)
 			}
 		}
 	}
-	
+
 	return dependent
 }
 
 // getAllSourceFiles gets all source files from configuration
 func (cd *ChangeDetector) getAllSourceFiles(config map[string]interface{}) map[string]bool {
 	files := make(map[string]bool)
-	
+
 	// Traverse config to find file references
 	var collectFiles func(obj interface{})
 	collectFiles = func(obj interface{}) {
@@ -294,7 +346,7 @@ func (cd *ChangeDetector) getAllSourceFiles(config map[string]interface{}) map[s
 			}
 		}
 	}
-	
+
 	collectFiles(config)
 	return files
 }
@@ -308,4 +360,3 @@ func contains(slice []string, value string) bool {
 	}
 	return false
 }
-

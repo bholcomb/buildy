@@ -146,7 +146,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	mergedConfig map[string]any,
 	outputDir string,
 	setupTaskID string,
-	taskCounter int,
+	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
 	platform, architecture, configuration string,
@@ -154,6 +154,10 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 ) ([]*BuildTask, error) {
 	if existingTasks == nil {
 		existingTasks = []*BuildTask{}
+	}
+
+	if idGen == nil {
+		idGen = NewTaskIDGenerator("workspace")
 	}
 
 	template := bte.GetTemplate(templateName)
@@ -201,7 +205,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			// Generate multiple tasks (one per source file)
 			stepTasks, err := bte.expandForEachStep(
 				step, context, itemConfig, mergedConfig, outputDir,
-				setupTaskID, taskCounter, toolMatcher, commandBuilder,
+				setupTaskID, idGen, toolMatcher, commandBuilder,
 				platform, architecture, configuration,
 			)
 			if err != nil {
@@ -209,7 +213,6 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			}
 
 			tasks = append(tasks, stepTasks...)
-			taskCounter += len(stepTasks)
 
 			// Store results for later steps to reference
 			taskIDs := []string{}
@@ -228,7 +231,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			// Generate single task
 			stepTask, err := bte.expandSingleStep(
 				step, context, stepResults, itemConfig, mergedConfig,
-				outputDir, taskCounter, toolMatcher, commandBuilder,
+				outputDir, idGen, toolMatcher, commandBuilder,
 				platform, architecture, configuration, existingTasks,
 			)
 			if err != nil {
@@ -237,7 +240,6 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 
 			if stepTask != nil {
 				tasks = append(tasks, stepTask)
-				taskCounter++
 
 				stepResults[stepName] = map[string]any{
 					"tasks":    []*BuildTask{stepTask},
@@ -259,7 +261,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 	mergedConfig map[string]any,
 	outputDir string,
 	setupTaskID string,
-	taskCounter int,
+	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
 	platform, architecture, configuration string,
@@ -357,10 +359,11 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 			taskName = name
 		}
 
+		taskID := idGen.Next(action, fmt.Sprintf("%s_%s", taskName, source))
 		task := NewBuildTask(
-			fmt.Sprintf("%s_%s_%03d", action, taskName, taskCounter),
+			taskID,
 			action,
-			[]TaskInput{{Path: source}},
+			[]TaskInput{NewTaskInput(source)},
 			outputs,
 			[]string{setupTaskID},
 			command,
@@ -373,7 +376,6 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
-		taskCounter++
 	}
 
 	return tasks, nil
@@ -387,7 +389,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	itemConfig map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
-	taskCounter int,
+	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
 	platform, architecture, configuration string,
@@ -634,11 +636,12 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 
 	taskInputs := []TaskInput{}
 	for _, inp := range filteredInputs {
-		taskInputs = append(taskInputs, TaskInput{Path: inp})
+		taskInputs = append(taskInputs, NewTaskInput(inp))
 	}
 
+	taskID := idGen.Next(action, taskName)
 	task := NewBuildTask(
-		fmt.Sprintf("%s_%s_%03d", action, taskName, taskCounter),
+		taskID,
 		action,
 		taskInputs,
 		[]string{output},
@@ -923,4 +926,3 @@ func convertResolvedParams(resolved map[string]any) ([]string, []string, []strin
 
 	return defines, includeDirs, extraFlags, kwargs
 }
-
