@@ -129,3 +129,48 @@ func (t *BuildTask) CalculateCacheKey() string {
 	return fmt.Sprintf("%x", hash[:])
 }
 
+// UpdateInputHashesAndCacheKey updates input file hashes and recalculates the cache key
+// This should be called before cache lookup when input files may have been created by dependencies
+func (t *BuildTask) UpdateInputHashesAndCacheKey() error {
+	for i := range t.Inputs {
+		if t.Inputs[i].Hash == "" {
+			// Calculate hash for input file if it exists
+			if _, err := os.Stat(t.Inputs[i].Path); err == nil {
+				hash, err := calculateFileHashForInput(t.Inputs[i].Path)
+				if err != nil {
+					return err
+				}
+				t.Inputs[i].Hash = hash
+			}
+		}
+	}
+	// Recalculate cache key with updated input hashes
+	t.CacheKey = t.CalculateCacheKey()
+	return nil
+}
+
+// calculateFileHashForInput calculates SHA-256 hash of a file for input hashing
+func calculateFileHashForInput(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	h := sha256.New()
+	buf := make([]byte, 8192)
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			h.Write(buf[:n])
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+

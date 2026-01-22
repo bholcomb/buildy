@@ -235,6 +235,12 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 	te.ExecutionStats.TotalTasks++
 	te.mu.Unlock()
 
+	// Update input hashes and cache key before cache lookup
+	// This ensures cache keys are correct for tasks whose inputs were created by dependencies
+	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
+		log.Printf("Warning: failed to update input hashes for %s: %v", task.TaskID, err)
+	}
+
 	// Check cache first (unless disabled by force flag)
 	if !te.DisableCache && te.ChangeDetector != nil && te.ChangeDetector.IsCachedResultValid(task) {
 		if err := te.Cache.RestoreCachedResult(task); err == nil {
