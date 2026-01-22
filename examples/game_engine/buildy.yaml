@@ -1,33 +1,43 @@
 project:
   name: game_engine
   version: "1.0.0"
+  description: "Cross-platform game engine example"
 
-# Workspace configuration
-workspace:
-  discover:
-    - "**/buildy.yaml"
-  exclude:
-    - ".buildy_cache/**"
-    - "build/**"
-
-# Workspace-level configuration (inherited by all modules)
-config:
-  cpp_standard: "c++17"
-  compiler_flags:
-    - "-Wall"
-    - "-Wextra"
-    - "-g"
-    - "-O0"
-  defines: []
-
-# Workspace-level variables
 variables:
+  import_env_vars:
+    - name: THIRD_PARTY_ROOT
+      default: "./third_party"
+  
   ENGINE_VERSION: "1.0.0"
   BUILD_DIR: "build"
-  INCLUDE_DIR: "include"
 
-# Package configuration
-packages:
-  glfw3:
-    version: "3.3.8"
+workspace:
+  modules:
+    common:
+      - core
+      - renderer
+      - audio
+      - game
 
+dependencies:
+  file: buildy/dependencies.yaml
+
+environment:
+  toolchains:
+    default: gcc-linux
+    windows: msvc-windows
+    macos: clang-macos
+    
+  compile:
+    cpp_standard: "c++17"
+    warnings: ["-Wall", "-Wextra"]
+    
+  configurations:
+    debug:
+      optimization: "-O0"
+      defines: ["DEBUG=1"]
+      flags: ["-g"]
+    release:
+      optimization: "-O3"
+      defines: ["NDEBUG=1"]
+      flags: ["-flto"]

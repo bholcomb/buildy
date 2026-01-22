@@ -55,6 +55,13 @@ func VerifyEmbeddedData() error {
 	}
 	log.Printf("Found %d toolchain file(s)", len(toolchains))
 	
+	// Check for build systems
+	buildSystems, err := ListEmbeddedFiles("build_systems")
+	if err != nil {
+		return fmt.Errorf("failed to list build systems: %w", err)
+	}
+	log.Printf("Found %d build system file(s)", len(buildSystems))
+	
 	// Verify we can read at least one template file
 	if len(templates) == 0 {
 		return fmt.Errorf("no template files found in embedded data")
@@ -63,6 +70,11 @@ func VerifyEmbeddedData() error {
 	// Verify we can read at least one toolchain file
 	if len(toolchains) == 0 {
 		return fmt.Errorf("no toolchain files found in embedded data")
+	}
+	
+	// Verify we can read at least one build system file
+	if len(buildSystems) == 0 {
+		return fmt.Errorf("no build system files found in embedded data")
 	}
 	
 	log.Println("Successfully verified embedded data access")

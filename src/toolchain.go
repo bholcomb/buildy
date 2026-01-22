@@ -191,6 +191,127 @@ func LoadToolchainConfig(toolchainFile string) (*ToolchainConfig, error) {
 	return tc, nil
 }
 
+// LoadToolchainConfigFromData loads a toolchain configuration from YAML data
+func LoadToolchainConfigFromData(data []byte, sourceName string) (*ToolchainConfig, error) {
+	var rawConfig map[string]any
+	if err := yaml.Unmarshal(data, &rawConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse toolchain YAML %s: %w", sourceName, err)
+	}
+
+	// Extract toolchain section
+	tcData, ok := rawConfig["toolchain"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("toolchain data %s missing 'toolchain' section", sourceName)
+	}
+
+	tc := NewToolchainConfig("", "")
+
+	// Parse basic fields
+	if name, ok := tcData["name"].(string); ok {
+		tc.Name = name
+	} else {
+		return nil, fmt.Errorf("toolchain missing 'name' field")
+	}
+
+	if desc, ok := tcData["description"].(string); ok {
+		tc.Description = desc
+	}
+
+	// Parse target
+	if targetData, ok := tcData["target"].(map[string]any); ok {
+		if platform, ok := targetData["platform"].(string); ok {
+			tc.TargetPlatform = platform
+		}
+		if arch, ok := targetData["architecture"].(string); ok {
+			tc.TargetArchitecture = arch
+		}
+	}
+
+	// Parse host
+	if hostData, ok := tcData["host"].(map[string]any); ok {
+		if platform, ok := hostData["platform"].(string); ok {
+			tc.HostPlatform = platform
+		}
+		if arch, ok := hostData["architecture"].(string); ok {
+			tc.HostArchitecture = arch
+		}
+	}
+
+	// Parse execution
+	if execData, ok := tcData["execution"].(map[string]any); ok {
+		tc.ExecutionConfig = execData
+		if execType, ok := execData["type"].(string); ok {
+			tc.ExecutionType = execType
+		}
+	}
+
+	// Parse tools
+	if toolsData, ok := tcData["tools"].(map[string]any); ok {
+		for toolName, toolDataRaw := range toolsData {
+			toolData, ok := toolDataRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			tool := &Tool{
+				Name:            toolName,
+				Action:          "compile",
+				OutputPattern:   "{name}",
+				Flags:           make(map[string][]string),
+				Supports:        make(map[string]any),
+				InputExtensions: []string{},
+			}
+
+			// Parse tool fields
+			if action, ok := toolData["action"].(string); ok {
+				tool.Action = action
+			}
+			if command, ok := toolData["command"].(string); ok {
+				tool.Command = command
+			}
+			if outputExt, ok := toolData["output_extension"].(string); ok {
+				tool.OutputExtension = outputExt
+			}
+			if outputPattern, ok := toolData["output_pattern"].(string); ok {
+				tool.OutputPattern = outputPattern
+			}
+
+			// Parse input extensions
+			if inputExtsRaw, ok := toolData["input_extensions"].([]any); ok {
+				for _, ext := range inputExtsRaw {
+					if extStr, ok := ext.(string); ok {
+						tool.InputExtensions = append(tool.InputExtensions, extStr)
+					}
+				}
+			}
+
+			// Parse flags
+			if flagsData, ok := toolData["flags"].(map[string]any); ok {
+				for flagType, flagValues := range flagsData {
+					if flagList, ok := flagValues.([]any); ok {
+						flags := []string{}
+						for _, f := range flagList {
+							if fStr, ok := f.(string); ok {
+								flags = append(flags, fStr)
+							}
+						}
+						tool.Flags[flagType] = flags
+					}
+				}
+			}
+
+			// Parse supports
+			if supportsData, ok := toolData["supports"].(map[string]any); ok {
+				tool.Supports = supportsData
+			}
+
+			tc.Tools[toolName] = tool
+		}
+	}
+
+	return tc, nil
+}
+
 // LoadToolchainConfigFromDict creates a ToolchainConfig from a dictionary (for testing)
 func LoadToolchainConfigFromDict(configDict map[string]any) (*ToolchainConfig, error) {
 	tc := NewToolchainConfig("", "")
@@ -418,6 +539,12 @@ func NewToolchainManagerMulti(toolchainsDirs []string) (*ToolchainManager, error
 		toolchains:     make(map[string]*ToolchainConfig),
 	}
 
+	// First load embedded toolchains (built-in)
+	if err := tm.loadEmbeddedToolchains(); err != nil {
+		log.Printf("WARNING: Failed to load embedded toolchains: %v", err)
+	}
+
+	// Then load from filesystem directories (can override built-in)
 	if err := tm.loadToolchains(); err != nil {
 		return nil, err
 	}
@@ -425,7 +552,41 @@ func NewToolchainManagerMulti(toolchainsDirs []string) (*ToolchainManager, error
 	return tm, nil
 }
 
-// loadToolchains loads all toolchain configurations from all toolchain directories
+// loadEmbeddedToolchains loads all toolchain configurations from embedded data
+func (tm *ToolchainManager) loadEmbeddedToolchains() error {
+	// List all embedded toolchain files
+	files, err := ListEmbeddedFiles("toolchains")
+	if err != nil {
+		return fmt.Errorf("failed to list embedded toolchains: %w", err)
+	}
+
+	for _, filePath := range files {
+		if !strings.HasSuffix(filePath, ".yaml") {
+			continue
+		}
+
+		// Read the embedded file
+		data, err := GetEmbeddedFile(filePath)
+		if err != nil {
+			log.Printf("WARNING: Failed to read embedded toolchain %s: %v", filePath, err)
+			continue
+		}
+
+		// Parse the toolchain
+		tc, err := LoadToolchainConfigFromData(data, filePath)
+		if err != nil {
+			log.Printf("WARNING: Failed to parse embedded toolchain %s: %v", filePath, err)
+			continue
+		}
+
+		tm.toolchains[tc.Name] = tc
+		log.Printf("Loaded embedded toolchain: %s - %s", tc.Name, tc.Description)
+	}
+
+	return nil
+}
+
+// loadToolchains loads all toolchain configurations from filesystem directories
 func (tm *ToolchainManager) loadToolchains() error {
 	// Load toolchains from each directory in order
 	for _, toolchainsDir := range tm.toolchainsDirs {
@@ -456,7 +617,7 @@ func (tm *ToolchainManager) loadToolchains() error {
 				}
 
 				if _, exists := tm.toolchains[tc.Name]; exists {
-					log.Printf("WARNING: Toolchain '%s' from %s overrides existing toolchain", tc.Name, toolchainsDir)
+					log.Printf("Toolchain '%s' from %s overrides built-in", tc.Name, toolchainsDir)
 				}
 
 				tm.toolchains[tc.Name] = tc

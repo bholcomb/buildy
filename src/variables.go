@@ -13,19 +13,29 @@ type VariableValue struct {
 	Source string
 }
 
+// ImportedEnvVar represents an environment variable import with default
+type ImportedEnvVar struct {
+	Name     string
+	Default  *string // nil means required (no default)
+	Value    string  // Resolved value
+	Source   string  // "environment" or "default"
+}
+
 // VariableEnvironment provides hierarchical variable environment with provenance tracking and chaining
 type VariableEnvironment struct {
-	variables map[string]VariableValue // name -> (value, source)
-	scopes    []string                 // Stack of scope names for tracking
-	parent    *VariableEnvironment     // Parent environment for chaining
+	variables       map[string]VariableValue // name -> (value, source)
+	scopes          []string                 // Stack of scope names for tracking
+	parent          *VariableEnvironment     // Parent environment for chaining
+	importedEnvVars map[string]ImportedEnvVar // Explicitly imported env vars
 }
 
 // NewVariableEnvironment creates a new variable environment
 func NewVariableEnvironment(parent *VariableEnvironment) *VariableEnvironment {
 	return &VariableEnvironment{
-		variables: make(map[string]VariableValue),
-		scopes:    make([]string, 0),
-		parent:    parent,
+		variables:       make(map[string]VariableValue),
+		scopes:          make([]string, 0),
+		parent:          parent,
+		importedEnvVars: make(map[string]ImportedEnvVar),
 	}
 }
 
@@ -71,20 +81,20 @@ func (ve *VariableEnvironment) SetVariable(name, value, source string) {
 }
 
 // GetVariable gets a variable value, searching parent chain if not found locally
-// Falls back to environment variables if not found in variable hierarchy
+// Only allows access to explicitly imported environment variables
 func (ve *VariableEnvironment) GetVariable(name string) (string, bool) {
 	if val, exists := ve.variables[name]; exists {
 		return val.Value, true
 	}
 	
+	// Check imported env vars
+	if imported, exists := ve.importedEnvVars[name]; exists {
+		return imported.Value, true
+	}
+	
 	// Search parent environment if not found locally
 	if ve.parent != nil {
 		return ve.parent.GetVariable(name)
-	}
-	
-	// Fallback to environment variable
-	if envVal, exists := os.LookupEnv(name); exists {
-		return envVal, true
 	}
 	
 	return "", false
@@ -228,6 +238,11 @@ func (ve *VariableEnvironment) ExtractVariablesFromSection(section map[string]in
 	}
 	
 	for name, value := range varsMap {
+		// Skip import_env_vars and platforms - handled separately
+		if name == "import_env_vars" || name == "platforms" {
+			continue
+		}
+		
 		var strValue string
 		switch v := value.(type) {
 		case string:
@@ -236,6 +251,110 @@ func (ve *VariableEnvironment) ExtractVariablesFromSection(section map[string]in
 			strValue = fmt.Sprintf("%v", v)
 		}
 		ve.SetVariable(name, strValue, sourceName)
+	}
+}
+
+// ImportEnvVars processes the import_env_vars section and imports environment variables
+// Returns an error if any required env var is not set
+func (ve *VariableEnvironment) ImportEnvVars(variablesSection map[string]interface{}, sourceName string) error {
+	importSection, ok := variablesSection["import_env_vars"]
+	if !ok {
+		return nil
+	}
+	
+	importList, ok := importSection.([]interface{})
+	if !ok {
+		return fmt.Errorf("import_env_vars must be a list")
+	}
+	
+	for i, item := range importList {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("import_env_vars[%d]: each entry must be a map with 'name' and 'default'", i)
+		}
+		
+		name, ok := itemMap["name"].(string)
+		if !ok || name == "" {
+			return fmt.Errorf("import_env_vars[%d]: 'name' is required and must be a string", i)
+		}
+		
+		// Get default value (can be string or null)
+		var defaultVal *string
+		if def, exists := itemMap["default"]; exists {
+			if def == nil {
+				// null/~ means required
+				defaultVal = nil
+			} else if defStr, ok := def.(string); ok {
+				defaultVal = &defStr
+			} else {
+				defStr := fmt.Sprintf("%v", def)
+				defaultVal = &defStr
+			}
+		} else {
+			return fmt.Errorf("import_env_vars[%d] (%s): 'default' is required (use ~ for required vars)", i, name)
+		}
+		
+		// Resolve the value
+		var value string
+		var source string
+		
+		if envVal, exists := os.LookupEnv(name); exists {
+			value = envVal
+			source = "environment"
+			log.Printf("Imported env var: %s = %s (from environment)", name, value)
+		} else if defaultVal != nil {
+			value = *defaultVal
+			source = "default"
+			log.Printf("Imported env var: %s = %s (using default)", name, value)
+		} else {
+			// Required but not set
+			return fmt.Errorf(
+				"ERROR: Required environment variable '%s' is not set.\n"+
+				"       Defined in: variables.import_env_vars (%s)\n"+
+				"       \n"+
+				"       To fix: export %s=/path/to/value",
+				name, sourceName, name,
+			)
+		}
+		
+		ve.importedEnvVars[name] = ImportedEnvVar{
+			Name:    name,
+			Default: defaultVal,
+			Value:   value,
+			Source:  source,
+		}
+	}
+	
+	return nil
+}
+
+// ExtractPlatformVariables extracts platform-specific variables
+func (ve *VariableEnvironment) ExtractPlatformVariables(variablesSection map[string]interface{}, platform, sourceName string) {
+	platforms, ok := variablesSection["platforms"]
+	if !ok {
+		return
+	}
+	
+	platformsMap, ok := platforms.(map[string]interface{})
+	if !ok {
+		log.Printf("WARNING: variables.platforms in '%s' is not a dictionary", sourceName)
+		return
+	}
+	
+	platformVars, ok := platformsMap[platform].(map[string]interface{})
+	if !ok {
+		return // No variables for this platform
+	}
+	
+	for name, value := range platformVars {
+		var strValue string
+		switch v := value.(type) {
+		case string:
+			strValue = v
+		default:
+			strValue = fmt.Sprintf("%v", v)
+		}
+		ve.SetVariable(name, strValue, fmt.Sprintf("%s.platforms.%s", sourceName, platform))
 	}
 }
 

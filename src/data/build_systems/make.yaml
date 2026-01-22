@@ -1,0 +1,42 @@
+build_system:
+  name: make
+  description: "GNU Make build system"
+  
+  detection:
+    marker_files: ["Makefile", "GNUmakefile", "makefile"]
+    priority: 5
+  
+  phases:
+    configure:
+      # Make doesn't have a separate configure step by default
+      # This is a no-op but allows consistent phase handling
+      command: "true"
+      required: false
+    
+    build:
+      command: "make -j{jobs} {args}"
+      working_dir: "{source_dir}"
+      required: true
+    
+    test:
+      command: "make test"
+      working_dir: "{source_dir}"
+      required: false
+    
+    install:
+      command: "make install PREFIX={install_dir}"
+      working_dir: "{source_dir}"
+      required: false
+    
+    clean:
+      command: "make clean"
+      working_dir: "{source_dir}"
+      required: false
+  
+  output:
+    include_patterns:
+      - "{source_dir}/include"
+      - "{source_dir}"
+    lib_patterns:
+      - "{source_dir}"
+      - "{source_dir}/lib"

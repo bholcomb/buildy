@@ -1,0 +1,22 @@
+# External dependencies for game_engine project
+
+system:
+  common:
+    - name: zlib
+      pkg_config: zlib
+  linux:
+    - name: pthread
+      libs: ["pthread"]
+    - name: dl
+      libs: ["dl"]
+  windows:
+    - name: winsock
+      libs: ["ws2_32"]
+  macos:
+    - name: cocoa
+      frameworks: ["Cocoa", "IOKit"]
+
+# Packages: resolved from buildy/packages/*.yaml (project), ~/.buildy/packages/ (user), or built-in
+# Targets reference these via their packages: field
+packages:
+  - glfw3

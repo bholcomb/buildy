@@ -1,0 +1,182 @@
+toolchain:
+  name: "go"
+  description: "Go compiler for native platform"
+  
+  target:
+    platform: any
+    architecture: any
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+  
+  tools:
+    # Go build - builds a Go module/package
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+        gcflags: true
+        gcflags_flag: "-gcflags"
+        trimpath: true
+        trimpath_flag: "-trimpath"
+    
+    # Go test - runs tests
+    go_test:
+      action: test
+      command: "go test {flags} {build_tags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      flags:
+        common: ["-v"]
+        debug: []
+        release: []
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        coverage: true
+        coverage_flag: "-cover"
+        race: true
+        race_flag: "-race"
+    
+    # Go vet - static analysis
+    go_vet:
+      action: analyze
+      command: "go vet {flags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      flags:
+        common: []
+        debug: []
+        release: []
+    
+    # Go fmt - format code
+    go_fmt:
+      action: format
+      command: "gofmt -w {input}"
+      input_extensions: [".go"]
+      output_extension: ".go"
+    
+    # Go mod tidy - clean up dependencies
+    go_mod_tidy:
+      action: deps
+      command: "go mod tidy"
+      input_extensions: []
+      output_extension: ""
+
+# Platform-specific variants
+---
+toolchain:
+  name: "go-linux"
+  description: "Go compiler for Linux"
+  
+  target:
+    platform: linux
+    architecture: x86_64
+  
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+
+---
+toolchain:
+  name: "go-windows"
+  description: "Go compiler for Windows"
+  
+  target:
+    platform: windows
+    architecture: x86_64
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+    env:
+      GOOS: windows
+      GOARCH: amd64
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ".exe"
+      output_pattern: "{name}.exe"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w -H windowsgui", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+
+---
+toolchain:
+  name: "go-macos"
+  description: "Go compiler for macOS"
+  
+  target:
+    platform: macos
+    architecture: x86_64
+  
+  host:
+    platform: macos
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"

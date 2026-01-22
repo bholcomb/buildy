@@ -29,6 +29,12 @@ func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, 
 		templates:     make(map[string]any),
 	}
 
+	// First load embedded templates (built-in)
+	if err := engine.loadEmbeddedTemplates(); err != nil {
+		log.Printf("WARNING: Failed to load embedded templates: %v", err)
+	}
+
+	// Then load from filesystem directories (can override built-in)
 	if err := engine.loadTemplates(); err != nil {
 		return nil, err
 	}
@@ -36,10 +42,59 @@ func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, 
 	return engine, nil
 }
 
-// loadTemplates loads all build templates from YAML files in all template directories
-func (bte *BuildTemplateEngine) loadTemplates() error {
-	totalTemplates := 0
+// loadEmbeddedTemplates loads all templates from embedded data
+func (bte *BuildTemplateEngine) loadEmbeddedTemplates() error {
+	// List all embedded template files
+	files, err := ListEmbeddedFiles("templates")
+	if err != nil {
+		return fmt.Errorf("failed to list embedded templates: %w", err)
+	}
 
+	for _, filePath := range files {
+		if !strings.HasSuffix(filePath, ".yaml") && !strings.HasSuffix(filePath, ".yml") {
+			continue
+		}
+
+		// Read the embedded file
+		data, err := GetEmbeddedFile(filePath)
+		if err != nil {
+			log.Printf("WARNING: Failed to read embedded template %s: %v", filePath, err)
+			continue
+		}
+
+		// Parse and merge templates
+		if err := bte.loadTemplateData(data, filePath); err != nil {
+			log.Printf("WARNING: Failed to parse embedded template %s: %v", filePath, err)
+			continue
+		}
+	}
+
+	log.Printf("Loaded %d embedded template(s)", len(bte.templates))
+	return nil
+}
+
+// loadTemplateData loads templates from YAML data
+func (bte *BuildTemplateEngine) loadTemplateData(data []byte, sourceName string) error {
+	var rawData map[string]any
+	if err := yaml.Unmarshal(data, &rawData); err != nil {
+		return fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	if templates, ok := rawData["templates"].(map[string]any); ok {
+		// Merge templates into the engine's template map
+		for name, tmpl := range templates {
+			if _, exists := bte.templates[name]; exists {
+				log.Printf("Template '%s' in %s overrides existing template", name, sourceName)
+			}
+			bte.templates[name] = tmpl
+		}
+	}
+
+	return nil
+}
+
+// loadTemplates loads all build templates from YAML files in filesystem directories
+func (bte *BuildTemplateEngine) loadTemplates() error {
 	// Load templates from each directory in order
 	for _, templatesDir := range bte.templatesDirs {
 		// Find all .yaml files in templates directory
@@ -71,10 +126,9 @@ func (bte *BuildTemplateEngine) loadTemplates() error {
 		if newTemplates > 0 {
 			log.Printf("Loaded %d template(s) from %s", newTemplates, templatesDir)
 		}
-		totalTemplates = len(bte.templates)
 	}
 
-	log.Printf("Total templates loaded: %d", totalTemplates)
+	log.Printf("Total templates loaded: %d", len(bte.templates))
 	return nil
 }
 

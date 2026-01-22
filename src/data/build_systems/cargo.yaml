@@ -1,0 +1,39 @@
+build_system:
+  name: cargo
+  description: "Rust Cargo build system"
+  
+  detection:
+    marker_files: ["Cargo.toml"]
+    priority: 10
+  
+  phases:
+    configure:
+      # Cargo doesn't have a separate configure step
+      command: "true"
+      required: false
+    
+    build:
+      command: "cargo build --release {args}"
+      working_dir: "{source_dir}"
+      required: true
+    
+    test:
+      command: "cargo test --release"
+      working_dir: "{source_dir}"
+      required: false
+    
+    install:
+      command: "cargo install --path . --root {install_dir}"
+      working_dir: "{source_dir}"
+      required: false
+    
+    clean:
+      command: "cargo clean"
+      working_dir: "{source_dir}"
+      required: false
+  
+  output:
+    include_patterns:
+      - "{source_dir}/include"
+    lib_patterns:
+      - "{source_dir}/target/release"

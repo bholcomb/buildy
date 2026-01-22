@@ -24,12 +24,20 @@ type ModuleInfo struct {
 // WorkspaceConfig represents workspace configuration from root buildy.yaml
 type WorkspaceConfig struct {
 	RootDir          string                       `json:"root"`
-	DiscoverPatterns []string                     `json:"discover_patterns"`
-	ExcludePatterns  []string                     `json:"exclude_patterns"`
+	DiscoverPatterns []string                     `json:"discover_patterns"`  // Legacy: for backward compat
+	ExcludePatterns  []string                     `json:"exclude_patterns"`   // Legacy: for backward compat
+	ExplicitModules  map[string][]ModuleEntry     `json:"explicit_modules"`   // New: platform -> module entries
 	Variables        map[string]any               `json:"variables"`
 	PackagePaths     []string                     `json:"package_paths"`
 	Packages         map[string]map[string]string `json:"packages"` // package_name -> {version, custom_vars}
+	DependenciesFile string                       `json:"dependencies_file"`  // Path to external dependencies file
 	RawConfig        map[string]any               `json:"-"`
+}
+
+// ModuleEntry represents a module in the workspace.modules section
+type ModuleEntry struct {
+	Path   string `json:"path"`   // Relative path to module directory
+	Config string `json:"config"` // Custom config filename (default: buildy.yaml)
 }
 
 // Workspace manages multi-module workspace with buildy.yaml files
@@ -122,36 +130,73 @@ func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
 
 	// Extract workspace section
 	workspaceSection := map[string]any{}
-	if ws, ok := rawConfig["workspace"].(map[string]any); ok {
-		workspaceSection = ws
+	if wsSection, ok := rawConfig["workspace"].(map[string]any); ok {
+		workspaceSection = wsSection
 	}
 
-	// Get discovery patterns
-	discoverPatterns := []string{"**/buildy.yaml"}
-	if discover, ok := workspaceSection["discover"]; ok {
-		switch v := discover.(type) {
-		case string:
-			discoverPatterns = []string{v}
-		case []any:
-			discoverPatterns = []string{}
-			for _, item := range v {
-				if str, ok := item.(string); ok {
-					discoverPatterns = append(discoverPatterns, str)
+	// Check for new explicit modules format first
+	explicitModules := make(map[string][]ModuleEntry)
+	hasExplicitModules := false
+	if modules, ok := workspaceSection["modules"].(map[string]any); ok {
+		hasExplicitModules = true
+		for platform, moduleList := range modules {
+			entries := []ModuleEntry{}
+			switch v := moduleList.(type) {
+			case []any:
+				for _, item := range v {
+					switch entry := item.(type) {
+					case string:
+						// Simple string path
+						entries = append(entries, ModuleEntry{Path: entry, Config: "buildy.yaml"})
+					case map[string]any:
+						// Object with path and optional config
+						path := ""
+						configName := "buildy.yaml"
+						if p, ok := entry["path"].(string); ok {
+							path = p
+						}
+						if c, ok := entry["config"].(string); ok {
+							configName = c
+						}
+						if path != "" {
+							entries = append(entries, ModuleEntry{Path: path, Config: configName})
+						}
+					}
 				}
 			}
+			explicitModules[platform] = entries
 		}
 	}
 
-	// Get exclude patterns
+	// Legacy: Get discovery patterns (only if no explicit modules)
+	discoverPatterns := []string{}
 	excludePatterns := []string{".buildy_cache/**", "venv/**", ".git/**", "**/.git/**"}
-	if exclude, ok := workspaceSection["exclude"]; ok {
-		switch v := exclude.(type) {
-		case string:
-			excludePatterns = append(excludePatterns, v)
-		case []any:
-			for _, item := range v {
-				if str, ok := item.(string); ok {
-					excludePatterns = append(excludePatterns, str)
+	
+	if !hasExplicitModules {
+		discoverPatterns = []string{"**/buildy.yaml"}
+		if discover, ok := workspaceSection["discover"]; ok {
+			switch v := discover.(type) {
+			case string:
+				discoverPatterns = []string{v}
+			case []any:
+				discoverPatterns = []string{}
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						discoverPatterns = append(discoverPatterns, str)
+					}
+				}
+			}
+		}
+
+		if exclude, ok := workspaceSection["exclude"]; ok {
+			switch v := exclude.(type) {
+			case string:
+				excludePatterns = append(excludePatterns, v)
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						excludePatterns = append(excludePatterns, str)
+					}
 				}
 			}
 		}
@@ -194,25 +239,47 @@ func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
 		}
 	}
 
+	// Get dependencies file path
+	dependenciesFile := ""
+	if deps, ok := rawConfig["dependencies"].(map[string]any); ok {
+		if file, ok := deps["file"].(string); ok {
+			dependenciesFile = file
+		}
+	}
+
 	config := &WorkspaceConfig{
 		RootDir:          ws.RootDir,
 		DiscoverPatterns: discoverPatterns,
 		ExcludePatterns:  excludePatterns,
+		ExplicitModules:  explicitModules,
 		Variables:        variables,
 		PackagePaths:     packagePaths,
 		Packages:         packages,
+		DependenciesFile: dependenciesFile,
 		RawConfig:        rawConfig,
 	}
 
-	log.Printf("Loaded workspace from %s", ws.RootDir)
-	log.Printf("Discovery patterns: %v", discoverPatterns)
-	log.Printf("Exclude patterns: %v", excludePatterns)
+	if hasExplicitModules {
+		log.Printf("Loaded workspace from %s (explicit modules)", ws.RootDir)
+		for platform, modules := range explicitModules {
+			log.Printf("  %s: %d modules", platform, len(modules))
+		}
+	} else {
+		log.Printf("Loaded workspace from %s (discovery mode)", ws.RootDir)
+		log.Printf("Discovery patterns: %v", discoverPatterns)
+		log.Printf("Exclude patterns: %v", excludePatterns)
+	}
 
 	return config, nil
 }
 
 // DiscoverModules discovers all buildy.yaml module files in workspace
 func (ws *Workspace) DiscoverModules(force bool) (map[string]*ModuleInfo, error) {
+	return ws.DiscoverModulesForPlatform(force, "")
+}
+
+// DiscoverModulesForPlatform discovers modules filtered by platform
+func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (map[string]*ModuleInfo, error) {
 	if ws.discovered && !force {
 		return ws.Modules, nil
 	}
@@ -220,7 +287,12 @@ func (ws *Workspace) DiscoverModules(force bool) (map[string]*ModuleInfo, error)
 	log.Printf("Discovering modules in workspace...")
 	ws.Modules = make(map[string]*ModuleInfo)
 
-	// Find all buildy.yaml files
+	// Check if we have explicit modules defined
+	if len(ws.Config.ExplicitModules) > 0 {
+		return ws.loadExplicitModules(platform)
+	}
+
+	// Fall back to legacy discovery mode
 	discoveredFiles, err := ws.findModuleFiles()
 	if err != nil {
 		return nil, err
@@ -256,6 +328,133 @@ func (ws *Workspace) DiscoverModules(force bool) (map[string]*ModuleInfo, error)
 	log.Printf("Discovered %d modules with %d total targets", len(ws.Modules), totalTargets)
 
 	return ws.Modules, nil
+}
+
+// loadExplicitModules loads modules from explicit workspace.modules configuration
+func (ws *Workspace) loadExplicitModules(platform string) (map[string]*ModuleInfo, error) {
+	log.Printf("Loading explicit modules for platform: %s", platform)
+
+	// Collect modules from "common" and platform-specific sections
+	modulesToLoad := []ModuleEntry{}
+
+	// Add common modules first
+	if commonModules, ok := ws.Config.ExplicitModules["common"]; ok {
+		modulesToLoad = append(modulesToLoad, commonModules...)
+	}
+
+	// Add platform-specific modules
+	if platform != "" {
+		if platformModules, ok := ws.Config.ExplicitModules[platform]; ok {
+			modulesToLoad = append(modulesToLoad, platformModules...)
+		}
+	}
+
+	// Load each module
+	for _, entry := range modulesToLoad {
+		moduleDir := entry.Path
+		configFile := filepath.Join(ws.RootDir, moduleDir, entry.Config)
+
+		// Check if config file exists
+		if _, err := os.Stat(configFile); os.IsNotExist(err) {
+			return nil, fmt.Errorf("module config not found: %s (referenced in workspace.modules)", configFile)
+		}
+
+		moduleInfo, err := ws.loadModule(configFile, moduleDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load module %s: %w", moduleDir, err)
+		}
+
+		ws.Modules[moduleDir] = moduleInfo
+		log.Printf("Loaded explicit module: %s (%d targets)", moduleDir, len(moduleInfo.Targets))
+
+		// Recursively load child modules if this module has workspace.modules
+		if err := ws.loadChildModules(moduleDir, moduleInfo.Config, platform); err != nil {
+			return nil, err
+		}
+	}
+
+	ws.discovered = true
+	totalTargets := ws.countTotalTargets()
+	log.Printf("Loaded %d explicit modules with %d total targets", len(ws.Modules), totalTargets)
+
+	return ws.Modules, nil
+}
+
+// loadChildModules recursively loads child modules defined in a module's workspace.modules
+func (ws *Workspace) loadChildModules(parentDir string, config map[string]any, platform string) error {
+	workspaceSection, ok := config["workspace"].(map[string]any)
+	if !ok {
+		return nil // No workspace section, this is a leaf module
+	}
+
+	modulesSection, ok := workspaceSection["modules"].(map[string]any)
+	if !ok {
+		return nil // No modules section
+	}
+
+	// Collect child modules from "common" and platform-specific sections
+	childModules := []ModuleEntry{}
+
+	for sectionName, moduleList := range modulesSection {
+		// Only process "common" or matching platform
+		if sectionName != "common" && sectionName != platform {
+			continue
+		}
+
+		switch v := moduleList.(type) {
+		case []any:
+			for _, item := range v {
+				switch entry := item.(type) {
+				case string:
+					childModules = append(childModules, ModuleEntry{Path: entry, Config: "buildy.yaml"})
+				case map[string]any:
+					path := ""
+					configName := "buildy.yaml"
+					if p, ok := entry["path"].(string); ok {
+						path = p
+					}
+					if c, ok := entry["config"].(string); ok {
+						configName = c
+					}
+					if path != "" {
+						childModules = append(childModules, ModuleEntry{Path: path, Config: configName})
+					}
+				}
+			}
+		}
+	}
+
+	// Load each child module
+	for _, entry := range childModules {
+		// Child paths are relative to parent module
+		moduleDir := filepath.Join(parentDir, entry.Path)
+		configFile := filepath.Join(ws.RootDir, moduleDir, entry.Config)
+
+		// Check if config file exists
+		if _, err := os.Stat(configFile); os.IsNotExist(err) {
+			return fmt.Errorf("child module config not found: %s (referenced in %s/buildy.yaml)", configFile, parentDir)
+		}
+
+		// Skip if already loaded
+		if _, exists := ws.Modules[moduleDir]; exists {
+			continue
+		}
+
+		moduleInfo, err := ws.loadModule(configFile, moduleDir)
+		if err != nil {
+			return fmt.Errorf("failed to load child module %s: %w", moduleDir, err)
+		}
+
+		ws.Modules[moduleDir] = moduleInfo
+		log.Printf("Loaded child module: %s (%d targets)", moduleDir, len(moduleInfo.Targets))
+
+		// Recursively load grandchild modules
+		if err := ws.loadChildModules(moduleDir, moduleInfo.Config, platform); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // findModuleFiles finds all buildy.yaml files matching discovery patterns
@@ -341,10 +540,34 @@ func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, er
 		return nil, fmt.Errorf("invalid YAML in %s: %w", modulePath, err)
 	}
 
-	// Extract target names from library and executable sections
+	// Extract target names from various sections
 	targets := []string{}
+	
+	// Helper to extract names from a list of target maps
+	extractNames := func(items []any) {
+		for _, item := range items {
+			if itemMap, ok := item.(map[string]any); ok {
+				if name, ok := itemMap["name"].(string); ok {
+					targets = append(targets, name)
+				}
+			}
+		}
+	}
 
-	// Check for 'library' section (singular)
+	// New format: targets.libraries and targets.executables
+	if targetsSection, ok := config["targets"].(map[string]any); ok {
+		if libs, ok := targetsSection["libraries"].([]any); ok {
+			extractNames(libs)
+		}
+		if exes, ok := targetsSection["executables"].([]any); ok {
+			extractNames(exes)
+		}
+		if goMods, ok := targetsSection["go_modules"].([]any); ok {
+			extractNames(goMods)
+		}
+	}
+
+	// Legacy format: 'library' section (singular)
 	if libSection, ok := config["library"]; ok {
 		switch v := libSection.(type) {
 		case map[string]any:
@@ -352,17 +575,11 @@ func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, er
 				targets = append(targets, name)
 			}
 		case []any:
-			for _, item := range v {
-				if libMap, ok := item.(map[string]any); ok {
-					if name, ok := libMap["name"].(string); ok {
-						targets = append(targets, name)
-					}
-				}
-			}
+			extractNames(v)
 		}
 	}
 
-	// Check for 'executable' section (singular)
+	// Legacy format: 'executable' section (singular)
 	if exeSection, ok := config["executable"]; ok {
 		switch v := exeSection.(type) {
 		case map[string]any:
@@ -370,27 +587,13 @@ func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, er
 				targets = append(targets, name)
 			}
 		case []any:
-			for _, item := range v {
-				if exeMap, ok := item.(map[string]any); ok {
-					if name, ok := exeMap["name"].(string); ok {
-						targets = append(targets, name)
-					}
-				}
-			}
+			extractNames(v)
 		}
 	}
 
-	// Also check legacy 'tasks' and 'targets' sections
-	for _, taskSection := range []string{"tasks", "targets"} {
-		if section, ok := config[taskSection].([]any); ok {
-			for _, item := range section {
-				if taskMap, ok := item.(map[string]any); ok {
-					if name, ok := taskMap["name"].(string); ok {
-						targets = append(targets, name)
-					}
-				}
-			}
-		}
+	// Also check legacy 'tasks' sections
+	if section, ok := config["tasks"].([]any); ok {
+		extractNames(section)
 	}
 
 	return &ModuleInfo{
@@ -461,6 +664,60 @@ func DiscoverWorkspace(startDir string) (*Workspace, error) {
 	return NewWorkspace(root)
 }
 
+// CalculateConfigFilesHash calculates a combined hash of all buildy.yaml files and package files
+func (ws *Workspace) CalculateConfigFilesHash() (string, error) {
+	var filesToHash []string
+
+	// Add root buildy.yaml
+	rootConfig := filepath.Join(ws.RootDir, "buildy.yaml")
+	if _, err := os.Stat(rootConfig); err == nil {
+		filesToHash = append(filesToHash, rootConfig)
+	}
+
+	// Add all module buildy.yaml files
+	for _, module := range ws.Modules {
+		if _, err := os.Stat(module.Path); err == nil {
+			filesToHash = append(filesToHash, module.Path)
+		}
+	}
+
+	// Add dependencies file if referenced
+	depsFile := filepath.Join(ws.RootDir, "buildy", "dependencies.yaml")
+	if _, err := os.Stat(depsFile); err == nil {
+		filesToHash = append(filesToHash, depsFile)
+	}
+
+	// Add all package files
+	packagesDir := filepath.Join(ws.RootDir, "buildy", "packages")
+	if info, err := os.Stat(packagesDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(packagesDir)
+		if err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && (filepath.Ext(entry.Name()) == ".yaml" || filepath.Ext(entry.Name()) == ".yml") {
+					filesToHash = append(filesToHash, filepath.Join(packagesDir, entry.Name()))
+				}
+			}
+		}
+	}
+
+	// Sort for deterministic ordering
+	sort.Strings(filesToHash)
+
+	// Calculate combined hash
+	h := sha256.New()
+	for _, file := range filesToHash {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("failed to read %s: %w", file, err)
+		}
+		// Include filename in hash to detect renames
+		h.Write([]byte(file))
+		h.Write(data)
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
 // SaveDiscoveryCache saves workspace discovery results to cache
 func (ws *Workspace) SaveDiscoveryCache(cacheDir string) error {
 	cacheFile := filepath.Join(cacheDir, "workspace.json")
@@ -469,9 +726,17 @@ func (ws *Workspace) SaveDiscoveryCache(cacheDir string) error {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	// Calculate hash of all config files
+	configHash, err := ws.CalculateConfigFilesHash()
+	if err != nil {
+		log.Printf("WARNING: Failed to calculate config hash: %v", err)
+		configHash = ""
+	}
+
 	// Serialize workspace info
 	cacheData := map[string]any{
-		"root": ws.RootDir,
+		"root":        ws.RootDir,
+		"config_hash": configHash,
 		"config": map[string]any{
 			"discover_patterns": ws.Config.DiscoverPatterns,
 			"exclude_patterns":  ws.Config.ExcludePatterns,
@@ -536,6 +801,20 @@ func LoadDiscoveryCache(cacheDir string) (*Workspace, error) {
 	workspace, err := NewWorkspace(rootDir)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate config files hash to detect changes in buildy.yaml or package files
+	cachedHash, _ := cacheData["config_hash"].(string)
+	if cachedHash != "" {
+		currentHash, err := workspace.CalculateConfigFilesHash()
+		if err != nil {
+			log.Printf("Failed to calculate config hash, invalidating cache: %v", err)
+			return nil, nil
+		}
+		if currentHash != cachedHash {
+			log.Printf("Config files changed, invalidating workspace cache")
+			return nil, nil
+		}
 	}
 
 	// Restore modules
