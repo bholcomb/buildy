@@ -15,6 +15,34 @@ const Version = "0.1.0-go"
 // Global verbose flag and logger
 var Verbose bool
 
+// detectPlatform returns the current platform name normalized for buildy
+func detectPlatform() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "macos"
+	case "linux":
+		return "linux"
+	case "windows":
+		return "windows"
+	default:
+		return runtime.GOOS
+	}
+}
+
+// detectArchitecture returns the current architecture name normalized for buildy
+func detectArchitecture() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "arm64"
+	case "386":
+		return "x86"
+	default:
+		return runtime.GOARCH
+	}
+}
+
 // getAutoBuildyDirs returns automatic buildy/ directory search paths
 func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 	dirs := []string{}
@@ -57,9 +85,12 @@ func main() {
 		log.Fatalf("Failed to get buildy directory: %v", err)
 	}
 
-	// Define CLI flags
-	platform := flag.String("platform", "linux", "Target platform")
-	architecture := flag.String("architecture", "x86_64", "Target architecture")
+	// Define CLI flags with auto-detected defaults
+	defaultPlatform := detectPlatform()
+	defaultArch := detectArchitecture()
+	
+	platform := flag.String("platform", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
+	architecture := flag.String("architecture", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.String("configuration", "debug", "Build configuration")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
 	dryRun := flag.Bool("dry-run", false, "Generate tasks but don't execute")
@@ -72,6 +103,7 @@ func main() {
 	toolchainShort := flag.String("t", "", "Specify toolchain to use (short)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
 	force := flag.Bool("force", false, "Force full rebuild, ignore cache and build state")
+	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy/ folder")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 
 	// Custom flag for multiple defines
@@ -341,19 +373,46 @@ func main() {
 		log.Fatalf("Failed to create builder: %v", err)
 	}
 
+	// Configure builder options
+	buildOptions := BuildOptions{
+		DryRun:          *dryRun,
+		Force:           *force,
+		CompileCommands: *compileCommands,
+	}
+
 	// Build the workspace
-	success, err := builder.BuildWorkspace(
+	result, err := builder.BuildWorkspace(
 		workspace,
 		configParser,
 		targetFilter,
-		*dryRun,
-		*force,
+		buildOptions,
 	)
 	if err != nil {
 		log.Fatalf("Build failed: %v", err)
 	}
 
-	if success {
+	// Generate and save build report
+	if result != nil {
+		reportPath := filepath.Join(workspaceCacheDir, "build_report.json")
+		if err := result.SaveReport(reportPath); err != nil {
+			log.Printf("WARNING: Failed to save build report: %v", err)
+		}
+		
+		// Print terminal summary
+		result.PrintSummary()
+		
+		// Generate compile_commands.json if requested
+		if *compileCommands && result.Success {
+			compileCommandsPath := filepath.Join(workspace.RootDir, "buildy", "compile_commands.json")
+			if err := result.GenerateCompileCommands(compileCommandsPath); err != nil {
+				log.Printf("WARNING: Failed to generate compile_commands.json: %v", err)
+			} else {
+				log.Printf("Generated compile_commands.json at %s", compileCommandsPath)
+			}
+		}
+	}
+
+	if result != nil && result.Success {
 		os.Exit(0)
 	} else {
 		os.Exit(1)

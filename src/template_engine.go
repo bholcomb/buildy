@@ -203,7 +203,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
-	platform, architecture, configuration string,
+	platform, architecture, configuration, toolchain string,
 	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
 	if existingTasks == nil {
@@ -260,7 +260,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			stepTasks, err := bte.expandForEachStep(
 				step, context, itemConfig, mergedConfig, outputDir,
 				setupTaskID, idGen, toolMatcher, commandBuilder,
-				platform, architecture, configuration,
+				platform, architecture, configuration, toolchain,
 			)
 			if err != nil {
 				return nil, err
@@ -286,7 +286,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			stepTask, err := bte.expandSingleStep(
 				step, context, stepResults, itemConfig, mergedConfig,
 				outputDir, idGen, toolMatcher, commandBuilder,
-				platform, architecture, configuration, existingTasks,
+				platform, architecture, configuration, toolchain, existingTasks,
 			)
 			if err != nil {
 				return nil, err
@@ -318,7 +318,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
-	platform, architecture, configuration string,
+	platform, architecture, configuration, toolchain string,
 ) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
 
@@ -358,8 +358,9 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		// Find appropriate tool for this source file
 		tool := toolMatcher.FindTool(action, source)
 		if tool == nil {
-			log.Printf("WARNING: No %s tool found for %s, skipping", action, source)
-			continue
+			return nil, fmt.Errorf("no %s tool found for source file '%s'. "+
+				"Check that your toolchain supports files with extension '%s'",
+				action, source, filepath.Ext(source))
 		}
 
 		// Build context for this iteration
@@ -425,6 +426,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		task.Platform = platform
 		task.Architecture = architecture
 		task.Configuration = configuration
+		task.Toolchain = toolchain
 		task.EstimatedTime = DefaultCompileTimeSeconds
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 200, DiskMB: 15}
 		task.CacheKey = task.CalculateCacheKey()
@@ -446,7 +448,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	idGen *TaskIDGenerator,
 	toolMatcher *ToolMatcher,
 	commandBuilder *CommandBuilder,
-	platform, architecture, configuration string,
+	platform, architecture, configuration, toolchain string,
 	existingTasks []*BuildTask,
 ) (*BuildTask, error) {
 	action := "link"
@@ -466,8 +468,8 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	if tool == nil {
-		log.Printf("WARNING: No tool found for action=%s, output_type=%s", action, outputType)
-		return nil, nil
+		return nil, fmt.Errorf("no tool found for action='%s' output_type='%s'. "+
+			"Check that your toolchain defines a link tool for this output type", action, outputType)
 	}
 
 	// Update context with tool info
@@ -705,6 +707,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	task.Platform = platform
 	task.Architecture = architecture
 	task.Configuration = configuration
+	task.Toolchain = toolchain
 	task.EstimatedTime = DefaultLinkTimeSeconds
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 150, DiskMB: 25}
 	task.CacheKey = task.CalculateCacheKey()

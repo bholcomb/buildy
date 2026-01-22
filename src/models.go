@@ -71,6 +71,7 @@ type BuildTask struct {
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
+	Toolchain            string               `json:"toolchain"`              // Toolchain identifier (e.g., "gcc-linux-13.2")
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -105,7 +106,8 @@ func (t *BuildTask) CalculateCacheKey() string {
 		inputTuples[i] = [2]string{inp.Path, inp.Hash}
 	}
 	
-	// Create content structure matching Python version
+	// Create content structure for hashing
+	// Includes all factors that affect build output
 	content := map[string]interface{}{
 		"task_type":     t.TaskType,
 		"inputs":        inputTuples,
@@ -113,6 +115,7 @@ func (t *BuildTask) CalculateCacheKey() string {
 		"platform":      t.Platform,
 		"architecture":  t.Architecture,
 		"configuration": t.Configuration,
+		"toolchain":     t.Toolchain, // Include toolchain to invalidate cache on compiler changes
 	}
 	
 	// Serialize to JSON (Go's json.Marshal sorts keys by default)

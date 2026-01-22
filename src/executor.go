@@ -17,6 +17,7 @@ type TaskExecutor struct {
 	ExecEnv        *ExecutionEnvironment
 	DisableCache   bool
 	ExecutionStats ExecutionStats
+	BuildResult    *BuildResult // Optional: for tracking execution in build report
 	mu             sync.Mutex
 }
 
@@ -189,6 +190,9 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 		if err := te.Cache.RestoreCachedResult(task); err == nil {
 			te.mu.Lock()
 			te.ExecutionStats.CacheHits++
+			if te.BuildResult != nil {
+				te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, 0, true, true)
+			}
 			te.mu.Unlock()
 			return true
 		}
@@ -208,6 +212,9 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 				log.Printf("ERROR: Failed to create output directory %s: %v", outputDir, err)
 				te.mu.Lock()
 				te.ExecutionStats.FailedTasks++
+				if te.BuildResult != nil {
+					te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, 0, false, false)
+				}
 				te.mu.Unlock()
 				return false
 			}
@@ -227,6 +234,9 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 		}
 		te.mu.Lock()
 		te.ExecutionStats.FailedTasks++
+		if te.BuildResult != nil {
+			te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, false, false)
+		}
 		te.mu.Unlock()
 		return false
 	}
@@ -236,6 +246,9 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 		te.Cache.CacheTaskResult(task, executionTime, true)
 		te.mu.Lock()
 		te.ExecutionStats.CacheMisses++
+		if te.BuildResult != nil {
+			te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, true, false)
+		}
 		te.mu.Unlock()
 		return true
 	}
@@ -246,6 +259,9 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 	}
 	te.mu.Lock()
 	te.ExecutionStats.FailedTasks++
+	if te.BuildResult != nil {
+		te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, false, false)
+	}
 	te.mu.Unlock()
 	return false
 }

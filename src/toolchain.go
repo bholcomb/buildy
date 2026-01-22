@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -58,6 +60,85 @@ func NewToolchainConfig(name, description string) *ToolchainConfig {
 		ExecutionConfig: make(map[string]any),
 		Tools:           make(map[string]*Tool),
 	}
+}
+
+// HashToolchainConfig produces a deterministic hash of the toolchain content.
+// It intentionally avoids raw map marshalling by converting to sorted slices.
+func HashToolchainConfig(tc *ToolchainConfig) string {
+	if tc == nil {
+		return ""
+	}
+
+	type flagEntry struct {
+		Key    string   `json:"key"`
+		Values []string `json:"values"`
+	}
+
+	type toolEntry struct {
+		Name            string      `json:"name"`
+		Action          string      `json:"action"`
+		Command         string      `json:"command"`
+		InputExtensions []string    `json:"input_extensions"`
+		OutputExtension string      `json:"output_extension"`
+		OutputPattern   string      `json:"output_pattern"`
+		Flags           []flagEntry `json:"flags"`
+		Supports        []flagEntry `json:"supports"` // reuse flagEntry for map[string]any stringified
+	}
+
+	tools := make([]toolEntry, 0, len(tc.Tools))
+	for name, tool := range tc.Tools {
+		flags := make([]flagEntry, 0, len(tool.Flags))
+		for k, vals := range tool.Flags {
+			sortedVals := append([]string{}, vals...)
+			sort.Strings(sortedVals)
+			flags = append(flags, flagEntry{Key: k, Values: sortedVals})
+		}
+		sort.Slice(flags, func(i, j int) bool { return flags[i].Key < flags[j].Key })
+
+		supports := make([]flagEntry, 0, len(tool.Supports))
+		for k, v := range tool.Supports {
+			supports = append(supports, flagEntry{Key: k, Values: []string{fmt.Sprintf("%v", v)}})
+		}
+		sort.Slice(supports, func(i, j int) bool { return supports[i].Key < supports[j].Key })
+
+		tools = append(tools, toolEntry{
+			Name:            name,
+			Action:          tool.Action,
+			Command:         tool.Command,
+			InputExtensions: append([]string{}, tool.InputExtensions...),
+			OutputExtension: tool.OutputExtension,
+			OutputPattern:   tool.OutputPattern,
+			Flags:           flags,
+			Supports:        supports,
+		})
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+
+	execEntries := []flagEntry{}
+	for k, v := range tc.ExecutionConfig {
+		execEntries = append(execEntries, flagEntry{Key: k, Values: []string{fmt.Sprintf("%v", v)}})
+	}
+	sort.Slice(execEntries, func(i, j int) bool { return execEntries[i].Key < execEntries[j].Key })
+
+	payload := map[string]any{
+		"name":             tc.Name,
+		"description":      tc.Description,
+		"target_platform":  tc.TargetPlatform,
+		"target_arch":      tc.TargetArchitecture,
+		"host_platform":    tc.HostPlatform,
+		"host_arch":        tc.HostArchitecture,
+		"execution_type":   tc.ExecutionType,
+		"execution_config": execEntries,
+		"tools":            tools,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return tc.Name // Fallback to name-based hash
+	}
+
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // LoadToolchainConfig loads a toolchain configuration from a YAML file

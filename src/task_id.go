@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
@@ -64,3 +65,117 @@ func sanitizeToken(value string) string {
 	value = strings.Trim(value, "_")
 	return strings.ToLower(value)
 }
+
+// TaskIDRegistry maintains a bidirectional mapping between target names and task IDs
+// This avoids fragile string parsing to extract target names from task IDs
+type TaskIDRegistry struct {
+	mu sync.RWMutex
+	
+	// targetToLinkTask maps target name -> link task ID
+	targetToLinkTask map[string]string
+	
+	// taskToTarget maps task ID -> target name
+	taskToTarget map[string]string
+	
+	// moduleTargets maps module path -> list of target names
+	moduleTargets map[string][]string
+}
+
+// NewTaskIDRegistry creates a new TaskIDRegistry
+func NewTaskIDRegistry() *TaskIDRegistry {
+	return &TaskIDRegistry{
+		targetToLinkTask: make(map[string]string),
+		taskToTarget:     make(map[string]string),
+		moduleTargets:    make(map[string][]string),
+	}
+}
+
+// RegisterTarget registers a target name to its link task ID
+func (r *TaskIDRegistry) RegisterTarget(targetName, linkTaskID, modulePath string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	r.targetToLinkTask[targetName] = linkTaskID
+	r.taskToTarget[linkTaskID] = targetName
+	
+	// Track targets per module
+	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
+}
+
+// GetLinkTaskID returns the link task ID for a target name
+func (r *TaskIDRegistry) GetLinkTaskID(targetName string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	taskID, ok := r.targetToLinkTask[targetName]
+	return taskID, ok
+}
+
+// GetTargetName returns the target name for a task ID
+func (r *TaskIDRegistry) GetTargetName(taskID string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	targetName, ok := r.taskToTarget[taskID]
+	return targetName, ok
+}
+
+// GetModuleTargets returns all target names for a module
+func (r *TaskIDRegistry) GetModuleTargets(modulePath string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	targets := r.moduleTargets[modulePath]
+	// Return a copy to avoid races
+	result := make([]string, len(targets))
+	copy(result, targets)
+	return result
+}
+
+// GetAllTargets returns all registered target names
+func (r *TaskIDRegistry) GetAllTargets() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	targets := make([]string, 0, len(r.targetToLinkTask))
+	for name := range r.targetToLinkTask {
+		targets = append(targets, name)
+	}
+	return targets
+}
+
+// ResolveDependency resolves a dependency string to a task ID
+// It handles both raw target names and already-resolved task IDs
+func (r *TaskIDRegistry) ResolveDependency(dep string) (string, bool) {
+	// If it looks like a task ID already, return it
+	if isTaskID(dep) {
+		return dep, true
+	}
+	
+	// Otherwise, look it up as a target name
+	return r.GetLinkTaskID(dep)
+}
+
+// Clear removes all entries from the registry
+func (r *TaskIDRegistry) Clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	r.targetToLinkTask = make(map[string]string)
+	r.taskToTarget = make(map[string]string)
+	r.moduleTargets = make(map[string][]string)
+}
+
+// isTaskID checks if a string looks like a task ID (rather than a target name)
+func isTaskID(s string) bool {
+	prefixes := []string{"setup_", "compile_", "link_", "go_build_", "transform_", "generate_"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Global registry instance for cross-module dependency resolution
+var globalTaskRegistry = NewTaskIDRegistry()
