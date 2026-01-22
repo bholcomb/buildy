@@ -1,0 +1,30 @@
+project:
+  name: buildy
+  version: "1.0.0"
+  description: "Multi-language build system"
+
+variables:
+  import_env_vars:
+    - name: BUILDY_CACHE_DIR
+      default: ".buildy_cache"
+
+environment:
+  toolchains:
+    default: go
+    linux: go-linux
+    windows: go-windows
+    macos: go-macos
+    
+  configurations:
+    debug:
+      defines: []
+    release:
+      defines: []
+
+targets:
+  go_modules:
+    - name: buildy
+      path: "src"
+      output: "bin/buildy"
+      build_tags: []
+      ldflags: []

@@ -159,14 +159,21 @@ func (pm *PackageManager) LoadPackage(name string, platform, architecture string
 		pkg.Description = desc
 	}
 
-	// Resolve each field with hierarchical platform/architecture merging
-	pkg.IncludeDirs = pm.resolveHierarchicalStringList(packageData, "include_dirs", platform, architecture, pkgVarEnv)
-	pkg.LibDirs = pm.resolveHierarchicalStringList(packageData, "lib_dirs", platform, architecture, pkgVarEnv)
-	pkg.Libs = pm.resolveHierarchicalStringList(packageData, "libs", platform, architecture, pkgVarEnv)
-	pkg.Frameworks = pm.resolveHierarchicalStringList(packageData, "frameworks", platform, architecture, pkgVarEnv)
-	pkg.Defines = pm.resolveHierarchicalStringList(packageData, "defines", platform, architecture, pkgVarEnv)
-	pkg.Sources = pm.resolveHierarchicalStringList(packageData, "sources", platform, architecture, pkgVarEnv)
-	pkg.Packages = pm.resolveHierarchicalStringList(packageData, "packages", platform, architecture, pkgVarEnv)
+	// Check for new format with top-level platform subsections (common, linux, windows, etc.)
+	// vs old format with per-field platform subsections
+	if _, hasCommon := packageData["common"]; hasCommon {
+		// New format: top-level platform subsections
+		pm.resolveNewPackageFormat(pkg, packageData, platform, architecture, pkgVarEnv)
+	} else {
+		// Legacy format: per-field platform subsections
+		pkg.IncludeDirs = pm.resolveHierarchicalStringList(packageData, "include_dirs", platform, architecture, pkgVarEnv)
+		pkg.LibDirs = pm.resolveHierarchicalStringList(packageData, "lib_dirs", platform, architecture, pkgVarEnv)
+		pkg.Libs = pm.resolveHierarchicalStringList(packageData, "libs", platform, architecture, pkgVarEnv)
+		pkg.Frameworks = pm.resolveHierarchicalStringList(packageData, "frameworks", platform, architecture, pkgVarEnv)
+		pkg.Defines = pm.resolveHierarchicalStringList(packageData, "defines", platform, architecture, pkgVarEnv)
+		pkg.Sources = pm.resolveHierarchicalStringList(packageData, "sources", platform, architecture, pkgVarEnv)
+		pkg.Packages = pm.resolveHierarchicalStringList(packageData, "packages", platform, architecture, pkgVarEnv)
+	}
 
 	// Cache the package
 	pm.packages[name] = pkg
@@ -181,7 +188,48 @@ func (pm *PackageManager) LoadPackage(name string, platform, architecture string
 	return pkg, nil
 }
 
-// resolveHierarchicalStringList resolves a field with platform/architecture hierarchy
+// resolveNewPackageFormat resolves package data from new format with top-level platform subsections
+func (pm *PackageManager) resolveNewPackageFormat(pkg *Package, packageData map[string]any, platform, architecture string, varEnv *VariableEnvironment) {
+	// Helper to extract string list from a section
+	extractStringList := func(section map[string]any, field string) []string {
+		result := []string{}
+		if value, ok := section[field]; ok {
+			switch v := value.(type) {
+			case string:
+				resolved := pm.resolveVariables(v, varEnv)
+				result = append(result, resolved)
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						resolved := pm.resolveVariables(str, varEnv)
+						result = append(result, resolved)
+					}
+				}
+			}
+		}
+		return result
+	}
+
+	// Process sections in inheritance order: common -> platform -> platform-arch
+	sectionsToProcess := []string{"common", platform, platform + "-" + architecture}
+
+	for _, sectionName := range sectionsToProcess {
+		section, ok := packageData[sectionName].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		pkg.IncludeDirs = append(pkg.IncludeDirs, extractStringList(section, "include_dirs")...)
+		pkg.LibDirs = append(pkg.LibDirs, extractStringList(section, "lib_dirs")...)
+		pkg.Libs = append(pkg.Libs, extractStringList(section, "libs")...)
+		pkg.Frameworks = append(pkg.Frameworks, extractStringList(section, "frameworks")...)
+		pkg.Defines = append(pkg.Defines, extractStringList(section, "defines")...)
+		pkg.Sources = append(pkg.Sources, extractStringList(section, "sources")...)
+		pkg.Packages = append(pkg.Packages, extractStringList(section, "packages")...)
+	}
+}
+
+// resolveHierarchicalStringList resolves a field with platform/architecture hierarchy (legacy format)
 func (pm *PackageManager) resolveHierarchicalStringList(data map[string]any, field, platform, architecture string, varEnv *VariableEnvironment) []string {
 	result := []string{}
 

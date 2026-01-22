@@ -1,0 +1,39 @@
+build_system:
+  name: go_mod
+  description: "Go modules build system"
+  
+  detection:
+    marker_files: ["go.mod"]
+    priority: 10
+  
+  phases:
+    configure:
+      # Go modules don't have a separate configure step
+      command: "go mod download"
+      working_dir: "{source_dir}"
+      required: false
+    
+    build:
+      command: "go build -o {build_dir}/ {args} ./..."
+      working_dir: "{source_dir}"
+      required: true
+    
+    test:
+      command: "go test ./..."
+      working_dir: "{source_dir}"
+      required: false
+    
+    install:
+      command: "go install ./..."
+      working_dir: "{source_dir}"
+      required: false
+    
+    clean:
+      command: "go clean"
+      working_dir: "{source_dir}"
+      required: false
+  
+  output:
+    include_patterns: []
+    lib_patterns:
+      - "{build_dir}"

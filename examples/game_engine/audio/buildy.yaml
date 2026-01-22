@@ -1,20 +1,22 @@
 project:
-  name: audio
+  name: engine_audio
   description: "Audio engine"
 
 variables:
   MODULE_NAME: "engine_audio"
 
-library:
-  name: engine_audio
-  type: static_library
-  sources:
-    - "src/audio.cpp"
-    - "src/sound.cpp"
-    - "src/music.cpp"
-  include_dirs:
-    - "include"
-    - "../core/include"  # Need core headers
-  depends_on:
-    - core:engine_core  # Scoped dependency (explicit)
-
+targets:
+  libraries:
+    - name: engine_audio
+      type: static_library
+      language: c++
+      sources:
+        - "src/audio.cpp"
+        - "src/sound.cpp"
+        - "src/music.cpp"
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]
+        private: ["../core/include"]
+      depends_on:
+        targets: ["engine_core"]

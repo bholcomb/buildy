@@ -1,33 +1,37 @@
-
 project:
-  name: "math-library"
+  name: math-library
   version: "1.0.0"
+  description: "Simple math library example"
 
-config:
-  cpp_standard: "c++20"
-  optimization: "-O0"
-  defines:
-    - "DEBUG=1"
-    - "MATH_LIB_VERSION=1"
-  compiler_flags:
-    - "-Wall"
-    - "-Wextra"
-    - "-g"
+environment:
+  compile:
+    cpp_standard: "c++20"
+    warnings: ["-Wall", "-Wextra"]
+    
+  configurations:
+    debug:
+      optimization: "-O0"
+      defines: ["DEBUG=1", "MATH_LIB_VERSION=1"]
+      flags: ["-g"]
+    release:
+      optimization: "-O3"
+      defines: ["NDEBUG=1", "MATH_LIB_VERSION=1"]
 
-library:
-  - name: "mathcore"
-    sources: "libsrc/*.cpp"
-    include_dirs:
-      - "include"
+targets:
+  libraries:
+    - name: mathcore
+      type: static_library
+      language: c++
+      sources: ["libsrc/*.cpp"]
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]
 
-executable:
-  - name: "calculator"
-    sources: "appsrc/main.cpp"
-    include_dirs:
-      - "include"
-    depends_on:
-      - "mathcore"
-
-output:
-  base_dir: "build"
-  pattern: "${base_dir}/${platform}-${arch}-${config}"
+  executables:
+    - name: calculator
+      language: c++
+      sources: ["appsrc/main.cpp"]
+      include_dirs:
+        private: ["include"]
+      depends_on:
+        targets: ["mathcore"]

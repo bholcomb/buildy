@@ -115,7 +115,38 @@ func (cp *ConfigParser) validateConfig(config map[string]any) []string {
 		}
 	}
 
-	// Validate library (can be a single dict or list of dicts)
+	// Helper to validate target list
+	validateTargetList := func(targets []any, targetType string) {
+		for i, targetRaw := range targets {
+			target, ok := targetRaw.(map[string]any)
+			if !ok {
+				errors = append(errors, fmt.Sprintf("%s %d must be a dictionary", targetType, i))
+				continue
+			}
+			if _, ok := target["name"].(string); !ok {
+				errors = append(errors, fmt.Sprintf("%s %d missing required 'name' field", targetType, i))
+			}
+			if _, ok := target["sources"]; !ok {
+				targetName := "unknown"
+				if name, ok := target["name"].(string); ok {
+					targetName = name
+				}
+				errors = append(errors, fmt.Sprintf("%s '%s' missing required 'sources' field", targetType, targetName))
+			}
+		}
+	}
+
+	// Validate new format: targets.libraries and targets.executables
+	if targets, ok := config["targets"].(map[string]any); ok {
+		if libs, ok := targets["libraries"].([]any); ok {
+			validateTargetList(libs, "Library")
+		}
+		if exes, ok := targets["executables"].([]any); ok {
+			validateTargetList(exes, "Executable")
+		}
+	}
+
+	// Validate legacy library format (can be a single dict or list of dicts)
 	if library, ok := config["library"]; ok {
 		var libraries []any
 		switch v := library.(type) {
@@ -126,27 +157,10 @@ func (cp *ConfigParser) validateConfig(config map[string]any) []string {
 		default:
 			errors = append(errors, "'library' must be a dictionary or list of dictionaries")
 		}
-
-		for i, libRaw := range libraries {
-			lib, ok := libRaw.(map[string]any)
-			if !ok {
-				errors = append(errors, fmt.Sprintf("Library %d must be a dictionary", i))
-				continue
-			}
-			if _, ok := lib["name"].(string); !ok {
-				errors = append(errors, fmt.Sprintf("Library %d missing required 'name' field", i))
-			}
-			if _, ok := lib["sources"]; !ok {
-				libName := "unknown"
-				if name, ok := lib["name"].(string); ok {
-					libName = name
-				}
-				errors = append(errors, fmt.Sprintf("Library '%s' missing required 'sources' field", libName))
-			}
-		}
+		validateTargetList(libraries, "Library")
 	}
 
-	// Validate executable (can be a single dict or list of dicts)
+	// Validate legacy executable format (can be a single dict or list of dicts)
 	if executable, ok := config["executable"]; ok {
 		var executables []any
 		switch v := executable.(type) {
@@ -157,20 +171,7 @@ func (cp *ConfigParser) validateConfig(config map[string]any) []string {
 		default:
 			errors = append(errors, "'executable' must be a dictionary or list of dictionaries")
 		}
-
-		for i, exeRaw := range executables {
-			exe, ok := exeRaw.(map[string]any)
-			if !ok {
-				errors = append(errors, fmt.Sprintf("Executable %d must be a dictionary", i))
-				continue
-			}
-			if _, ok := exe["name"].(string); !ok {
-				errors = append(errors, fmt.Sprintf("Executable %d missing 'name'", i))
-			}
-			if _, ok := exe["sources"]; !ok {
-				errors = append(errors, fmt.Sprintf("Executable %d missing 'sources'", i))
-			}
-		}
+		validateTargetList(executables, "Executable")
 	}
 
 	// Validate output paths don't escape project
@@ -313,6 +314,23 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 			moduleConfig[k] = v
 		}
 
+		// Inherit environment section from workspace if module doesn't have one
+		if workspaceEnv, ok := cp.Workspace.Config.RawConfig["environment"].(map[string]any); ok {
+			if _, hasEnv := moduleConfig["environment"]; !hasEnv {
+				moduleConfig["environment"] = workspaceEnv
+			} else if moduleEnv, ok := moduleConfig["environment"].(map[string]any); ok {
+				// Merge: workspace environment as base, module environment overrides
+				mergedEnv := make(map[string]any)
+				for k, v := range workspaceEnv {
+					mergedEnv[k] = v
+				}
+				for k, v := range moduleEnv {
+					mergedEnv[k] = v
+				}
+				moduleConfig["environment"] = mergedEnv
+			}
+		}
+
 		if workspaceConfig, ok := cp.Workspace.Config.RawConfig["config"].(map[string]any); ok {
 			// Workspace config is the base, module config overrides
 			mergedModuleConfig := make(map[string]any)
@@ -442,6 +460,16 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 
 	// 1. Workspace-level variables
 	cp.VarEnv.PushScope("workspace")
+	
+	// Process import_env_vars first (if present in variables section)
+	if variablesSection, ok := config["variables"].(map[string]any); ok {
+		if err := cp.VarEnv.ImportEnvVars(variablesSection, "buildy.yaml"); err != nil {
+			return nil, err
+		}
+		// Extract platform-specific variables
+		cp.VarEnv.ExtractPlatformVariables(variablesSection, cp.Platform, "variables")
+	}
+	
 	cp.VarEnv.ExtractVariablesFromSection(config, "workspace")
 
 	// Extract configuration sections
@@ -569,6 +597,31 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 		configurations = c
 	}
 
+	// NEW DSL: Also extract from environment section
+	if env, ok := resolvedConfig["environment"].(map[string]any); ok {
+		// environment.compile -> merge into globalConfig
+		if compile, ok := env["compile"].(map[string]any); ok {
+			for k, v := range compile {
+				globalConfig[k] = v
+			}
+		}
+		// environment.configurations -> merge into configurations
+		if envConfigs, ok := env["configurations"].(map[string]any); ok {
+			for configName, configData := range envConfigs {
+				if configMap, ok := configData.(map[string]any); ok {
+					if _, exists := configurations[configName]; !exists {
+						configurations[configName] = configMap
+					} else if existingMap, ok := configurations[configName].(map[string]any); ok {
+						// Merge: environment.configurations overrides top-level configurations
+						for k, v := range configMap {
+							existingMap[k] = v
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Merge configuration hierarchy
 	mergedConfig := cp.mergeConfigs(
 		globalConfig,
@@ -586,44 +639,77 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	setupTask := cp.createSetupTask(outputDir)
 	tasks = append(tasks, &setupTask)
 
-	// Generate library tasks
+	// Generate library tasks - support both old and new formats
+	libraries := []any{}
+	
+	// New format: targets.libraries
+	if targets, ok := resolvedConfig["targets"].(map[string]any); ok {
+		if libs, ok := targets["libraries"].([]any); ok {
+			libraries = append(libraries, libs...)
+		}
+	}
+	
+	// Legacy format: library (single or list)
 	if library, ok := resolvedConfig["library"]; ok {
-		var libraries []any
 		switch v := library.(type) {
 		case map[string]any:
-			libraries = []any{v}
+			libraries = append(libraries, v)
 		case []any:
-			libraries = v
-		}
-
-		for _, libRaw := range libraries {
-			if lib, ok := libRaw.(map[string]any); ok {
-				libTasks, err := cp.generateLibraryTasks(lib, mergedConfig, outputDir, setupTask.TaskID)
-				if err != nil {
-					return nil, err
-				}
-				tasks = append(tasks, libTasks...)
-			}
+			libraries = append(libraries, v...)
 		}
 	}
 
-	// Generate executable tasks
+	for _, libRaw := range libraries {
+		if lib, ok := libRaw.(map[string]any); ok {
+			libTasks, err := cp.generateLibraryTasks(lib, mergedConfig, outputDir, setupTask.TaskID)
+			if err != nil {
+				return nil, err
+			}
+			tasks = append(tasks, libTasks...)
+		}
+	}
+
+	// Generate executable tasks - support both old and new formats
+	executables := []any{}
+	
+	// New format: targets.executables
+	if targets, ok := resolvedConfig["targets"].(map[string]any); ok {
+		if exes, ok := targets["executables"].([]any); ok {
+			executables = append(executables, exes...)
+		}
+	}
+	
+	// Legacy format: executable (single or list)
 	if executable, ok := resolvedConfig["executable"]; ok {
-		var executables []any
 		switch v := executable.(type) {
 		case map[string]any:
-			executables = []any{v}
+			executables = append(executables, v)
 		case []any:
-			executables = v
+			executables = append(executables, v...)
 		}
+	}
 
-		for _, exeRaw := range executables {
-			if exe, ok := exeRaw.(map[string]any); ok {
-				exeTasks, err := cp.generateExecutableTasks(exe, mergedConfig, outputDir, setupTask.TaskID, tasks)
-				if err != nil {
-					return nil, err
+	for _, exeRaw := range executables {
+		if exe, ok := exeRaw.(map[string]any); ok {
+			exeTasks, err := cp.generateExecutableTasks(exe, mergedConfig, outputDir, setupTask.TaskID, tasks)
+			if err != nil {
+				return nil, err
+			}
+			tasks = append(tasks, exeTasks...)
+		}
+	}
+
+	// Generate Go module tasks
+	if targets, ok := resolvedConfig["targets"].(map[string]any); ok {
+		if goModules, ok := targets["go_modules"].([]any); ok {
+			for _, goModRaw := range goModules {
+				if goMod, ok := goModRaw.(map[string]any); ok {
+					goTasks, err := cp.generateGoModuleTasks(goMod, mergedConfig, outputDir, setupTask.TaskID)
+					if err != nil {
+						return nil, err
+					}
+					tasks = append(tasks, goTasks...)
 				}
-				tasks = append(tasks, exeTasks...)
 			}
 		}
 	}
@@ -729,15 +815,35 @@ func (cp *ConfigParser) resolvePackages(targetConfig map[string]any) error {
 	}
 
 	// Get packages list from target config
+	// Preferred format: packages: [...] at target level
+	// Legacy format: depends_on.packages: [...] (deprecated)
 	var packageNames []string
+	
+	// Preferred format: packages at target level
 	if packages, ok := targetConfig["packages"]; ok {
 		switch v := packages.(type) {
 		case string:
-			packageNames = []string{v}
+			packageNames = append(packageNames, v)
 		case []any:
 			for _, item := range v {
 				if str, ok := item.(string); ok {
 					packageNames = append(packageNames, str)
+				}
+			}
+		}
+	}
+	
+	// Legacy format: depends_on.packages (still supported for backwards compatibility)
+	if dependsOn, ok := targetConfig["depends_on"].(map[string]any); ok {
+		if packages, ok := dependsOn["packages"]; ok {
+			switch v := packages.(type) {
+			case string:
+				packageNames = append(packageNames, v)
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						packageNames = append(packageNames, str)
+					}
 				}
 			}
 		}
@@ -779,8 +885,25 @@ func (cp *ConfigParser) resolvePackages(targetConfig map[string]any) error {
 				}
 			case []string:
 				existingIncludes = v
+			case map[string]any:
+				// Handle new format with public/private subsections
+				if publicDirs, ok := v["public"].([]any); ok {
+					for _, item := range publicDirs {
+						if str, ok := item.(string); ok {
+							existingIncludes = append(existingIncludes, str)
+						}
+					}
+				}
+				if privateDirs, ok := v["private"].([]any); ok {
+					for _, item := range privateDirs {
+						if str, ok := item.(string); ok {
+							existingIncludes = append(existingIncludes, str)
+						}
+					}
+				}
 			}
 		}
+		// Prepend package includes, then add target includes
 		targetConfig["include_dirs"] = append(mergedPackage.IncludeDirs, existingIncludes...)
 	}
 
@@ -1050,43 +1173,183 @@ func (cp *ConfigParser) resolveIncludeDirs(itemConfig map[string]any) ([]string,
 	}
 
 	var includeDirs []string
-
-	switch v := includeDirsRaw.(type) {
-	case []any:
-		for _, incRaw := range v {
-			if inc, ok := incRaw.(string); ok {
-				if cp.ConfigFileDir != "" {
-					absIncPath := filepath.Join(cp.ConfigFileDir, inc)
-					cwd, _ := os.Getwd()
-					relIncPath, err := filepath.Rel(cwd, absIncPath)
-					if err != nil {
-						includeDirs = append(includeDirs, absIncPath)
-					} else {
-						includeDirs = append(includeDirs, relIncPath)
-					}
-				} else {
-					includeDirs = append(includeDirs, inc)
+	
+	// Helper to resolve a single path
+	resolvePath := func(inc string) string {
+		// Skip absolute paths (start with / or have a drive letter on Windows)
+		if filepath.IsAbs(inc) {
+			return inc
+		}
+		// Only resolve relative paths with the config file directory
+		if cp.ConfigFileDir != "" && cp.ConfigFileDir != "." {
+			absIncPath := filepath.Join(cp.ConfigFileDir, inc)
+			cwd, _ := os.Getwd()
+			relIncPath, err := filepath.Rel(cwd, absIncPath)
+			if err != nil {
+				return absIncPath
+			}
+			return relIncPath
+		}
+		return inc
+	}
+	
+	// Helper to extract paths from a value
+	extractPaths := func(value any) []string {
+		result := []string{}
+		switch v := value.(type) {
+		case string:
+			result = append(result, resolvePath(v))
+		case []any:
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					result = append(result, resolvePath(str))
 				}
 			}
+		case []string:
+			for _, str := range v {
+				result = append(result, resolvePath(str))
+			}
 		}
+		return result
+	}
+
+	switch v := includeDirsRaw.(type) {
+	case map[string]any:
+		// New format with public/private subsections
+		if publicDirs, ok := v["public"]; ok {
+			includeDirs = append(includeDirs, extractPaths(publicDirs)...)
+		}
+		if privateDirs, ok := v["private"]; ok {
+			includeDirs = append(includeDirs, extractPaths(privateDirs)...)
+		}
+	case []any:
+		// Legacy format: simple list
+		includeDirs = extractPaths(v)
 	case []string:
-		for _, inc := range v {
-			if cp.ConfigFileDir != "" {
-				absIncPath := filepath.Join(cp.ConfigFileDir, inc)
-				cwd, _ := os.Getwd()
-				relIncPath, err := filepath.Rel(cwd, absIncPath)
-				if err != nil {
-					includeDirs = append(includeDirs, absIncPath)
-				} else {
-					includeDirs = append(includeDirs, relIncPath)
-				}
-			} else {
-				includeDirs = append(includeDirs, inc)
+		// Legacy format: simple list
+		includeDirs = extractPaths(v)
+	}
+
+	return includeDirs, nil
+}
+
+// generateGoModuleTasks generates tasks for a Go module
+func (cp *ConfigParser) generateGoModuleTasks(
+	goModConfig map[string]any,
+	mergedConfig map[string]any,
+	outputDir string,
+	setupTaskID string,
+) ([]*BuildTask, error) {
+	tasks := []*BuildTask{}
+
+	name := "go_module"
+	if n, ok := goModConfig["name"].(string); ok {
+		name = n
+	}
+
+	// Get the module path (directory containing go.mod)
+	modulePath := "."
+	if p, ok := goModConfig["path"].(string); ok {
+		modulePath = p
+	}
+
+	// Resolve path relative to config file directory
+	if cp.ConfigFileDir != "" {
+		modulePath = filepath.Join(cp.ConfigFileDir, modulePath)
+	}
+
+	// Get output path
+	output := filepath.Join(outputDir, "bin", name)
+	if o, ok := goModConfig["output"].(string); ok {
+		output = o
+		if !filepath.IsAbs(output) {
+			output = filepath.Join(outputDir, output)
+		}
+	}
+
+	// Add .exe extension on Windows
+	if cp.Platform == "windows" && !strings.HasSuffix(output, ".exe") {
+		output += ".exe"
+	}
+
+	// Build the go build command
+	cmdParts := []string{"go", "build", "-o", output}
+
+	// Add build tags if specified
+	if tags, ok := goModConfig["build_tags"].([]any); ok && len(tags) > 0 {
+		tagStrs := []string{}
+		for _, t := range tags {
+			if str, ok := t.(string); ok {
+				tagStrs = append(tagStrs, str)
+			}
+		}
+		if len(tagStrs) > 0 {
+			cmdParts = append(cmdParts, "-tags", strings.Join(tagStrs, ","))
+		}
+	}
+
+	// Add ldflags based on configuration
+	ldflags := []string{}
+	if cp.Configuration == "release" {
+		ldflags = append(ldflags, "-s", "-w") // Strip debug info
+	}
+
+	// Add custom ldflags
+	if flags, ok := goModConfig["ldflags"].([]any); ok {
+		for _, f := range flags {
+			if str, ok := f.(string); ok {
+				ldflags = append(ldflags, str)
 			}
 		}
 	}
 
-	return includeDirs, nil
+	if len(ldflags) > 0 {
+		cmdParts = append(cmdParts, "-ldflags", strings.Join(ldflags, " "))
+	}
+
+	// Add gcflags for debug builds
+	if cp.Configuration == "debug" {
+		cmdParts = append(cmdParts, "-gcflags", "all=-N -l")
+	}
+
+	// Add trimpath for release builds
+	if cp.Configuration == "release" {
+		cmdParts = append(cmdParts, "-trimpath")
+	}
+
+	// Add the package path (default to current directory)
+	cmdParts = append(cmdParts, "./...")
+
+	command := strings.Join(cmdParts, " ")
+
+	// Find go.mod file as input
+	goModFile := filepath.Join(modulePath, "go.mod")
+	inputs := []TaskInput{}
+	if _, err := os.Stat(goModFile); err == nil {
+		inputs = append(inputs, NewTaskInput(goModFile))
+	}
+
+	// Create the build task
+	taskID := cp.TaskIDGen.Next("go_build", name)
+	task := NewBuildTask(
+		taskID,
+		"go_build",
+		inputs,
+		[]string{output},
+		[]string{setupTaskID},
+		command,
+	)
+	task.Platform = cp.Platform
+	task.Architecture = cp.Architecture
+	task.Configuration = cp.Configuration
+	task.EstimatedTime = 10.0 // Go builds can take a while
+	task.ResourceRequirements = ResourceRequirements{CPUCores: 2, MemoryMB: 500, DiskMB: 100}
+	task.CacheKey = task.CalculateCacheKey()
+
+	tasks = append(tasks, &task)
+
+	log.Printf("Generated Go build task: %s -> %s", name, output)
+	return tasks, nil
 }
 
 // expandGlob expands glob pattern to sorted file list

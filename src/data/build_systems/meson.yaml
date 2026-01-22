@@ -1,0 +1,37 @@
+build_system:
+  name: meson
+  description: "Meson build system"
+  
+  detection:
+    marker_files: ["meson.build"]
+    priority: 10
+  
+  phases:
+    configure:
+      command: "meson setup {build_dir} {args}"
+      default_args: ["--buildtype=release"]
+      working_dir: "{source_dir}"
+      required: true
+    
+    build:
+      command: "meson compile -C {build_dir} -j {jobs}"
+      required: true
+    
+    test:
+      command: "meson test -C {build_dir}"
+      required: false
+    
+    install:
+      command: "meson install -C {build_dir} --destdir {install_dir}"
+      required: false
+    
+    clean:
+      command: "meson compile -C {build_dir} --clean"
+      required: false
+  
+  output:
+    include_patterns:
+      - "{source_dir}/include"
+      - "{source_dir}"
+    lib_patterns:
+      - "{build_dir}"

@@ -1,18 +1,19 @@
 project:
-  name: core
+  name: engine_core
   description: "Core engine library"
 
-# Module-specific variables
 variables:
   MODULE_NAME: "engine_core"
 
-library:
-  name: engine_core
-  type: static_library
-  sources:
-    - "src/engine.cpp"
-    - "src/math.cpp"
-    - "src/memory.cpp"
-  include_dirs:
-    - "include"
-
+targets:
+  libraries:
+    - name: engine_core
+      type: static_library
+      language: c++
+      sources:
+        - "src/engine.cpp"
+        - "src/math.cpp"
+        - "src/memory.cpp"
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]

@@ -1,20 +1,22 @@
 project:
-  name: renderer
+  name: engine_renderer
   description: "Rendering engine"
 
 variables:
   MODULE_NAME: "engine_renderer"
 
-library:
-  name: engine_renderer
-  type: static_library
-  sources:
-    - "src/renderer.cpp"
-    - "src/shader.cpp"
-    - "src/texture.cpp"
-  include_dirs:
-    - "include"
-    - "../core/include"  # Need core headers
-  depends_on:
-    - engine_core  # Simple dependency (unambiguous)
-
+targets:
+  libraries:
+    - name: engine_renderer
+      type: static_library
+      language: c++
+      sources:
+        - "src/renderer.cpp"
+        - "src/shader.cpp"
+        - "src/texture.cpp"
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]
+        private: ["../core/include"]
+      depends_on:
+        targets: ["engine_core"]
