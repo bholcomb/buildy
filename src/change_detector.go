@@ -54,6 +54,7 @@ func (cd *ChangeDetector) IsCachedResultValid(task *BuildTask) bool {
 	cacheEntry, exists := cd.cache.cacheIndex[task.CacheKey]
 	cd.cache.mutex.RUnlock()
 	if !exists {
+		log.Printf("Cache miss for %s: no cache entry found", task.TaskID)
 		return false
 	}
 
@@ -75,8 +76,16 @@ func (cd *ChangeDetector) IsCachedResultValid(task *BuildTask) bool {
 		}
 	}
 
-	// Validate header dependencies (for compile tasks)
-	if len(cacheEntry.HeaderHashes) > 0 {
+	// For compile tasks, we require header dependency information to be present
+	// If no header hashes are recorded, this is a first-time build and we must
+	// rebuild to capture header dependencies (Option C)
+	if task.TaskType == "compile" {
+		if len(cacheEntry.HeaderHashes) == 0 && len(cacheEntry.HeaderDependencies) == 0 {
+			log.Printf("Cache miss for %s: no header dependencies recorded (first build)", task.TaskID)
+			return false
+		}
+
+		// Validate header dependencies
 		for headerPath, expectedHash := range cacheEntry.HeaderHashes {
 			if _, err := os.Stat(headerPath); os.IsNotExist(err) {
 				log.Printf("Cache miss for %s: header %s deleted", task.TaskID, headerPath)
@@ -97,7 +106,7 @@ func (cd *ChangeDetector) IsCachedResultValid(task *BuildTask) bool {
 }
 
 // DetectChanges detects what changed since last build
-func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[string]interface{}, toolchainFile string) (*ChangeSet, error) {
+func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[string]interface{}, currentToolchainHash string) (*ChangeSet, error) {
 	changes := &ChangeSet{
 		ModifiedFiles: make([]string, 0),
 		NewFiles:      make([]string, 0),
@@ -117,22 +126,10 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	}
 
 	// Check toolchain hash
-	currentToolchainHash := ""
-	if toolchainFile != "" {
-		hash, err := HashFile(toolchainFile)
-		if err == nil {
-			currentToolchainHash = hash
-		}
-	}
-
 	// Compare hashes - any difference triggers rebuild
 	if currentToolchainHash != cd.buildState.ToolchainHash {
-		if toolchainFile != "" {
-			log.Println("Toolchain changed")
-		} else {
-			log.Println("Toolchain file not found (both builds), skipping toolchain check")
-		}
-		// Only trigger rebuild if at least one side has a toolchain
+		log.Println("Toolchain changed")
+		// Only trigger rebuild if at least one side has a toolchain hash
 		if currentToolchainHash != "" || cd.buildState.ToolchainHash != "" {
 			changes.ToolchainChanged = true
 			return changes, nil // Full rebuild needed

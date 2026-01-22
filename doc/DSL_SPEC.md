@@ -534,6 +534,47 @@ targets:
         flags: ["-ffast-math"]
 ```
 
+### Source Patterns
+
+The `sources` field accepts glob patterns to match source files. By default, if a glob pattern matches no files, the build will **fail** with an error. This helps catch configuration mistakes early.
+
+**Simple string patterns:**
+
+```yaml
+sources:
+  - "src/*.cpp"           # All .cpp files in src/
+  - "src/**/*.cpp"        # All .cpp files recursively
+```
+
+**Optional patterns (may match zero files):**
+
+For patterns that may legitimately match zero files (e.g., platform-specific sources, optional plugin directories), use the object form with `optional: true`:
+
+```yaml
+sources:
+  - "src/*.cpp"                                    # Required - error if no matches
+  - {pattern: "src/plugins/*.cpp", optional: true} # Optional - no error if empty
+  - {pattern: "src/platform/linux/*.cpp", optional: true}
+```
+
+**Mixing required and optional patterns:**
+
+```yaml
+targets:
+  libraries:
+    - name: my_lib
+      sources:
+        - "src/core/*.cpp"                              # Must have at least one file
+        - {pattern: "src/optional/*.cpp", optional: true}  # May be empty
+        - {pattern: "contrib/*.cpp", optional: true}       # May be empty
+```
+
+| Syntax | Behavior |
+|--------|----------|
+| `"pattern"` | **Required** - build fails if pattern matches no files |
+| `{pattern: "...", optional: true}` | **Optional** - empty matches are silently skipped |
+| `{pattern: "...", optional: false}` | Same as string form (default) |
+
 ### Executables
 
 ```yaml
@@ -1130,15 +1171,17 @@ targets:
 ## 12. CLI Reference
 
 ```bash
-# Basic build
+# Basic build (platform/architecture auto-detected from host)
 buildy
 
 # Specify configuration
 buildy --config release
 buildy --config debug
 
-# Specify platform/architecture
+# Specify platform/architecture (auto-detected by default)
 buildy --platform linux --arch x86_64
+buildy --platform macos --arch arm64
+buildy --platform windows --arch x86_64
 
 # Override toolchain
 buildy --toolchain clang-linux
@@ -1155,12 +1198,44 @@ buildy --ignore-lock       # Ignore lockfile
 buildy --target engine_core
 buildy --target game
 
+# IDE integration
+buildy --compile-commands  # Generate buildy/compile_commands.json for IDE tooling
+
 # Other options
 buildy --jobs 8            # Parallel jobs
 buildy --verbose           # Verbose output
 buildy --dry-run           # Show what would be built
 buildy --clean             # Clean build outputs
 buildy --force             # Ignore cache, rebuild all
+```
+
+### Platform Auto-Detection
+
+By default, buildy auto-detects the host platform and architecture:
+
+| Host OS | Detected Platform | Detected Architecture |
+|---------|-------------------|----------------------|
+| Linux | `linux` | `x86_64` or `arm64` |
+| macOS | `macos` | `x86_64` or `arm64` |
+| Windows | `windows` | `x86_64` or `x86` |
+
+Use `--platform` and `--architecture` to override for cross-compilation.
+
+### IDE Integration
+
+The `--compile-commands` flag generates a `compile_commands.json` file in the `buildy/` directory. This file is used by IDEs and language servers (e.g., clangd, ccls) for code intelligence features like:
+
+- Auto-completion
+- Go to definition
+- Find references
+- Error highlighting
+
+```bash
+# Generate compile_commands.json
+buildy --compile-commands
+
+# Symlink to project root for IDE discovery (optional)
+ln -s buildy/compile_commands.json compile_commands.json
 ```
 
 ---
@@ -1181,5 +1256,69 @@ buildy --force             # Ignore cache, rebuild all
 5. Check/generate lockfile (if requested)
 6. Build unified dependency graph across all targets
 7. Execute in parallel stages with content-addressable caching
-8. Warn once about system library reproducibility (at end)
+8. Generate build report (JSON + terminal summary)
+9. Warn once about system library reproducibility (at end)
 ```
+
+## 14. Build Reports
+
+After each build, buildy generates a comprehensive build report with statistics and timing information.
+
+### Terminal Summary
+
+A summary is always printed to the terminal:
+
+```
+================================================================================
+                              BUILD REPORT
+================================================================================
+Status: SUCCESS
+Duration: 2.345s (task gen: 0.123s, execution: 2.222s)
+
+Platform: linux / x86_64
+Configuration: debug
+Toolchain: clang-linux
+
+Tasks:
+  Total:       24
+  Cache hits:   18 (75.0%)
+  Cache misses:  6
+  Failed:        0
+
+By Type:
+  compile:  20 tasks
+  link:      4 tasks
+================================================================================
+```
+
+### JSON Report
+
+A detailed JSON report is saved to `.buildy_cache/build_report.json`:
+
+```json
+{
+  "start_time": "2025-01-22T10:30:00Z",
+  "end_time": "2025-01-22T10:30:02Z",
+  "total_duration_ms": 2345,
+  "task_gen_duration_ms": 123,
+  "exec_duration_ms": 2222,
+  "success": true,
+  "platform": "linux",
+  "architecture": "x86_64",
+  "configuration": "debug",
+  "toolchain": "clang-linux",
+  "cache_hits": 18,
+  "cache_misses": 6,
+  "failed_tasks": [],
+  "tasks_by_type": {
+    "compile": 20,
+    "link": 4
+  }
+}
+```
+
+This report can be used for:
+- CI/CD pipeline integration
+- Build performance monitoring
+- Debugging build issues
+- Historical build analysis

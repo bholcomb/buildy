@@ -79,6 +79,23 @@ func (bc *BuildCache) getCachePath(cacheKey string) string {
 	return filepath.Join(bc.objectsDir, shard, cacheKey)
 }
 
+// sanitizeCacheRelPath produces a cache-internal relative path for a build output.
+// We preserve the original directory structure to avoid filename collisions, but
+// strip drive letters and leading separators so the path remains relative.
+func sanitizeCacheRelPath(outputPath string) string {
+	cleaned := filepath.Clean(outputPath)
+
+	// Drop drive letters (Windows) to avoid creating top-level drive dirs
+	cleaned = strings.ReplaceAll(cleaned, ":", "")
+
+	// Make absolute paths relative to root so they can live inside cache dir
+	if filepath.IsAbs(cleaned) {
+		cleaned = strings.TrimPrefix(cleaned, string(filepath.Separator))
+	}
+
+	return cleaned
+}
+
 // loadCacheIndex loads cache index from disk
 func (bc *BuildCache) loadCacheIndex() error {
 	bc.mutex.Lock()
@@ -100,11 +117,16 @@ func (bc *BuildCache) loadCacheIndex() error {
 	return nil
 }
 
-// saveCacheIndex saves cache index to disk atomically
+// saveCacheIndex saves cache index to disk atomically (acquires lock)
 func (bc *BuildCache) saveCacheIndex() error {
 	bc.mutex.RLock()
 	defer bc.mutex.RUnlock()
+	return bc.saveCacheIndexLocked()
+}
 
+// saveCacheIndexLocked saves cache index to disk atomically
+// IMPORTANT: Caller must hold at least a read lock on bc.mutex
+func (bc *BuildCache) saveCacheIndexLocked() error {
 	// Ensure cache directory exists
 	if err := os.MkdirAll(bc.cacheDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
@@ -180,7 +202,8 @@ func (bc *BuildCache) RestoreCachedResult(task *BuildTask) error {
 			continue
 		}
 
-		cachedFile := filepath.Join(cacheFilesDir, filepath.Base(outputPath))
+		relPath := sanitizeCacheRelPath(outputPath)
+		cachedFile := filepath.Join(cacheFilesDir, relPath)
 		if _, err := os.Stat(cachedFile); err == nil {
 			outputDir := filepath.Dir(outputPath)
 			if outputDir != "" && outputDir != "." {
@@ -228,7 +251,12 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 				depFile = outputPath
 			}
 
-			cachedFile := filepath.Join(cacheFilesDir, filepath.Base(outputPath))
+			relPath := sanitizeCacheRelPath(outputPath)
+			cachedFile := filepath.Join(cacheFilesDir, relPath)
+			if err := os.MkdirAll(filepath.Dir(cachedFile), 0755); err != nil {
+				return fmt.Errorf("failed to create cached output directory: %w", err)
+			}
+
 			if err := copyFile(outputPath, cachedFile); err != nil {
 				return fmt.Errorf("failed to cache file: %w", err)
 			}
@@ -260,7 +288,7 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 		}
 	}
 
-	// Update cache index
+	// Update cache index and save atomically while holding the lock
 	bc.mutex.Lock()
 	bc.cacheIndex[task.CacheKey] = CacheEntry{
 		TaskID:             task.TaskID,
@@ -274,9 +302,10 @@ func (bc *BuildCache) CacheTaskResult(task *BuildTask, executionTime float64, su
 		Architecture:       task.Architecture,
 		Configuration:      task.Configuration,
 	}
+	err := bc.saveCacheIndexLocked()
 	bc.mutex.Unlock()
 
-	return bc.saveCacheIndex()
+	return err
 }
 
 // calculateFileHash calculates SHA-256 hash of file efficiently using chunked reading

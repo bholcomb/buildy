@@ -37,12 +37,17 @@ func (b *Builder) BuildWorkspace(
 	workspace *Workspace,
 	configParser *ConfigParser,
 	targetFilter []string,
-	dryRun, force bool,
-) (bool, error) {
+	options BuildOptions,
+) (*BuildResult, error) {
 	log.Printf("Starting workspace build...")
-	startTime := time.Now()
+	
+	// Initialize build result
+	result := NewBuildResult()
+	result.Platform = configParser.Platform
+	result.Architecture = configParser.Architecture
+	result.Configuration = configParser.Configuration
 
-	workspaceStateFile := filepath.Join(b.CacheDir, "workspace_state.json")
+	workspaceStateFile := filepath.Join(b.CacheDir, "incremental_build.json")
 	existingState, err := LoadBuildState(workspaceStateFile)
 	if err != nil {
 		log.Printf("WARNING: Failed to load previous build state: %v", err)
@@ -57,13 +62,27 @@ func (b *Builder) BuildWorkspace(
 
 	changeDetector := NewChangeDetector(buildState, b.Cache)
 
+	// Precompute toolchain hash (workspace-level) if available
+	currentToolchainHash := ""
+	if configParser != nil && workspace != nil && workspace.Config != nil {
+		if tc, err := configParser.selectToolchain(workspace.Config.RawConfig); err == nil && tc != nil {
+			configParser.CurrentToolchain = tc
+			configParser.ToolchainHash = HashToolchainConfig(tc)
+			currentToolchainHash = configParser.ToolchainHash
+			result.Toolchain = tc.Name
+		} else if err != nil {
+			log.Printf("WARNING: Failed to preselect toolchain for change detection: %v", err)
+		}
+	}
+
 	// Task Generation Phase
 	log.Printf("Phase 1: Task Generation")
 	taskGenStart := time.Now()
 
 	// Discover modules (with caching)
 	if _, err := workspace.DiscoverModules(false); err != nil {
-		return false, fmt.Errorf("failed to discover modules: %w", err)
+		result.Finish(false)
+		return result, fmt.Errorf("failed to discover modules: %w", err)
 	}
 
 	// Save discovery cache
@@ -72,14 +91,14 @@ func (b *Builder) BuildWorkspace(
 	}
 
 	// If we have prior build state and we're not forcing, check for changes first
-	if !force && buildState != nil && buildState.ConfigHash != "" && !dryRun {
+	if !options.Force && buildState != nil && buildState.ConfigHash != "" && !options.DryRun {
 		var currentConfig map[string]any
 		if workspace != nil && workspace.Config != nil {
 			currentConfig = workspace.Config.RawConfig
 		}
 
 		configFile := filepath.Join(workspace.RootDir, "buildy.yaml")
-		changes, detectErr := changeDetector.DetectChanges(configFile, currentConfig, "")
+		changes, detectErr := changeDetector.DetectChanges(configFile, currentConfig, currentToolchainHash)
 		if detectErr != nil {
 			log.Printf("WARNING: Change detection failed: %v", detectErr)
 		} else if !changes.HasChanges() {
@@ -94,38 +113,47 @@ func (b *Builder) BuildWorkspace(
 	// Generate tasks for all modules
 	allTasks, err := configParser.GenerateWorkspaceTasks(targetFilter)
 	if err != nil {
-		return false, fmt.Errorf("failed to generate workspace tasks: %w", err)
+		result.Finish(false)
+		return result, fmt.Errorf("failed to generate workspace tasks: %w", err)
 	}
+
+	result.TotalTasks = len(allTasks)
 
 	// Build task graph
 	graph := NewTaskGraph()
 	for _, task := range allTasks {
 		graph.AddTask(task)
+		result.TasksByType[task.TaskType]++
 	}
 
 	// Save task graph for debugging
 	b.saveTaskGraph(allTasks, graph, configParser)
 
-	taskGenDuration := time.Since(taskGenStart)
-	log.Printf("Task generation completed in %.2fs (%d tasks)", taskGenDuration.Seconds(), len(allTasks))
+	// Collect compile commands if requested
+	if options.CompileCommands {
+		b.collectCompileCommands(allTasks, result, workspace.RootDir)
+	}
+
+	result.TaskGenDuration = time.Since(taskGenStart).Seconds()
+	log.Printf("Task generation completed in %.2fs (%d tasks)", result.TaskGenDuration, len(allTasks))
 
 	// Execution Phase
 	log.Printf("Phase 2: Task Execution")
 	execStart := time.Now()
 
 	// Execute all tasks (cache will handle skipping unchanged tasks)
-	executor := NewTaskExecutor(b.Cache, changeDetector, b.MaxWorkers, 8192, nil, force)
-	success := executor.ExecuteTaskGraph(graph, dryRun)
+	executor := NewTaskExecutor(b.Cache, changeDetector, b.MaxWorkers, 8192, nil, options.Force)
+	executor.BuildResult = result // Pass result for tracking
+	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
-	execDuration := time.Since(execStart)
-	log.Printf("Task execution completed in %.2fs", execDuration.Seconds())
+	result.ExecDuration = time.Since(execStart).Seconds()
+	log.Printf("Task execution completed in %.2fs", result.ExecDuration)
 
-	totalDuration := time.Since(startTime)
-	log.Printf("Total build time: %.2fs (generation: %.2fs, execution: %.2fs)",
-		totalDuration.Seconds(), taskGenDuration.Seconds(), execDuration.Seconds())
+	// Finalize result
+	result.Finish(success)
 
 	// Save build state for future reference
-	if success && !dryRun {
+	if success && !options.DryRun {
 		workspaceConfigHash, err := HashConfig(workspace.Config.RawConfig)
 		if err != nil {
 			log.Printf("WARNING: Failed to hash workspace config: %v", err)
@@ -157,7 +185,7 @@ func (b *Builder) BuildWorkspace(
 			CompletedTasks: completedTasks,
 			FileMtimes:     fileMtimes,
 			ConfigHash:     workspaceConfigHash,
-			ToolchainHash:  "", // TODO: Track toolchain per module
+			ToolchainHash:  configParser.ToolchainHash,
 		}
 
 		if err := newState.Save(workspaceStateFile); err != nil {
@@ -165,7 +193,36 @@ func (b *Builder) BuildWorkspace(
 		}
 	}
 
-	return success, nil
+	return result, nil
+}
+
+// collectCompileCommands collects compile commands from all compile tasks
+func (b *Builder) collectCompileCommands(allTasks []*BuildTask, result *BuildResult, workspaceRoot string) {
+	for _, task := range allTasks {
+		if task.TaskType == "compile" && len(task.Inputs) > 0 {
+			// Get the source file (first input)
+			sourceFile := task.Inputs[0].Path
+			
+			// Make source file path absolute
+			absSource := sourceFile
+			if !filepath.IsAbs(sourceFile) {
+				absSource = filepath.Join(workspaceRoot, sourceFile)
+			}
+			
+			// Get output file (first output, typically .o file)
+			var outputFile string
+			for _, out := range task.Outputs {
+				if filepath.Ext(out) == ".o" || filepath.Ext(out) == ".obj" {
+					outputFile = out
+					break
+				}
+			}
+			
+			result.AddCompileCommand(workspaceRoot, task.Command, absSource, outputFile)
+		}
+	}
+	
+	log.Printf("Collected %d compile commands for compile_commands.json", len(result.CompileTasks))
 }
 
 // hashGraph generates hash of task graph structure
