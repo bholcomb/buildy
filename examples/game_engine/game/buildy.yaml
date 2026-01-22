@@ -10,28 +10,29 @@ targets:
     - name: mygame
       language: c++
       sources:
-        - "src/main.cpp"
-        - "src/game.cpp"
+        - "src/*.cpp"
       include_dirs:
         private:
           - "../core/include"
+          - "../platform/include"
           - "../renderer/include"
           - "../audio/include"
       
       # packages: External packages (provide include_dirs, lib_dirs, libs, defines)
-      # These must be declared in the root dependencies.yaml
       packages:
         - glfw3
       
-      # libs: Internal libraries to link against (order matters for static libs)
+      # libs: Internal libraries to link against
       libs:
-        - engine_renderer    # depends on engine_core, so list first
-        - engine_audio       # depends on engine_core, so list first
-        - engine_core        # base library, list last
+        - engine_renderer
+        - engine_audio
+        - engine_platform
+        - engine_core
       
-      # depends_on: Build ordering - ensures targets are built before this one
+      # depends_on: Build ordering
       depends_on:
         targets:
-          - engine_core      # Must be built first
-          - engine_renderer  # Must be built first
-          - engine_audio     # Must be built first
+          - engine_core
+          - engine_platform
+          - engine_renderer
+          - engine_audio

@@ -1,6 +1,6 @@
 project:
   name: engine_core
-  description: "Core engine library"
+  description: "Core engine library - types, math, memory, logging"
 
 variables:
   MODULE_NAME: "engine_core"
@@ -8,12 +8,14 @@ variables:
 targets:
   libraries:
     - name: engine_core
-      type: static_library
+      type: shared_library
       language: c++
       sources:
-        - "src/engine.cpp"
-        - "src/math.cpp"
-        - "src/memory.cpp"
-      public_headers: ["include/*.h"]
+        - "src/*.cpp"
+      public_headers:
+        - "include/*.h"
+        - "include/core/*.h"
       include_dirs:
         public: ["include"]
+      compile:
+        defines: ["ENGINE_CORE_EXPORTS"]

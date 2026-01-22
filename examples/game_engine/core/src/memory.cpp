@@ -1,8 +1,18 @@
-// Memory management
-int AllocateMemory(int size) {
-    return size * 1024;  // Convert KB to bytes
-}
+// Core memory - stub implementation
+#include "core/memory.h"
+#include <cstdlib>
 
-int FreeMemory(int address) {
-    return address > 0 ? 1 : 0;  // Success if valid address
-}
+namespace engine {
+
+class DefaultAllocator : public Allocator {
+public:
+    void* Allocate(usize size) override { return malloc(size); }
+    void* Reallocate(void* ptr, usize size) override { return realloc(ptr, size); }
+    void Free(void* ptr) override { free(ptr); }
+};
+
+static DefaultAllocator s_defaultAllocator;
+
+Allocator* GetDefaultAllocator() { return &s_defaultAllocator; }
+
+} // namespace engine

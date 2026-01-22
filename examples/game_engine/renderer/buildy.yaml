@@ -1,6 +1,6 @@
 project:
   name: engine_renderer
-  description: "Rendering engine"
+  description: "Rendering engine - graphics, shaders, materials"
 
 variables:
   MODULE_NAME: "engine_renderer"
@@ -8,15 +8,24 @@ variables:
 targets:
   libraries:
     - name: engine_renderer
-      type: static_library
+      type: shared_library
       language: c++
       sources:
-        - "src/renderer.cpp"
-        - "src/shader.cpp"
-        - "src/texture.cpp"
-      public_headers: ["include/*.h"]
+        - "src/*.cpp"
+      public_headers:
+        - "include/*.h"
+        - "include/renderer/*.h"
       include_dirs:
         public: ["include"]
-        private: ["../core/include"]
+        private:
+          - "../core/include"
+          - "../platform/include"
+      libs:
+        - engine_core
+        - engine_platform
       depends_on:
-        targets: ["engine_core"]
+        targets:
+          - engine_core
+          - engine_platform
+      compile:
+        defines: ["ENGINE_RENDERER_EXPORTS"]

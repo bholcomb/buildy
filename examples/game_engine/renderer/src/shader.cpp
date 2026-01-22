@@ -1,8 +1,17 @@
-// Shader system
-int CompileShader(int type) {
-    return type + 100;  // Return shader ID
-}
+// Shader - stub implementation
+#include "renderer/shader.h"
 
-int LinkShaderProgram(int vertexShader, int fragmentShader) {
-    return vertexShader + fragmentShader;
-}
+namespace engine {
+namespace renderer {
+
+static u32 s_nextShaderId = 1;
+static u32 s_nextProgramId = 1;
+
+ShaderHandle CreateShader(ShaderStage, const u8*, usize) { return {s_nextShaderId++}; }
+void DestroyShader(ShaderHandle) { /* stub */ }
+ShaderHandle LoadShaderFromFile(const char*, ShaderStage) { return {s_nextShaderId++}; }
+ShaderProgramHandle CreateShaderProgram(ShaderHandle, ShaderHandle) { return {s_nextProgramId++}; }
+void DestroyShaderProgram(ShaderProgramHandle) { /* stub */ }
+
+} // namespace renderer
+} // namespace engine
