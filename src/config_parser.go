@@ -96,7 +96,7 @@ func (cp *ConfigParser) selectToolchain(config map[string]any) (*ToolchainConfig
 			log.Printf("Using CLI-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
-		log.Printf("WARNING: CLI toolchain '%s' not found, falling back", cp.DefaultToolchain)
+		BuildWarning("config", "CLI toolchain '%s' not found, falling back", cp.DefaultToolchain)
 	}
 
 	// Check project-level toolchain
@@ -107,7 +107,7 @@ func (cp *ConfigParser) selectToolchain(config map[string]any) (*ToolchainConfig
 				log.Printf("Using project-specified toolchain: %s", tc.Name)
 				return tc, nil
 			}
-			log.Printf("WARNING: Project toolchain '%s' not found, falling back", projectToolchain)
+			BuildWarning("config", "Project toolchain '%s' not found, falling back", projectToolchain)
 		}
 	}
 
@@ -118,7 +118,7 @@ func (cp *ConfigParser) selectToolchain(config map[string]any) (*ToolchainConfig
 			log.Printf("Using workspace-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
-		log.Printf("WARNING: Workspace toolchain '%s' not found, falling back", workspaceToolchain)
+		BuildWarning("config", "Workspace toolchain '%s' not found, falling back", workspaceToolchain)
 	}
 
 	// Auto-detect based on platform/architecture
@@ -286,8 +286,8 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 				}
 				resolvedDeps = append(resolvedDeps, resolvedID)
 			} else {
-				log.Printf("WARNING: Could not resolve dependency '%s' in task '%s'", dep, task.TaskID)
-				resolvedDeps = append(resolvedDeps, dep)
+			BuildWarning("dependency", "Could not resolve dependency '%s' in task '%s'", dep, task.TaskID)
+			resolvedDeps = append(resolvedDeps, dep)
 			}
 		}
 
