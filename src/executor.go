@@ -10,15 +10,18 @@ import (
 
 // TaskExecutor executes tasks with caching, parallel execution, and resource-aware scheduling
 type TaskExecutor struct {
-	Cache          *BuildCache
-	ChangeDetector *ChangeDetector
-	MaxWorkers     int
-	MaxMemoryMB    int
-	ExecEnv        *ExecutionEnvironment
-	DisableCache   bool
-	ExecutionStats ExecutionStats
-	BuildResult    *BuildResult // Optional: for tracking execution in build report
-	mu             sync.Mutex
+	Cache               *BuildCache
+	ChangeDetector      *ChangeDetector
+	MaxWorkers          int
+	MaxMemoryMB         int
+	ExecEnv             *ExecutionEnvironment
+	DisableCache        bool
+	ExecutionStats      ExecutionStats
+	BuildResult         *BuildResult            // Optional: for tracking execution in build report
+	ShutdownManager     *ShutdownManager        // For graceful shutdown handling
+	ResponseFileManager *ResponseFileManager    // For handling long command lines on Windows
+	mu                  sync.Mutex
+	pendingOutputs      map[string][]string     // Track outputs of in-progress tasks for cleanup
 }
 
 // ExecutionStats tracks execution statistics
@@ -36,13 +39,24 @@ func NewTaskExecutor(cache *BuildCache, changeDetector *ChangeDetector, maxWorke
 		execEnv = NewNativeExecution()
 	}
 
-	return &TaskExecutor{
-		Cache:          cache,
-		ChangeDetector: changeDetector,
-		MaxWorkers:     maxWorkers,
-		MaxMemoryMB:    maxMemoryMB,
-		ExecEnv:        execEnv,
-		DisableCache:   disableCache,
+	// Initialize response file manager with cache directory
+	cacheDir := ".buildy_cache"
+	if cache != nil {
+		cacheDir = cache.cacheDir
+	}
+	rfmConfig := DefaultResponseFileConfig(cacheDir)
+	rfm := NewResponseFileManager(rfmConfig)
+
+	te := &TaskExecutor{
+		Cache:               cache,
+		ChangeDetector:      changeDetector,
+		MaxWorkers:          maxWorkers,
+		MaxMemoryMB:         maxMemoryMB,
+		ExecEnv:             execEnv,
+		DisableCache:        disableCache,
+		ShutdownManager:     GetShutdownManager(),
+		ResponseFileManager: rfm,
+		pendingOutputs:      make(map[string][]string),
 		ExecutionStats: ExecutionStats{
 			TotalTasks:  0,
 			CacheHits:   0,
@@ -51,6 +65,30 @@ func NewTaskExecutor(cache *BuildCache, changeDetector *ChangeDetector, maxWorke
 			TotalTime:   0,
 		},
 	}
+	
+	// Register cleanup for pending outputs and response files on shutdown
+	if te.ShutdownManager != nil {
+		te.ShutdownManager.RegisterCleanup(func() {
+			te.cleanupPendingOutputs()
+			if te.ResponseFileManager != nil {
+				te.ResponseFileManager.Cleanup()
+			}
+		})
+	}
+	
+	return te
+}
+
+// cleanupPendingOutputs removes partial outputs from interrupted tasks
+func (te *TaskExecutor) cleanupPendingOutputs() {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	
+	for taskID, outputs := range te.pendingOutputs {
+		log.Printf("Cleaning up partial outputs for interrupted task: %s", taskID)
+		CleanupPartialOutputs(outputs)
+	}
+	te.pendingOutputs = make(map[string][]string)
 }
 
 // ExecuteTaskGraph executes all tasks in the graph
@@ -75,6 +113,13 @@ func (te *TaskExecutor) ExecuteTaskGraph(graph *TaskGraph, dryRun bool) bool {
 	}
 
 	for stageNum, stageTasks := range graph.ExecutionStages {
+		// Check for shutdown before starting each stage
+		if te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown() {
+			log.Printf("Build interrupted, stopping after stage %d", stageNum)
+			success = false
+			break
+		}
+		
 		progress := 0.0
 		if totalTasks > 0 {
 			progress = (float64(completedTasks) / float64(totalTasks)) * 100
@@ -181,6 +226,11 @@ func (te *TaskExecutor) executeStage(taskIDs []string, tasks map[string]*BuildTa
 
 // executeSingleTask executes a single task with caching
 func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
+	// Check for shutdown before starting
+	if te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown() {
+		return false
+	}
+	
 	te.mu.Lock()
 	te.ExecutionStats.TotalTasks++
 	te.mu.Unlock()
@@ -221,17 +271,47 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 		}
 	}
 
+	// Track this task's outputs for cleanup on interruption
+	te.mu.Lock()
+	te.pendingOutputs[task.TaskID] = task.Outputs
+	te.mu.Unlock()
+	
+	// Track task in shutdown manager
+	if te.ShutdownManager != nil {
+		te.ShutdownManager.TrackTask()
+		defer te.ShutdownManager.TaskDone()
+	}
+
+	// Process command through response file manager for long commands (Windows)
+	command := task.Command
+	if te.ResponseFileManager != nil {
+		processedCmd, err := te.ResponseFileManager.ProcessCommand(command, task.TaskID)
+		if err != nil {
+			log.Printf("WARNING: Failed to create response file for %s: %v", task.TaskID, err)
+			// Continue with original command
+		} else {
+			command = processedCmd
+		}
+	}
+
 	// Execute command using execution environment
 	cwd, _ := os.Getwd()
-	result, err := te.ExecEnv.Execute(task.Command, cwd, DefaultTaskTimeoutSeconds)
+	result, err := te.ExecEnv.Execute(command, cwd, DefaultTaskTimeoutSeconds)
 
 	executionTime := time.Since(startTime).Seconds()
+
+	// Remove from pending outputs tracking
+	te.mu.Lock()
+	delete(te.pendingOutputs, task.TaskID)
+	te.mu.Unlock()
 
 	if err != nil {
 		log.Printf("✗ %s - failed: %v", task.TaskID, err)
 		if result != nil && result.Stderr != "" {
 			log.Printf("  stderr: %s", result.Stderr)
 		}
+		// Clean up partial outputs on failure
+		CleanupPartialOutputs(task.Outputs)
 		te.mu.Lock()
 		te.ExecutionStats.FailedTasks++
 		if te.BuildResult != nil {
@@ -257,6 +337,8 @@ func (te *TaskExecutor) executeSingleTask(task *BuildTask) bool {
 	if result.Stderr != "" {
 		log.Printf("  stderr: %s", result.Stderr)
 	}
+	// Clean up partial outputs on failure
+	CleanupPartialOutputs(task.Outputs)
 	te.mu.Lock()
 	te.ExecutionStats.FailedTasks++
 	if te.BuildResult != nil {

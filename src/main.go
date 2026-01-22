@@ -79,6 +79,10 @@ func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 }
 
 func main() {
+	// Initialize shutdown manager for graceful signal handling
+	shutdownManager := InitShutdownManager()
+	defer shutdownManager.Shutdown()
+	
 	// Get the directory where the buildy executable is located
 	buildyDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
@@ -387,6 +391,13 @@ func main() {
 		targetFilter,
 		buildOptions,
 	)
+	
+	// Check if we were interrupted
+	if shutdownManager.IsShuttingDown() {
+		log.Printf("Build interrupted by signal")
+		os.Exit(130) // Standard exit code for SIGINT
+	}
+	
 	if err != nil {
 		log.Fatalf("Build failed: %v", err)
 	}

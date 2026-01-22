@@ -598,7 +598,7 @@ func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
 		}
 	}
 
-	log.Printf("WARNING: No link tool found for output_type='%s'", outputType)
+	BuildWarning("toolchain", "No link tool found for output_type='%s'", outputType)
 	return nil
 }
 
