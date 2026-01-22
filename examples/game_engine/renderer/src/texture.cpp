@@ -1,12 +1,17 @@
-// Texture system
-#include "engine_core.h"
+// Texture - stub implementation
+#include "renderer/texture.h"
 
-int LoadTexture(int width, int height) {
-    // Calculate texture size and allocate memory
-    int size = width * height * 4;  // 4 bytes per pixel
-    return AllocateMemory(size / 1024);  // Convert to KB
-}
+namespace engine {
+namespace renderer {
 
-int BindTexture(int textureId) {
-    return textureId > 0 ? 1 : 0;
-}
+static u32 s_nextTextureId = 1;
+static u32 s_nextSamplerId = 1;
+
+TextureHandle CreateTexture(const TextureDesc&) { return {s_nextTextureId++}; }
+void DestroyTexture(TextureHandle) { /* stub */ }
+void UpdateTexture(TextureHandle, const void*, usize) { /* stub */ }
+SamplerHandle CreateSampler() { return {s_nextSamplerId++}; }
+void DestroySampler(SamplerHandle) { /* stub */ }
+
+} // namespace renderer
+} // namespace engine

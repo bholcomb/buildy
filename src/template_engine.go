@@ -232,6 +232,13 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		"configuration": configuration,
 	}
 
+	// Add module name for unique object paths (prevents collisions in multi-module builds)
+	if module, ok := itemConfig["module"].(string); ok {
+		context["module"] = module
+	} else {
+		context["module"] = "workspace"
+	}
+
 	// Get steps
 	stepsRaw, ok := template["steps"]
 	if !ok {
@@ -569,7 +576,17 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	libNames := []string{}
 	if outputType == "executable" {
 		dependsOnLibs := []string{}
-		if deps, ok := itemConfig["depends_on"].([]any); ok {
+		// Handle nested format: depends_on.targets: [...]
+		if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
+			if targets, ok := depsMap["targets"].([]any); ok {
+				for _, d := range targets {
+					if str, ok := d.(string); ok {
+						dependsOnLibs = append(dependsOnLibs, str)
+					}
+				}
+			}
+		} else if deps, ok := itemConfig["depends_on"].([]any); ok {
+			// Handle flat format: depends_on: [...]
 			for _, d := range deps {
 				if str, ok := d.(string); ok {
 					dependsOnLibs = append(dependsOnLibs, str)

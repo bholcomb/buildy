@@ -1,27 +1,17 @@
-// Game logic - uses renderer and audio
+// Game - stub implementation
+#include "engine_core.h"
+#include "engine_platform.h"
 #include "engine_renderer.h"
 #include "engine_audio.h"
 
-int InitGame() {
-    // Initialize renderer
-    int bufferSize = InitRenderer(1920, 1080);
-    
-    // Initialize audio
-    int audioBuffer = InitAudio(44100, 2);
-    
-    return bufferSize + audioBuffer;
-}
+namespace game {
 
-int UpdateGame(int deltaTime) {
-    // Draw frame
-    DrawFrame();
-    
-    // Play sound effect
-    PlaySound(1, 75);
-    
-    return deltaTime;
-}
+class Game {
+public:
+    void Initialize() { /* stub */ }
+    void Shutdown() { /* stub */ }
+    void Update(engine::f32) { /* stub */ }
+    void Render() { /* stub */ }
+};
 
-int ShutdownGame() {
-    return 0;
-}
+} // namespace game

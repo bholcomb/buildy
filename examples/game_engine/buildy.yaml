@@ -15,9 +15,11 @@ workspace:
   modules:
     common:
       - core
+      - platform
       - renderer
       - audio
       - game
+      # Note: shaders module not included yet - glslc toolchain support needed
 
 dependencies:
   file: buildy/dependencies.yaml

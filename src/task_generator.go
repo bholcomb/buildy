@@ -111,6 +111,9 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 		}
 	}
 
+	// Apply platform-specific target overrides
+	libraries = tg.applyPlatformTargetOverrides(config, libraries, "libraries")
+
 	mergedConfig := tg.getMergedConfig(config)
 
 	for _, libRaw := range libraries {
@@ -142,6 +145,9 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 			executables = append(executables, v...)
 		}
 	}
+
+	// Apply platform-specific target overrides
+	executables = tg.applyPlatformTargetOverrides(config, executables, "executables")
 
 	for _, exeRaw := range executables {
 		if exe, ok := exeRaw.(map[string]any); ok {
@@ -246,6 +252,139 @@ func (tg *TaskGenerator) mergeConfigs(configs ...any) map[string]any {
 	return merged
 }
 
+// applyPlatformTargetOverrides merges platform-specific target configurations
+// with the base targets. For example, if platforms.linux.targets.libraries defines
+// overrides for a library, those are merged with the base library config.
+func (tg *TaskGenerator) applyPlatformTargetOverrides(config map[string]any, baseTargets []any, targetType string) []any {
+	// Get platform-specific targets
+	platforms, ok := config["platforms"].(map[string]any)
+	if !ok {
+		return baseTargets
+	}
+
+	platformConfig, ok := platforms[tg.Platform].(map[string]any)
+	if !ok {
+		return baseTargets
+	}
+
+	platformTargets, ok := platformConfig["targets"].(map[string]any)
+	if !ok {
+		return baseTargets
+	}
+
+	platformTargetList, ok := platformTargets[targetType].([]any)
+	if !ok || len(platformTargetList) == 0 {
+		return baseTargets
+	}
+
+	// Build a map of platform overrides by target name
+	overridesByName := make(map[string]map[string]any)
+	for _, overrideRaw := range platformTargetList {
+		override, ok := overrideRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, ok := override["name"].(string)
+		if !ok {
+			continue
+		}
+		overridesByName[name] = override
+	}
+
+	// Merge overrides into base targets
+	result := make([]any, 0, len(baseTargets))
+	for _, baseRaw := range baseTargets {
+		base, ok := baseRaw.(map[string]any)
+		if !ok {
+			result = append(result, baseRaw)
+			continue
+		}
+
+		name, ok := base["name"].(string)
+		if !ok {
+			result = append(result, baseRaw)
+			continue
+		}
+
+		override, hasOverride := overridesByName[name]
+		if !hasOverride {
+			result = append(result, base)
+			continue
+		}
+
+		// Merge override into base (deep merge for special keys)
+		merged := tg.mergeTargetConfig(base, override)
+		result = append(result, merged)
+
+		log.Printf("Applied platform '%s' overrides to target '%s'", tg.Platform, name)
+	}
+
+	return result
+}
+
+// mergeTargetConfig merges a platform-specific target override into the base target config
+func (tg *TaskGenerator) mergeTargetConfig(base, override map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Copy base values
+	for k, v := range base {
+		result[k] = v
+	}
+
+	// Apply overrides
+	for k, v := range override {
+		if k == "name" {
+			continue // Don't override name
+		}
+
+		switch k {
+		case "sources":
+			// Sources: replace entirely with platform-specific sources
+			result[k] = v
+
+		case "compile":
+			// Compile settings: deep merge
+			if baseCompile, ok := base["compile"].(map[string]any); ok {
+				if overrideCompile, ok := v.(map[string]any); ok {
+					mergedCompile := make(map[string]any)
+					for ck, cv := range baseCompile {
+						mergedCompile[ck] = cv
+					}
+					for ck, cv := range overrideCompile {
+						// For defines, append rather than replace
+						if ck == "defines" {
+							if baseDefines, ok := mergedCompile["defines"].([]any); ok {
+								if overrideDefines, ok := cv.([]any); ok {
+									mergedCompile["defines"] = append(baseDefines, overrideDefines...)
+								}
+							} else {
+								mergedCompile[ck] = cv
+							}
+						} else {
+							mergedCompile[ck] = cv
+						}
+					}
+					result[k] = mergedCompile
+				} else {
+					result[k] = v
+				}
+			} else {
+				result[k] = v
+			}
+
+		case "include_dirs", "libs", "packages", "depends_on":
+			// These could be merged or replaced - for now, replace if present
+			result[k] = v
+
+		default:
+			// For other keys, override takes precedence
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
 // createSetupTask creates directory setup task
 func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
 	libDir := filepath.Join(outputDir, "lib")
@@ -326,7 +465,7 @@ func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
 
 	// Merge package settings into target config
 	if len(mergedPackage.IncludeDirs) > 0 {
-		existing := ExtractStringList(targetConfig["include_dirs"])
+		existing := extractIncludeDirs(targetConfig["include_dirs"])
 		targetConfig["include_dirs"] = append(mergedPackage.IncludeDirs, existing...)
 	}
 
@@ -385,6 +524,12 @@ func (tg *TaskGenerator) generateLibraryTasks(
 		return nil, err
 	}
 	libConfig["include_dirs"] = includeDirs
+
+	// Add module name for unique object file paths
+	libConfig["module"] = tg.CurrentModule
+	if libConfig["module"] == "" {
+		libConfig["module"] = "workspace"
+	}
 
 	toolchainName := ""
 	if tg.CurrentToolchain != nil {
@@ -453,6 +598,12 @@ func (tg *TaskGenerator) generateExecutableTasks(
 		return nil, err
 	}
 	exeConfig["include_dirs"] = includeDirs
+
+	// Add module name for unique object file paths
+	exeConfig["module"] = tg.CurrentModule
+	if exeConfig["module"] == "" {
+		exeConfig["module"] = "workspace"
+	}
 
 	toolchainName := ""
 	if tg.CurrentToolchain != nil {
@@ -613,6 +764,33 @@ func (tg *TaskGenerator) generateGoModuleTasks(
 // GetGeneratedTargets returns the mapping of target names to their link task IDs
 func (tg *TaskGenerator) GetGeneratedTargets() map[string]string {
 	return tg.generatedTargets
+}
+
+// extractIncludeDirs extracts include directories from various formats
+// Handles both flat lists and nested public/private structures
+func extractIncludeDirs(value any) []string {
+	result := []string{}
+	switch v := value.(type) {
+	case string:
+		result = append(result, v)
+	case []any:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+	case []string:
+		result = v
+	case map[string]any:
+		// Handle nested structure with public/private keys
+		if publicDirs, ok := v["public"]; ok {
+			result = append(result, ExtractStringList(publicDirs)...)
+		}
+		if privateDirs, ok := v["private"]; ok {
+			result = append(result, ExtractStringList(privateDirs)...)
+		}
+	}
+	return result
 }
 
 // RegisterTarget registers a target name to task ID mapping

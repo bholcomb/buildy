@@ -1,6 +1,6 @@
 project:
   name: engine_audio
-  description: "Audio engine"
+  description: "Audio engine - sounds, music, 3D audio, effects"
 
 variables:
   MODULE_NAME: "engine_audio"
@@ -8,15 +8,19 @@ variables:
 targets:
   libraries:
     - name: engine_audio
-      type: static_library
+      type: shared_library
       language: c++
       sources:
-        - "src/audio.cpp"
-        - "src/sound.cpp"
-        - "src/music.cpp"
-      public_headers: ["include/*.h"]
+        - "src/*.cpp"
+      public_headers:
+        - "include/*.h"
+        - "include/audio/*.h"
       include_dirs:
         public: ["include"]
         private: ["../core/include"]
+      libs:
+        - engine_core
       depends_on:
         targets: ["engine_core"]
+      compile:
+        defines: ["ENGINE_AUDIO_EXPORTS"]

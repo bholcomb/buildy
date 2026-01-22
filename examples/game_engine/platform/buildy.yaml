@@ -1,0 +1,45 @@
+project:
+  name: engine_platform
+  description: "Platform abstraction layer - window, input, filesystem"
+
+variables:
+  MODULE_NAME: "engine_platform"
+
+targets:
+  libraries:
+    - name: engine_platform
+      type: shared_library
+      language: c++
+      sources:
+        - "src/common/*.cpp"
+      include_dirs:
+        public: ["include"]
+        private: ["../core/include"]
+      libs:
+        - engine_core
+      depends_on:
+        targets: ["engine_core"]
+      compile:
+        defines: ["ENGINE_PLATFORM_EXPORTS"]
+
+# Platform-specific source overrides
+platforms:
+  linux:
+    targets:
+      libraries:
+        - name: engine_platform
+          sources:
+            - "src/common/*.cpp"
+            - "src/linux/*.cpp"
+          compile:
+            defines: ["ENGINE_PLATFORM_LINUX"]
+            
+  windows:
+    targets:
+      libraries:
+        - name: engine_platform
+          sources:
+            - "src/common/*.cpp"
+            - "src/windows/*.cpp"
+          compile:
+            defines: ["ENGINE_PLATFORM_WINDOWS"]

@@ -33,5 +33,7 @@ targets:
       sources: ["appsrc/main.cpp"]
       include_dirs:
         private: ["include"]
+      libs:
+        - mathcore
       depends_on:
         targets: ["mathcore"]

@@ -1,13 +1,14 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	flag "github.com/spf13/pflag"
 )
 
 const Version = "0.1.0-go"
@@ -93,39 +94,36 @@ func main() {
 	defaultPlatform := detectPlatform()
 	defaultArch := detectArchitecture()
 	
-	platform := flag.String("platform", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
-	architecture := flag.String("architecture", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
-	configuration := flag.String("configuration", "debug", "Build configuration")
+	platform := flag.StringP("platform", "p", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
+	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
+	configuration := flag.StringP("configuration", "c", "debug", "Build configuration")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
-	dryRun := flag.Bool("dry-run", false, "Generate tasks but don't execute")
-	workers := flag.Int("workers", DefaultMaxWorkers, "Max parallel workers")
+	dryRun := flag.BoolP("dry-run", "n", false, "Generate tasks but don't execute")
+	workers := flag.IntP("workers", "j", DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
-	verbose := flag.Bool("verbose", false, "Enable verbose logging")
-	verboseShort := flag.Bool("v", false, "Enable verbose logging (short)")
-	toolchain := flag.String("toolchain", "", "Specify toolchain to use (overrides config file)")
-	toolchainShort := flag.String("t", "", "Specify toolchain to use (short)")
+	verbose := flag.BoolP("verbose", "v", false, "Enable verbose logging")
+	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
-	force := flag.Bool("force", false, "Force full rebuild, ignore cache and build state")
+	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy/ folder")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 
 	// Custom flag for multiple defines
-	var defines multiStringFlag
-	flag.Var(&defines, "define", "Define a variable (can be used multiple times, e.g. -define MY_VAR=value)")
-	flag.Var(&defines, "D", "Define a variable (short)")
+	var defines []string
+	flag.StringArrayVarP(&defines, "define", "D", []string{}, "Define a variable (can be used multiple times, e.g. -D MY_VAR=value)")
 
 	// Custom flag for multiple targets
-	var targets multiStringFlag
-	flag.Var(&targets, "target", "Build specific target(s) (workspace mode only, can be used multiple times)")
+	var targets []string
+	flag.StringArrayVar(&targets, "target", []string{}, "Build specific target(s) (workspace mode only, can be used multiple times)")
 
 	// Custom flag for additional data directories
-	var additionalDataDirs multiStringFlag
-	flag.Var(&additionalDataDirs, "add-data-dir", "Additional data directory (looks for templates/ and toolchains/ subdirectories, can be used multiple times, parsed in order)")
+	var additionalDataDirs []string
+	flag.StringArrayVar(&additionalDataDirs, "add-data-dir", []string{}, "Additional data directory (looks for templates/ and toolchains/ subdirectories)")
 
 	// Custom flag for package directories
-	var packageDirs multiStringFlag
-	flag.Var(&packageDirs, "package-dir", "Additional package directory (can be used multiple times, parsed in order)")
+	var packageDirs []string
+	flag.StringArrayVar(&packageDirs, "package-dir", []string{}, "Additional package directory (can be used multiple times)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n\n", Version)
@@ -136,18 +134,15 @@ func main() {
 
 	flag.Parse()
 
-	// Handle verbose flag (either -v or --verbose)
-	if *verbose || *verboseShort {
+	// Handle verbose flag
+	if *verbose {
 		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	} else {
 		log.SetFlags(log.Ldate | log.Ltime)
 	}
 
-	// Handle toolchain flag (either -t or --toolchain)
+	// Handle toolchain flag
 	selectedToolchain := *toolchain
-	if selectedToolchain == "" && *toolchainShort != "" {
-		selectedToolchain = *toolchainShort
-	}
 
 	// Parse CLI defines
 	cliDefines := make(map[string]string)
@@ -430,14 +425,3 @@ func main() {
 	}
 }
 
-// multiStringFlag implements flag.Value for multiple string flags
-type multiStringFlag []string
-
-func (m *multiStringFlag) String() string {
-	return strings.Join(*m, ",")
-}
-
-func (m *multiStringFlag) Set(value string) error {
-	*m = append(*m, value)
-	return nil
-}
