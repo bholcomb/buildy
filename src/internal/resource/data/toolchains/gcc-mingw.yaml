@@ -1,7 +1,7 @@
 toolchain:
   name: "gcc-mingw"
   description: "MinGW-w64 GCC for Windows cross-compilation"
-  language: "c++"
+  language: cpp
   
   target:
     platform: windows

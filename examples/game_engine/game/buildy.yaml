@@ -8,7 +8,7 @@ variables:
 targets:
   executables:
     - name: mygame
-      language: c++
+      language: cpp
       sources:
         - "src/*.cpp"
       include_dirs:
