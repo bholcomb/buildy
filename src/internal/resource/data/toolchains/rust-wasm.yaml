@@ -1,0 +1,36 @@
+# Rust Toolchain for WebAssembly
+
+toolchain:
+  name: "rust-wasm"
+  description: "Rust compiler for WebAssembly"
+  language: "rust"
+  
+  target:
+    platform: web
+    architecture: wasm32
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+  
+  tools:
+    cargo_build:
+      action: build
+      command: "cargo build {release_flag} --target wasm32-unknown-unknown --target-dir {output_dir} {features}"
+      input_extensions: [".rs"]
+      output_extension: ".wasm"
+      output_pattern: "{name}.wasm"
+      flags:
+        common: []
+        debug: []
+        release: ["--release"]
+      supports:
+        features: true
+        features_flag: "--features"
+        all_features: true
+        all_features_flag: "--all-features"
+        no_default_features: true
+        no_default_features_flag: "--no-default-features"

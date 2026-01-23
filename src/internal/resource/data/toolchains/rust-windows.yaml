@@ -1,0 +1,38 @@
+# Rust Toolchain for Windows (cross-compile from Linux)
+
+toolchain:
+  name: "rust-windows"
+  description: "Rust compiler for Windows (cross-compile from Linux)"
+  language: "rust"
+  
+  target:
+    platform: windows
+    architecture: x86_64
+  
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  execution:
+    type: native
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: "x86_64-w64-mingw32-gcc"
+  
+  tools:
+    cargo_build:
+      action: build
+      command: "cargo build {release_flag} --target x86_64-pc-windows-gnu --target-dir {output_dir} {features} {bin_flag}"
+      input_extensions: [".rs"]
+      output_extension: ".exe"
+      output_pattern: "{name}.exe"
+      flags:
+        common: []
+        debug: []
+        release: ["--release"]
+      supports:
+        features: true
+        features_flag: "--features"
+        all_features: true
+        all_features_flag: "--all-features"
+        no_default_features: true
+        no_default_features_flag: "--no-default-features"

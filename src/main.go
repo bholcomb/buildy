@@ -8,6 +8,12 @@ import (
 	"runtime"
 	"strings"
 
+	"buildy/internal/build"
+	"buildy/internal/cache"
+	"buildy/internal/resource"
+	"buildy/internal/workspace"
+	"buildy/pkg/util"
+
 	flag "github.com/spf13/pflag"
 )
 
@@ -81,7 +87,7 @@ func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 
 func main() {
 	// Initialize shutdown manager for graceful signal handling
-	shutdownManager := InitShutdownManager()
+	shutdownManager := build.InitShutdownManager()
 	defer shutdownManager.Shutdown()
 	
 	// Get the directory where the buildy executable is located
@@ -99,7 +105,7 @@ func main() {
 	configuration := flag.StringP("configuration", "c", "debug", "Build configuration")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
 	dryRun := flag.BoolP("dry-run", "n", false, "Generate tasks but don't execute")
-	workers := flag.IntP("workers", "j", DefaultMaxWorkers, "Max parallel workers")
+	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
 	verbose := flag.BoolP("verbose", "v", false, "Enable verbose logging")
@@ -219,7 +225,7 @@ func main() {
 	}
 
 	// Verify embedded data
-	if err := VerifyEmbeddedData(); err != nil {
+	if err := resource.VerifyEmbeddedData(); err != nil {
 		log.Fatalf("Failed to verify embedded data: %v", err)
 	}
 
@@ -229,7 +235,7 @@ func main() {
 	for _, dataDir := range additionalDataDirs {
 		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
 	}
-	toolchainManager, err := NewToolchainManagerMulti(toolchainDirs)
+	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
 	if err != nil {
 		log.Fatalf("Failed to initialize toolchain manager: %v", err)
 	}
@@ -244,14 +250,14 @@ func main() {
 	}
 
 	// Initialize cache
-	cache, err := NewBuildCache(*cacheDir)
+	buildCache, err := cache.NewBuildCache(*cacheDir)
 	if err != nil {
 		log.Fatalf("Failed to initialize cache: %v", err)
 	}
 
 	// Show cache stats if requested
 	if *cacheStats {
-		stats := cache.GetCacheStats()
+		stats := buildCache.GetCacheStats()
 		log.Printf("Cache Statistics:")
 		log.Printf("  Total entries: %d", stats["total_entries"])
 		log.Printf("  Total size: %.1f MB", stats["total_size_mb"])
@@ -265,7 +271,7 @@ func main() {
 	for _, dataDir := range additionalDataDirs {
 		templateDirs = append(templateDirs, filepath.Join(dataDir, "templates"))
 	}
-	templateEngine, err := NewBuildTemplateEngineMulti(templateDirs)
+	templateEngine, err := workspace.NewBuildTemplateEngineMulti(templateDirs)
 	if err != nil {
 		log.Fatalf("Failed to initialize template engine: %v", err)
 	}
@@ -274,24 +280,24 @@ func main() {
 	configFiles := flag.Args()
 
 	// Everything is a workspace - discover or load from specified path
-	var workspace *Workspace
+	var ws *workspace.Workspace
 
 	if len(configFiles) == 0 {
 		// No config files specified - discover workspace from current directory
 		log.Printf("No config file specified, attempting workspace discovery...")
 
 		// Try loading from cache first
-		workspace, err = LoadDiscoveryCache(*cacheDir)
-		if err == nil && workspace != nil {
-			log.Printf("Loaded workspace from cache: %s", workspace.RootDir)
+		ws, err = workspace.LoadDiscoveryCache(*cacheDir)
+		if err == nil && ws != nil {
+			log.Printf("Loaded workspace from cache: %s", ws.RootDir)
 		} else {
 			// Cache miss or invalid, do full discovery
 			cwd, _ := os.Getwd()
-			workspace, err = DiscoverWorkspace(cwd)
+			ws, err = workspace.DiscoverWorkspace(cwd)
 			if err != nil {
 				log.Fatalf("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
 			}
-			log.Printf("Discovered workspace at: %s", workspace.RootDir)
+			log.Printf("Discovered workspace at: %s", ws.RootDir)
 		}
 	} else {
 		// Config file or directory specified - treat as workspace root
@@ -313,11 +319,11 @@ func main() {
 		}
 
 		// Load as workspace
-		workspace, err = NewWorkspace(workspaceRoot)
+		ws, err = workspace.NewWorkspace(workspaceRoot)
 		if err != nil {
 			log.Fatalf("Failed to load workspace from %s: %v", workspaceRoot, err)
 		}
-		log.Printf("Loaded workspace from: %s", workspace.RootDir)
+		log.Printf("Loaded workspace from: %s", ws.RootDir)
 
 		// Warn about multiple paths (not yet supported)
 		if len(configFiles) > 1 {
@@ -326,10 +332,10 @@ func main() {
 	}
 
 	// Discover modules (will always find at least the root module)
-	if _, err := workspace.DiscoverModules(false); err != nil {
+	if _, err := ws.DiscoverModules(false); err != nil {
 		log.Fatalf("Failed to discover modules: %v", err)
 	}
-	log.Printf("Found %d module(s)", len(workspace.Modules))
+	log.Printf("Found %d module(s)", len(ws.Modules))
 
 	// Determine target filter
 	var targetFilter []string
@@ -338,21 +344,21 @@ func main() {
 	}
 
 	// Create variable environment for package resolution
-	rootVarEnv := NewVariableEnvironment(nil)
+	rootVarEnv := util.NewVariableEnvironment(nil)
 	rootVarEnv.SetVariable("platform", *platform, "builtin")
 	rootVarEnv.SetVariable("architecture", *architecture, "builtin")
 	rootVarEnv.SetVariable("configuration", *configuration, "builtin")
 
 	// Initialize package manager
 	var workspacePackagePaths []string
-	if workspace.Config != nil {
-		workspacePackagePaths = workspace.Config.PackagePaths
+	if ws.Config != nil {
+		workspacePackagePaths = ws.Config.PackagePaths
 	}
 	allPackageDirs := append(workspacePackagePaths, packageDirs...)
-	packageManager := NewPackageManager(workspace.RootDir, allPackageDirs, rootVarEnv)
+	packageManager := resource.NewPackageManager(ws.RootDir, allPackageDirs, rootVarEnv)
 
 	// Create workspace-aware config parser
-	configParser := NewConfigParser(
+	configParser := workspace.NewConfigParser(
 		*platform,
 		*architecture,
 		*configuration,
@@ -360,20 +366,20 @@ func main() {
 		toolchainManager,
 		selectedToolchain,
 		templateEngine,
-		workspace,
+		ws,
 		packageManager,
 		nil, // No parent var env
 	)
 
 	// Set cache directory relative to workspace root
-	workspaceCacheDir := filepath.Join(workspace.RootDir, *cacheDir)
-	builder, err := NewBuilder(workspaceCacheDir, *workers)
+	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
+	builder, err := build.NewBuilder(workspaceCacheDir, *workers)
 	if err != nil {
 		log.Fatalf("Failed to create builder: %v", err)
 	}
 
 	// Configure builder options
-	buildOptions := BuildOptions{
+	buildOptions := build.BuildOptions{
 		DryRun:          *dryRun,
 		Force:           *force,
 		CompileCommands: *compileCommands,
@@ -381,7 +387,7 @@ func main() {
 
 	// Build the workspace
 	result, err := builder.BuildWorkspace(
-		workspace,
+		ws,
 		configParser,
 		targetFilter,
 		buildOptions,
@@ -409,7 +415,7 @@ func main() {
 		
 		// Generate compile_commands.json if requested
 		if *compileCommands && result.Success {
-			compileCommandsPath := filepath.Join(workspace.RootDir, "buildy", "compile_commands.json")
+			compileCommandsPath := filepath.Join(ws.RootDir, "buildy", "compile_commands.json")
 			if err := result.GenerateCompileCommands(compileCommandsPath); err != nil {
 				log.Printf("WARNING: Failed to generate compile_commands.json: %v", err)
 			} else {

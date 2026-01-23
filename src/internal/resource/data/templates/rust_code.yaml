@@ -1,0 +1,29 @@
+# Rust Build Templates
+# Templates for building Rust executables and libraries with Cargo
+
+templates:
+  # Rust executable: single-step build (Cargo handles compilation internally)
+  rust_executable:
+    description: "Build Rust executable"
+    steps:
+      - name: build
+        action: build
+        output: "{output_dir}/{config}/bin/{tool.output_pattern}"
+        inputs: ["{item.path}"]
+        working_dir: "{item.path}"
+        tool_params:
+          features: "{item.features}"
+          bin: "{item.bin}"
+
+  # Rust library crate
+  rust_library:
+    description: "Build Rust library"
+    steps:
+      - name: build
+        action: build
+        output: "{output_dir}/{config}/lib/{tool.output_pattern}"
+        inputs: ["{item.path}"]
+        working_dir: "{item.path}"
+        tool_params:
+          features: "{item.features}"
+          lib: true

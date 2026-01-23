@@ -1,0 +1,36 @@
+# Rust Toolchain for macOS x86_64
+
+toolchain:
+  name: "rust-macos"
+  description: "Rust compiler for macOS"
+  language: "rust"
+  
+  target:
+    platform: macos
+    architecture: x86_64
+  
+  host:
+    platform: macos
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    cargo_build:
+      action: build
+      command: "cargo build {release_flag} --target-dir {output_dir} {features} {bin_flag}"
+      input_extensions: [".rs"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: []
+        release: ["--release"]
+      supports:
+        features: true
+        features_flag: "--features"
+        all_features: true
+        all_features_flag: "--all-features"
+        no_default_features: true
+        no_default_features_flag: "--no-default-features"

@@ -1,0 +1,38 @@
+# Go Toolchain for Linux x86_64
+
+toolchain:
+  name: "go-linux"
+  description: "Go compiler for Linux"
+  language: "go"
+  
+  target:
+    platform: linux
+    architecture: x86_64
+  
+  host:
+    platform: linux
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+        gcflags: true
+        gcflags_flag: "-gcflags"
+        trimpath: true
+        trimpath_flag: "-trimpath"
