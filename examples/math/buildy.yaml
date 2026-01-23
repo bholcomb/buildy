@@ -21,7 +21,7 @@ targets:
   libraries:
     - name: mathcore
       type: static_library
-      language: c++
+      language: cpp
       sources: ["libsrc/*.cpp"]
       public_headers: ["include/*.h"]
       include_dirs:
@@ -29,7 +29,7 @@ targets:
 
   executables:
     - name: calculator
-      language: c++
+      language: cpp
       sources: ["appsrc/main.cpp"]
       include_dirs:
         private: ["include"]

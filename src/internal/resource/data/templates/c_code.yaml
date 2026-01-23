@@ -1,14 +1,14 @@
-# C++ Build Templates
-# Templates for building C++ libraries and executables
+# C Build Templates
+# Templates for building C libraries and executables
 
 templates:
-  # C++ Shared library: compile sources with PIC, link into shared library
-  cpp_shared_library:
-    description: "Compile C++ sources and link into shared library (.so, .dll, .dylib)"
+  # C Shared library: compile sources with PIC, link into shared library
+  c_shared_library:
+    description: "Compile C sources and link into shared library (.so, .dll, .dylib)"
     metadata:
-      language: cpp
+      language: c
       target_types: [shared_library]
-      toolchain_language: cpp
+      toolchain_language: c
       pre_processing:
         resolve_packages: true
         resolve_sources: true
@@ -29,7 +29,6 @@ templates:
           include_dirs: "{item.include_dirs}"
           extra_flags: "{config.compiler_flags}"
           is_shared_library: true
-          std: "{config.cpp_standard}"
       
       - name: link
         action: link
@@ -41,13 +40,13 @@ templates:
           lib_dirs: []
           libs: []
   
-  # C++ Static library: compile sources, archive into static library
-  cpp_static_library:
-    description: "Compile C++ sources and archive into static library (.a, .lib)"
+  # C Static library: compile sources, archive into static library
+  c_static_library:
+    description: "Compile C sources and archive into static library (.a, .lib)"
     metadata:
-      language: cpp
+      language: c
       target_types: [static_library]
-      toolchain_language: cpp
+      toolchain_language: c
       pre_processing:
         resolve_packages: true
         resolve_sources: true
@@ -68,7 +67,6 @@ templates:
           include_dirs: "{item.include_dirs}"
           extra_flags: "{config.compiler_flags}"
           is_shared_library: false
-          std: "{config.cpp_standard}"
       
       - name: link
         action: link
@@ -80,13 +78,13 @@ templates:
           lib_dirs: []
           libs: []
   
-  # C++ Executable: compile sources, link with libraries into executable
-  cpp_executable:
-    description: "Compile C++ sources and link into executable"
+  # C Executable: compile sources, link with libraries into executable
+  c_executable:
+    description: "Compile C sources and link into executable"
     metadata:
-      language: cpp
+      language: c
       target_types: [executable]
-      toolchain_language: cpp
+      toolchain_language: c
       pre_processing:
         resolve_packages: true
         resolve_sources: true
@@ -107,7 +105,6 @@ templates:
           include_dirs: "{item.include_dirs}"
           extra_flags: "{config.compiler_flags}"
           is_shared_library: false
-          std: "{config.cpp_standard}"
       
       - name: link
         action: link

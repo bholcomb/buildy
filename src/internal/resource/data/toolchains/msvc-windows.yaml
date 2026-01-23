@@ -1,7 +1,7 @@
 toolchain:
   name: "msvc-windows"
   description: "Microsoft Visual C++ for Windows x86_64"
-  language: "c++"
+  language: cpp
   
   target:
     platform: windows

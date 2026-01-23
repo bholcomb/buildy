@@ -5,6 +5,19 @@ templates:
   # Go executable: single-step build (Go handles its own compilation internally)
   go_executable:
     description: "Build Go executable"
+    metadata:
+      language: go
+      target_types: [executable]
+      toolchain_language: go
+      pre_processing:
+        resolve_packages: false
+        resolve_sources: false
+        resolve_include_dirs: false
+        resolve_path: true
+      post_processing:
+        scan_sources_pattern: "*.go"
+        register_target: true
+        add_setup_dependency: true
     steps:
       - name: build
         action: build
@@ -18,6 +31,19 @@ templates:
   # Go library (plugin): single-step build with -buildmode=plugin
   go_library:
     description: "Build Go plugin/library"
+    metadata:
+      language: go
+      target_types: [library, shared_library, plugin]
+      toolchain_language: go
+      pre_processing:
+        resolve_packages: false
+        resolve_sources: false
+        resolve_include_dirs: false
+        resolve_path: true
+      post_processing:
+        scan_sources_pattern: "*.go"
+        register_target: true
+        add_setup_dependency: true
     steps:
       - name: build
         action: build

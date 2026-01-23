@@ -9,7 +9,7 @@ targets:
   libraries:
     - name: engine_renderer
       type: shared_library
-      language: c++
+      language: cpp
       sources:
         - "src/*.cpp"
       public_headers:

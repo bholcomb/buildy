@@ -1,7 +1,7 @@
 toolchain:
   name: "gcc-arm-cross"
   description: "GCC ARM cross-compiler for embedded systems"
-  language: "c++"
+  language: cpp
   
   target:
     platform: linux

@@ -78,6 +78,266 @@ func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 	return nil
 }
 
+// generateTargetTasks is the unified task generation function that uses template metadata
+// to drive all pre-processing, template expansion, and post-processing
+func (tg *TaskGenerator) generateTargetTasks(
+	targetConfig map[string]any,
+	mergedConfig map[string]any,
+	outputDir string,
+	setupTaskID string,
+	existingTasks []*BuildTask,
+) ([]*BuildTask, error) {
+	// Require explicit language field
+	language, ok := targetConfig["language"].(string)
+	if !ok || language == "" {
+		targetName := "unknown"
+		if name, ok := targetConfig["name"].(string); ok {
+			targetName = name
+		}
+		return nil, fmt.Errorf("target '%s' is missing required 'language' field", targetName)
+	}
+
+	// Determine target type (default to executable for executables list, shared_library for libraries)
+	targetType := "executable"
+	if tt, ok := targetConfig["type"].(string); ok {
+		targetType = tt
+	} else if _, isLibrary := targetConfig["_is_library"]; isLibrary {
+		targetType = "shared_library"
+	}
+
+	// Look up template by language and target type
+	templateName, _, metadata, err := tg.TemplateEngine.LookupTemplate(language, targetType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find template for language '%s' and type '%s': %w", language, targetType, err)
+	}
+
+	// Set module name for unique paths
+	targetConfig["module"] = tg.CurrentModule
+	if targetConfig["module"] == "" {
+		targetConfig["module"] = "workspace"
+	}
+
+	// Select toolchain based on metadata
+	toolMatcher := tg.ToolMatcher
+	toolchainName := ""
+	toolchainLanguage := metadata.ToolchainLanguage
+	if toolchainLanguage == "" {
+		toolchainLanguage = language
+	}
+
+	// Check if current toolchain matches the required language
+	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == toolchainLanguage {
+		toolchainName = tg.CurrentToolchain.Name
+	} else if tg.ToolchainManager != nil {
+		// Find toolchain by language
+		langToolchain := tg.ToolchainManager.FindByLanguage(toolchainLanguage, tg.Platform, tg.Architecture)
+		if langToolchain != nil {
+			toolchainName = langToolchain.Name
+			var matcherErr error
+			toolMatcher, matcherErr = resource.NewToolMatcher(langToolchain)
+			if matcherErr != nil {
+				return nil, fmt.Errorf("failed to create tool matcher for %s: %w", toolchainLanguage, matcherErr)
+			}
+			// Update command builder for the new toolchain
+			tg.CommandBuilder = resource.NewCommandBuilder(langToolchain, toolMatcher, tg.Configuration)
+		} else {
+			return nil, fmt.Errorf("no %s toolchain found for platform %s-%s", toolchainLanguage, tg.Platform, tg.Architecture)
+		}
+	}
+
+	// Apply pre-processing based on metadata
+	if metadata.PreProcessing.ResolvePackages {
+		if err := tg.resolvePackages(targetConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	if metadata.PreProcessing.ResolveSources {
+		sources, err := tg.PathResolver.ResolveSources(targetConfig)
+		if err != nil {
+			return nil, err
+		}
+		targetConfig["sources"] = sources
+	}
+
+	if metadata.PreProcessing.ResolveIncludeDirs {
+		includeDirs, err := tg.PathResolver.ResolveIncludeDirs(targetConfig)
+		if err != nil {
+			return nil, err
+		}
+		targetConfig["include_dirs"] = includeDirs
+	}
+
+	if metadata.PreProcessing.ResolvePath {
+		pathField := "."
+		if p, ok := targetConfig["path"].(string); ok {
+			pathField = p
+		}
+		if tg.PathResolver != nil {
+			pathField = tg.PathResolver.ResolveRelativePath(pathField)
+		}
+		targetConfig["path"] = pathField
+	}
+
+	// Expand template
+	tasks, err := tg.TemplateEngine.ExpandTemplate(
+		templateName,
+		targetConfig,
+		mergedConfig,
+		outputDir,
+		setupTaskID,
+		tg.TaskIDGen,
+		toolMatcher,
+		tg.CommandBuilder,
+		tg.Platform,
+		tg.Architecture,
+		tg.Configuration,
+		toolchainName,
+		existingTasks,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply post-processing based on metadata
+	if metadata.PostProcessing.AddSetupDependency && setupTaskID != "" {
+		for _, task := range tasks {
+			// Check if setup task is already in dependencies
+			hasSetup := false
+			for _, dep := range task.Dependencies {
+				if dep == setupTaskID {
+					hasSetup = true
+					break
+				}
+			}
+			if !hasSetup {
+				task.Dependencies = append([]string{setupTaskID}, task.Dependencies...)
+			}
+		}
+	}
+
+	if metadata.PostProcessing.ScanSourcesPattern != "" {
+		// Get the path to scan (use resolved path if available)
+		scanPath := "."
+		if p, ok := targetConfig["path"].(string); ok {
+			scanPath = p
+		}
+
+		// Scan for source files using the pattern from metadata
+		sourceFiles, scanErr := scanSourceFiles(scanPath, metadata.PostProcessing.ScanSourcesPattern)
+		if scanErr != nil {
+			log.Printf("WARNING: Failed to scan source files in %s: %v", scanPath, scanErr)
+		} else {
+			for _, task := range tasks {
+				for _, srcFile := range sourceFiles {
+					task.Inputs = append(task.Inputs, NewTaskInput(srcFile))
+				}
+				// Recalculate cache key with updated inputs
+				task.CacheKey = task.CalculateCacheKey()
+			}
+			log.Printf("Found %d source files matching '%s' in %s", len(sourceFiles), metadata.PostProcessing.ScanSourcesPattern, scanPath)
+		}
+	}
+
+	if metadata.PostProcessing.RegisterTarget {
+		if name, ok := targetConfig["name"].(string); ok {
+			// Find the final output task (link or build task) to register
+			// For C/C++: look for "link" task type
+			// For Go/Rust: look for "build" task type or tool name containing "build"
+			var targetTask *BuildTask
+			for _, task := range tasks {
+				if task.TaskType == "link" || task.TaskType == "build" ||
+					strings.Contains(task.TaskType, "build") {
+					targetTask = task
+					break
+				}
+			}
+			// Fallback to last task if no link/build task found
+			if targetTask == nil && len(tasks) > 0 {
+				targetTask = tasks[len(tasks)-1]
+			}
+			if targetTask != nil {
+				tg.generatedTargets[name] = targetTask.TaskID
+				globalTaskRegistry.RegisterTarget(name, targetTask.TaskID, tg.CurrentModule)
+				log.Printf("Registered target '%s' -> task '%s'", name, targetTask.TaskID)
+			}
+		}
+	}
+
+	return tasks, nil
+}
+
+// scanSourceFiles recursively scans a directory for files matching a glob pattern
+func scanSourceFiles(rootDir string, pattern string) ([]string, error) {
+	var files []string
+
+	// Common directories to skip
+	skipDirs := map[string]bool{
+		"vendor":        true,
+		".git":          true,
+		"testdata":      true,
+		".buildy_cache": true,
+		"target":        true, // Rust/Cargo output
+		"node_modules":  true,
+		"build":         true,
+	}
+
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip common non-source directories
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Check if file matches the pattern
+		matched, matchErr := filepath.Match(pattern, info.Name())
+		if matchErr != nil {
+			return matchErr
+		}
+		if matched {
+			files = append(files, path)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// For Go, also include go.mod and go.sum if they exist
+	if pattern == "*.go" {
+		goMod := filepath.Join(rootDir, "go.mod")
+		if _, err := os.Stat(goMod); err == nil {
+			files = append(files, goMod)
+		}
+		goSum := filepath.Join(rootDir, "go.sum")
+		if _, err := os.Stat(goSum); err == nil {
+			files = append(files, goSum)
+		}
+	}
+
+	// For Rust, also include Cargo.toml and Cargo.lock if they exist
+	if pattern == "*.rs" {
+		cargoToml := filepath.Join(rootDir, "Cargo.toml")
+		if _, err := os.Stat(cargoToml); err == nil {
+			files = append(files, cargoToml)
+		}
+		cargoLock := filepath.Join(rootDir, "Cargo.lock")
+		if _, err := os.Stat(cargoLock); err == nil {
+			files = append(files, cargoLock)
+		}
+	}
+
+	return files, nil
+}
+
 // GenerateTasks generates all tasks for a configuration
 func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
@@ -159,21 +419,6 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 				return nil, err
 			}
 			tasks = append(tasks, exeTasks...)
-		}
-	}
-
-	// Generate Go module tasks (legacy support)
-	if targets, ok := config["targets"].(map[string]any); ok {
-		if goModules, ok := targets["go_modules"].([]any); ok {
-			for _, goModRaw := range goModules {
-				if goMod, ok := goModRaw.(map[string]any); ok {
-					goTasks, err := tg.generateGoModuleTasks(goMod, mergedConfig, outputDir, setupTask.TaskID)
-					if err != nil {
-						return nil, err
-					}
-					tasks = append(tasks, goTasks...)
-				}
-			}
 		}
 	}
 
@@ -301,213 +546,27 @@ func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
 	return nil
 }
 
-// generateLibraryTasks generates tasks for a library
+// generateLibraryTasks generates tasks for a library using unified task generation
 func (tg *TaskGenerator) generateLibraryTasks(
 	libConfig map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
 	setupTaskID string,
 ) ([]*BuildTask, error) {
-	// Check for language field to determine routing
-	language := ""
-	if lang, ok := libConfig["language"].(string); ok {
-		language = lang
+	// Mark this as a library target (used for default type detection)
+	libConfig["_is_library"] = true
+
+	// Set default type if not specified
+	if _, hasType := libConfig["type"]; !hasType {
+		libConfig["type"] = "shared_library"
 	}
 
-	// Route to language-specific handler
-	switch language {
-	case "go":
-		return tg.generateGoLibraryTasks(libConfig, mergedConfig, outputDir, setupTaskID)
-	case "rust":
-		return tg.generateRustLibraryTasks(libConfig, mergedConfig, outputDir, setupTaskID)
-	default:
-		// C++ or unspecified language
-		return tg.generateCppLibraryTasks(libConfig, mergedConfig, outputDir, setupTaskID)
-	}
+	return tg.generateTargetTasks(libConfig, mergedConfig, outputDir, setupTaskID, []*BuildTask{})
 }
 
-// generateCppLibraryTasks generates tasks for a C++ library
-func (tg *TaskGenerator) generateCppLibraryTasks(
-	libConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	libType := "shared_library"
-	if lt, ok := libConfig["type"].(string); ok {
-		libType = lt
-	}
 
-	if err := tg.resolvePackages(libConfig); err != nil {
-		return nil, err
-	}
 
-	sources, err := tg.PathResolver.ResolveSources(libConfig)
-	if err != nil {
-		return nil, err
-	}
-	libConfig["sources"] = sources
-
-	includeDirs, err := tg.PathResolver.ResolveIncludeDirs(libConfig)
-	if err != nil {
-		return nil, err
-	}
-	libConfig["include_dirs"] = includeDirs
-
-	// Add module name for unique object file paths
-	libConfig["module"] = tg.CurrentModule
-	if libConfig["module"] == "" {
-		libConfig["module"] = "workspace"
-	}
-
-	toolchainName := ""
-	if tg.CurrentToolchain != nil {
-		toolchainName = tg.CurrentToolchain.Name
-	}
-
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		libType,
-		libConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		tg.ToolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		[]*BuildTask{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Register the target's link task for cross-module dependency resolution
-	if name, ok := libConfig["name"].(string); ok {
-		for _, task := range tasks {
-			if task.TaskType == "link" {
-				tg.generatedTargets[name] = task.TaskID
-				// Also register in global registry
-				globalTaskRegistry.RegisterTarget(name, task.TaskID, tg.CurrentModule)
-				break
-			}
-		}
-	}
-
-	return tasks, nil
-}
-
-// generateGoLibraryTasks generates tasks for a Go library (plugin)
-func (tg *TaskGenerator) generateGoLibraryTasks(
-	libConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	// Go libraries are relatively rare - typically plugins
-	// For now, use the same logic as Go executables but with go_library template
-	libConfig["module"] = tg.CurrentModule
-	if libConfig["module"] == "" {
-		libConfig["module"] = "workspace"
-	}
-
-	// Select Go toolchain based on platform
-	toolMatcher := tg.ToolMatcher
-	toolchainName := ""
-	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == "go" {
-		toolchainName = tg.CurrentToolchain.Name
-	} else if tg.ToolchainManager != nil {
-		goToolchain := tg.ToolchainManager.FindByLanguage("go", tg.Platform, tg.Architecture)
-		if goToolchain != nil {
-			toolchainName = goToolchain.Name
-			var err error
-			toolMatcher, err = resource.NewToolMatcher(goToolchain)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create tool matcher for Go: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("no Go toolchain found for platform %s-%s", tg.Platform, tg.Architecture)
-		}
-	}
-
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		"go_library",
-		libConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		toolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		[]*BuildTask{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
-// generateRustLibraryTasks generates tasks for a Rust library
-func (tg *TaskGenerator) generateRustLibraryTasks(
-	libConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	libConfig["module"] = tg.CurrentModule
-	if libConfig["module"] == "" {
-		libConfig["module"] = "workspace"
-	}
-
-	// Select Rust toolchain based on platform
-	toolMatcher := tg.ToolMatcher
-	toolchainName := ""
-	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == "rust" {
-		toolchainName = tg.CurrentToolchain.Name
-	} else if tg.ToolchainManager != nil {
-		rustToolchain := tg.ToolchainManager.FindByLanguage("rust", tg.Platform, tg.Architecture)
-		if rustToolchain != nil {
-			toolchainName = rustToolchain.Name
-			var err error
-			toolMatcher, err = resource.NewToolMatcher(rustToolchain)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create tool matcher for Rust: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("no Rust toolchain found for platform %s-%s", tg.Platform, tg.Architecture)
-		}
-	}
-
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		"rust_library",
-		libConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		toolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		[]*BuildTask{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
-// generateExecutableTasks generates tasks for an executable
+// generateExecutableTasks generates tasks for an executable using unified task generation
 func (tg *TaskGenerator) generateExecutableTasks(
 	exeConfig map[string]any,
 	mergedConfig map[string]any,
@@ -515,318 +574,15 @@ func (tg *TaskGenerator) generateExecutableTasks(
 	setupTaskID string,
 	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
-	// Check for language field to determine routing
-	language := ""
-	if lang, ok := exeConfig["language"].(string); ok {
-		language = lang
+	// Set default type if not specified
+	if _, hasType := exeConfig["type"]; !hasType {
+		exeConfig["type"] = "executable"
 	}
 
-	// Route to language-specific handler
-	switch language {
-	case "go":
-		return tg.generateGoModuleTasks(exeConfig, mergedConfig, outputDir, setupTaskID)
-	case "rust":
-		return tg.generateRustCrateTasks(exeConfig, mergedConfig, outputDir, setupTaskID)
-	default:
-		// C++ or unspecified language - use traditional compile+link
-		return tg.generateCppExecutableTasks(exeConfig, mergedConfig, outputDir, setupTaskID, existingTasks)
-	}
+	return tg.generateTargetTasks(exeConfig, mergedConfig, outputDir, setupTaskID, existingTasks)
 }
 
-// generateCppExecutableTasks generates tasks for a C++ executable
-func (tg *TaskGenerator) generateCppExecutableTasks(
-	exeConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-	existingTasks []*BuildTask,
-) ([]*BuildTask, error) {
-	exeType := "executable"
-	if et, ok := exeConfig["type"].(string); ok {
-		exeType = et
-	}
 
-	if err := tg.resolvePackages(exeConfig); err != nil {
-		return nil, err
-	}
-
-	sources, err := tg.PathResolver.ResolveSources(exeConfig)
-	if err != nil {
-		return nil, err
-	}
-	exeConfig["sources"] = sources
-
-	includeDirs, err := tg.PathResolver.ResolveIncludeDirs(exeConfig)
-	if err != nil {
-		return nil, err
-	}
-	exeConfig["include_dirs"] = includeDirs
-
-	// Add module name for unique object file paths
-	exeConfig["module"] = tg.CurrentModule
-	if exeConfig["module"] == "" {
-		exeConfig["module"] = "workspace"
-	}
-
-	toolchainName := ""
-	if tg.CurrentToolchain != nil {
-		toolchainName = tg.CurrentToolchain.Name
-	}
-
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		exeType,
-		exeConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		tg.ToolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		existingTasks,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
-// generateGoModuleTasks generates tasks for a Go module using template engine
-func (tg *TaskGenerator) generateGoModuleTasks(
-	goModConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	// Resolve module path
-	modulePath := "."
-	if p, ok := goModConfig["path"].(string); ok {
-		modulePath = p
-	}
-	if tg.PathResolver != nil {
-		modulePath = tg.PathResolver.ResolveRelativePath(modulePath)
-	}
-	goModConfig["path"] = modulePath
-
-	// Add module name for unique task IDs
-	goModConfig["module"] = tg.CurrentModule
-	if goModConfig["module"] == "" {
-		goModConfig["module"] = "workspace"
-	}
-
-	// Select Go toolchain based on platform
-	toolMatcher := tg.ToolMatcher
-	toolchainName := ""
-	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == "go" {
-		toolchainName = tg.CurrentToolchain.Name
-	} else if tg.ToolchainManager != nil {
-		goToolchain := tg.ToolchainManager.FindByLanguage("go", tg.Platform, tg.Architecture)
-		if goToolchain != nil {
-			toolchainName = goToolchain.Name
-			var err error
-			toolMatcher, err = resource.NewToolMatcher(goToolchain)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create tool matcher for Go: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("no Go toolchain found for platform %s-%s", tg.Platform, tg.Architecture)
-		}
-	}
-
-	// Use template engine to expand go_executable template
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		"go_executable",
-		goModConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		toolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		[]*BuildTask{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add setup task as dependency and enhance with Go source files for cache invalidation
-	for _, task := range tasks {
-		// Add setup task dependency
-		if setupTaskID != "" {
-			task.Dependencies = append([]string{setupTaskID}, task.Dependencies...)
-		}
-
-		// Scan for all .go files in the module directory for cache invalidation
-		goFiles, scanErr := findGoSourceFiles(modulePath)
-		if scanErr != nil {
-			log.Printf("WARNING: Failed to scan Go source files in %s: %v", modulePath, scanErr)
-		} else {
-			for _, goFile := range goFiles {
-				task.Inputs = append(task.Inputs, NewTaskInput(goFile))
-			}
-			log.Printf("Found %d Go source files in %s", len(goFiles), modulePath)
-		}
-
-		// Recalculate cache key with updated inputs
-		task.CacheKey = task.CalculateCacheKey()
-	}
-
-	// Register target
-	if name, ok := goModConfig["name"].(string); ok {
-		for _, task := range tasks {
-			tg.generatedTargets[name] = task.TaskID
-			globalTaskRegistry.RegisterTarget(name, task.TaskID, tg.CurrentModule)
-			log.Printf("Generated Go build task: %s -> %v", name, task.Outputs)
-			break
-		}
-	}
-
-	return tasks, nil
-}
-
-// generateRustCrateTasks generates tasks for a Rust crate using template engine
-func (tg *TaskGenerator) generateRustCrateTasks(
-	crateConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	// Resolve crate path
-	cratePath := "."
-	if p, ok := crateConfig["path"].(string); ok {
-		cratePath = p
-	}
-	if tg.PathResolver != nil {
-		cratePath = tg.PathResolver.ResolveRelativePath(cratePath)
-	}
-	crateConfig["path"] = cratePath
-
-	// Add module name for unique task IDs
-	crateConfig["module"] = tg.CurrentModule
-	if crateConfig["module"] == "" {
-		crateConfig["module"] = "workspace"
-	}
-
-	// Select Rust toolchain based on platform
-	toolMatcher := tg.ToolMatcher
-	toolchainName := ""
-	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == "rust" {
-		toolchainName = tg.CurrentToolchain.Name
-	} else if tg.ToolchainManager != nil {
-		rustToolchain := tg.ToolchainManager.FindByLanguage("rust", tg.Platform, tg.Architecture)
-		if rustToolchain != nil {
-			toolchainName = rustToolchain.Name
-			var err error
-			toolMatcher, err = resource.NewToolMatcher(rustToolchain)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create tool matcher for Rust: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("no Rust toolchain found for platform %s-%s", tg.Platform, tg.Architecture)
-		}
-	}
-
-	// Use template engine to expand rust_executable template
-	tasks, err := tg.TemplateEngine.ExpandTemplate(
-		"rust_executable",
-		crateConfig,
-		mergedConfig,
-		outputDir,
-		setupTaskID,
-		tg.TaskIDGen,
-		toolMatcher,
-		tg.CommandBuilder,
-		tg.Platform,
-		tg.Architecture,
-		tg.Configuration,
-		toolchainName,
-		[]*BuildTask{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add setup task as dependency and enhance with Rust source files for cache invalidation
-	for _, task := range tasks {
-		// Add setup task dependency
-		if setupTaskID != "" {
-			task.Dependencies = append([]string{setupTaskID}, task.Dependencies...)
-		}
-
-		// Scan for Rust source files for cache invalidation
-		rsFiles, scanErr := findRustSourceFiles(cratePath)
-		if scanErr != nil {
-			log.Printf("WARNING: Failed to scan Rust source files in %s: %v", cratePath, scanErr)
-		} else {
-			for _, rsFile := range rsFiles {
-				task.Inputs = append(task.Inputs, NewTaskInput(rsFile))
-			}
-			log.Printf("Found %d Rust source files in %s", len(rsFiles), cratePath)
-		}
-
-		// Recalculate cache key with updated inputs
-		task.CacheKey = task.CalculateCacheKey()
-	}
-
-	// Register target
-	if name, ok := crateConfig["name"].(string); ok {
-		for _, task := range tasks {
-			tg.generatedTargets[name] = task.TaskID
-			globalTaskRegistry.RegisterTarget(name, task.TaskID, tg.CurrentModule)
-			log.Printf("Generated Rust build task: %s -> %v", name, task.Outputs)
-			break
-		}
-	}
-
-	return tasks, nil
-}
-
-// findRustSourceFiles recursively finds all .rs files in a directory
-func findRustSourceFiles(rootDir string) ([]string, error) {
-	var rsFiles []string
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip target directory (Cargo build output)
-		if info.IsDir() && info.Name() == "target" {
-			return filepath.SkipDir
-		}
-
-		// Collect .rs files
-		if !info.IsDir() && strings.HasSuffix(path, ".rs") {
-			rsFiles = append(rsFiles, path)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Also add Cargo.toml and Cargo.lock if they exist
-	cargoToml := filepath.Join(rootDir, "Cargo.toml")
-	if _, err := os.Stat(cargoToml); err == nil {
-		rsFiles = append(rsFiles, cargoToml)
-	}
-	cargoLock := filepath.Join(rootDir, "Cargo.lock")
-	if _, err := os.Stat(cargoLock); err == nil {
-		rsFiles = append(rsFiles, cargoLock)
-	}
-
-	return rsFiles, nil
-}
 
 // GetGeneratedTargets returns the mapping of target names to their link task IDs
 func (tg *TaskGenerator) GetGeneratedTargets() map[string]string {
@@ -977,39 +733,4 @@ func extractIncludeDirs(value any) []string {
 // RegisterTarget registers a target name to task ID mapping
 func (tg *TaskGenerator) RegisterTarget(name, taskID string) {
 	tg.generatedTargets[name] = taskID
-}
-
-// findGoSourceFiles recursively finds all .go files in a directory
-// Excludes vendor directories and test files if needed
-func findGoSourceFiles(rootDir string) ([]string, error) {
-	var goFiles []string
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip directories we don't want to scan
-		if info.IsDir() {
-			name := info.Name()
-			// Skip vendor, .git, and other common directories
-			if name == "vendor" || name == ".git" || name == "testdata" || name == ".buildy_cache" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Only include .go files
-		if filepath.Ext(path) == ".go" {
-			goFiles = append(goFiles, path)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return goFiles, nil
 }

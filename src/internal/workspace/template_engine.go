@@ -14,10 +14,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TemplateMetadata defines the metadata for a build template
+type TemplateMetadata struct {
+	Language      string   // Language this template is for (e.g., "cpp", "c", "go", "rust")
+	TargetTypes   []string // Target types this template can build (e.g., ["executable", "shared_library"])
+	PreProcessing struct {
+		ResolvePackages    bool // Call resolvePackages() for package dependencies
+		ResolveSources     bool // Call PathResolver.ResolveSources() for source file globbing
+		ResolveIncludeDirs bool // Call PathResolver.ResolveIncludeDirs() for include paths
+		ResolvePath        bool // Call PathResolver.ResolveRelativePath() on "path" field
+	}
+	PostProcessing struct {
+		ScanSourcesPattern string // Glob pattern for source file scanning (e.g., "*.go", "*.rs")
+		RegisterTarget     bool   // Register the target in the global registry
+		AddSetupDependency bool   // Add setup task as dependency
+	}
+	ToolchainLanguage string // Language to use for toolchain selection (if different from Language)
+}
+
 // BuildTemplateEngine expands universal build templates into concrete tasks
 type BuildTemplateEngine struct {
-	templatesDirs []string
-	templates     map[string]any
+	templatesDirs    []string
+	templates        map[string]any
+	templateMetadata map[string]*TemplateMetadata // Parsed metadata for each template
 }
 
 // NewBuildTemplateEngine creates a new BuildTemplateEngine from a single directory
@@ -28,8 +47,9 @@ func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
 // NewBuildTemplateEngineMulti creates a new BuildTemplateEngine from multiple directories
 func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, error) {
 	engine := &BuildTemplateEngine{
-		templatesDirs: templatesDirs,
-		templates:     make(map[string]any),
+		templatesDirs:    templatesDirs,
+		templates:        make(map[string]any),
+		templateMetadata: make(map[string]*TemplateMetadata),
 	}
 
 	// First load embedded templates (built-in)
@@ -41,6 +61,9 @@ func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, 
 	if err := engine.loadTemplates(); err != nil {
 		return nil, err
 	}
+
+	// Parse metadata for all loaded templates
+	engine.parseAllTemplateMetadata()
 
 	return engine, nil
 }
@@ -194,6 +217,113 @@ func (bte *BuildTemplateEngine) ListTemplates() []struct {
 	}
 
 	return result
+}
+
+// parseAllTemplateMetadata parses metadata for all loaded templates
+func (bte *BuildTemplateEngine) parseAllTemplateMetadata() {
+	for name, tmplRaw := range bte.templates {
+		tmpl, ok := tmplRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		metadata := bte.parseTemplateMetadata(tmpl)
+		if metadata != nil {
+			bte.templateMetadata[name] = metadata
+			log.Printf("Parsed metadata for template '%s': language=%s, types=%v",
+				name, metadata.Language, metadata.TargetTypes)
+		}
+	}
+}
+
+// parseTemplateMetadata extracts metadata from a template definition
+func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *TemplateMetadata {
+	metadataRaw, ok := tmpl["metadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	metadata := &TemplateMetadata{}
+
+	// Parse language
+	if lang, ok := metadataRaw["language"].(string); ok {
+		metadata.Language = lang
+	}
+
+	// Parse target_types
+	if types, ok := metadataRaw["target_types"].([]any); ok {
+		for _, t := range types {
+			if str, ok := t.(string); ok {
+				metadata.TargetTypes = append(metadata.TargetTypes, str)
+			}
+		}
+	}
+
+	// Parse toolchain_language (defaults to language if not specified)
+	if tcLang, ok := metadataRaw["toolchain_language"].(string); ok {
+		metadata.ToolchainLanguage = tcLang
+	} else {
+		metadata.ToolchainLanguage = metadata.Language
+	}
+
+	// Parse pre_processing
+	if preProc, ok := metadataRaw["pre_processing"].(map[string]any); ok {
+		if v, ok := preProc["resolve_packages"].(bool); ok {
+			metadata.PreProcessing.ResolvePackages = v
+		}
+		if v, ok := preProc["resolve_sources"].(bool); ok {
+			metadata.PreProcessing.ResolveSources = v
+		}
+		if v, ok := preProc["resolve_include_dirs"].(bool); ok {
+			metadata.PreProcessing.ResolveIncludeDirs = v
+		}
+		if v, ok := preProc["resolve_path"].(bool); ok {
+			metadata.PreProcessing.ResolvePath = v
+		}
+	}
+
+	// Parse post_processing
+	if postProc, ok := metadataRaw["post_processing"].(map[string]any); ok {
+		if v, ok := postProc["scan_sources_pattern"].(string); ok {
+			metadata.PostProcessing.ScanSourcesPattern = v
+		}
+		if v, ok := postProc["register_target"].(bool); ok {
+			metadata.PostProcessing.RegisterTarget = v
+		}
+		if v, ok := postProc["add_setup_dependency"].(bool); ok {
+			metadata.PostProcessing.AddSetupDependency = v
+		}
+	}
+
+	return metadata
+}
+
+// LookupTemplate finds a template by language and target type
+// Returns the template name, template data, and metadata
+func (bte *BuildTemplateEngine) LookupTemplate(language, targetType string) (string, map[string]any, *TemplateMetadata, error) {
+	// Search for a template that matches the language and target type
+	for name, metadata := range bte.templateMetadata {
+		if metadata.Language != language {
+			continue
+		}
+
+		// Check if this template supports the target type
+		for _, tt := range metadata.TargetTypes {
+			if tt == targetType {
+				tmpl := bte.GetTemplate(name)
+				if tmpl != nil {
+					log.Printf("Found template '%s' for language=%s, type=%s", name, language, targetType)
+					return name, tmpl, metadata, nil
+				}
+			}
+		}
+	}
+
+	return "", nil, nil, fmt.Errorf("no template found for language '%s' and target type '%s'", language, targetType)
+}
+
+// GetTemplateMetadata returns the metadata for a template by name
+func (bte *BuildTemplateEngine) GetTemplateMetadata(templateName string) *TemplateMetadata {
+	return bte.templateMetadata[templateName]
 }
 
 // ExpandTemplate expands a template into concrete build tasks

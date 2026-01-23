@@ -1,7 +1,7 @@
 toolchain:
   name: "emscripten"
   description: "Emscripten for WebAssembly compilation"
-  language: "c++"
+  language: cpp
   
   target:
     platform: wasm

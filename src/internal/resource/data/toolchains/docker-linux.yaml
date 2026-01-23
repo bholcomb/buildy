@@ -1,7 +1,7 @@
 toolchain:
   name: "docker-linux"
   description: "GCC in Docker for cross-platform builds"
-  language: "c++"
+  language: cpp
   
   target:
     platform: linux
