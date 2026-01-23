@@ -582,16 +582,16 @@ func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, er
 		}
 	}
 
-	// New format: targets.libraries and targets.executables
+	// New format: targets.static_libraries, targets.shared_libraries, targets.executables
 	if targetsSection, ok := config["targets"].(map[string]any); ok {
-		if libs, ok := targetsSection["libraries"].([]any); ok {
+		if libs, ok := targetsSection["static_libraries"].([]any); ok {
+			extractNames(libs)
+		}
+		if libs, ok := targetsSection["shared_libraries"].([]any); ok {
 			extractNames(libs)
 		}
 		if exes, ok := targetsSection["executables"].([]any); ok {
 			extractNames(exes)
-		}
-		if goMods, ok := targetsSection["go_modules"].([]any); ok {
-			extractNames(goMods)
 		}
 	}
 

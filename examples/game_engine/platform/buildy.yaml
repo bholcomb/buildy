@@ -6,9 +6,8 @@ variables:
   MODULE_NAME: "engine_platform"
 
 targets:
-  libraries:
+  shared_libraries:
     - name: engine_platform
-      type: shared_library
       language: cpp
       sources:
         - "src/common/*.cpp"
@@ -26,7 +25,7 @@ targets:
 platforms:
   linux:
     targets:
-      libraries:
+      shared_libraries:
         - name: engine_platform
           sources:
             - "src/common/*.cpp"
@@ -36,7 +35,7 @@ platforms:
             
   windows:
     targets:
-      libraries:
+      shared_libraries:
         - name: engine_platform
           sources:
             - "src/common/*.cpp"

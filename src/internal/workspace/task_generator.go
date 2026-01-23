@@ -97,12 +97,10 @@ func (tg *TaskGenerator) generateTargetTasks(
 		return nil, fmt.Errorf("target '%s' is missing required 'language' field", targetName)
 	}
 
-	// Determine target type (default to executable for executables list, shared_library for libraries)
+	// Get target type (must be set by caller or explicitly in config)
 	targetType := "executable"
 	if tt, ok := targetConfig["type"].(string); ok {
 		targetType = tt
-	} else if _, isLibrary := targetConfig["_is_library"]; isLibrary {
-		targetType = "shared_library"
 	}
 
 	// Look up template by language and target type
@@ -354,81 +352,87 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 	setupTask := tg.createSetupTask(outputDir)
 	tasks = append(tasks, &setupTask)
 
-	// Generate library tasks - support both old and new formats
-	libraries := []any{}
-
-	// New format: targets.libraries
-	if targets, ok := config["targets"].(map[string]any); ok {
-		if libs, ok := targets["libraries"].([]any); ok {
-			libraries = append(libraries, libs...)
-		}
-	}
-
-	// Legacy format: library (single or list)
-	if library, ok := config["library"]; ok {
-		switch v := library.(type) {
-		case map[string]any:
-			libraries = append(libraries, v)
-		case []any:
-			libraries = append(libraries, v...)
-		}
-	}
-
-	// Apply platform-specific target overrides
-	libraries = tg.applyPlatformTargetOverrides(config, libraries, "libraries")
-
 	mergedConfig := tg.getMergedConfig(config)
 
-	for _, libRaw := range libraries {
-		if lib, ok := libRaw.(map[string]any); ok {
-			libTasks, err := tg.generateLibraryTasks(lib, mergedConfig, outputDir, setupTask.TaskID)
-			if err != nil {
-				return nil, err
+	// Define target sections with their default types
+	// Each section maps to a specific target type for clarity
+	targetSections := []struct {
+		section     string
+		defaultType string
+	}{
+		{"static_libraries", "static_library"},
+		{"shared_libraries", "shared_library"},
+		{"executables", "executable"},
+	}
+
+	// Process each target section
+	for _, ts := range targetSections {
+		targets := []any{}
+
+		// Extract targets from config
+		if targetsMap, ok := config["targets"].(map[string]any); ok {
+			if sectionTargets, ok := targetsMap[ts.section].([]any); ok {
+				targets = append(targets, sectionTargets...)
 			}
-			tasks = append(tasks, libTasks...)
 		}
-	}
 
-	// Generate executable tasks - support both old and new formats
-	executables := []any{}
+		// Apply platform-specific target overrides
+		targets = tg.applyPlatformTargetOverrides(config, targets, ts.section)
 
-	// New format: targets.executables
-	if targets, ok := config["targets"].(map[string]any); ok {
-		if exes, ok := targets["executables"].([]any); ok {
-			executables = append(executables, exes...)
-		}
-	}
-
-	// Legacy format: executable (single or list)
-	if executable, ok := config["executable"]; ok {
-		switch v := executable.(type) {
-		case map[string]any:
-			executables = append(executables, v)
-		case []any:
-			executables = append(executables, v...)
-		}
-	}
-
-	// Apply platform-specific target overrides
-	executables = tg.applyPlatformTargetOverrides(config, executables, "executables")
-
-	for _, exeRaw := range executables {
-		if exe, ok := exeRaw.(map[string]any); ok {
-			exeTasks, err := tg.generateExecutableTasks(exe, mergedConfig, outputDir, setupTask.TaskID, tasks)
-			if err != nil {
-				return nil, err
+		// Generate tasks for each target
+		for _, targetRaw := range targets {
+			if target, ok := targetRaw.(map[string]any); ok {
+				// Set the type based on which section this target came from
+				target["type"] = ts.defaultType
+				targetTasks, err := tg.generateTargetTasks(target, mergedConfig, outputDir, setupTask.TaskID, tasks)
+				if err != nil {
+					return nil, err
+				}
+				tasks = append(tasks, targetTasks...)
 			}
-			tasks = append(tasks, exeTasks...)
 		}
 	}
 
-	// Generate artifact copy tasks
+	// Generate artifact tasks
 	if artifacts, ok := config["artifacts"].(map[string]any); ok {
+		// Generate transform tasks
+		transformTasks, err := tg.generateTransformTasks(artifacts, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, transformTasks...)
+
+		// Generate generate tasks
+		generateTasks, err := tg.generateGenerateTasks(artifacts, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, generateTasks...)
+
+		// Generate copy tasks
 		copyTasks, err := tg.generateArtifactCopyTasks(artifacts, mergedConfig, outputDir, tasks)
 		if err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, copyTasks...)
+	}
+
+	// Generate staging tasks
+	if staging, ok := config["staging"].(map[string]any); ok {
+		stagingTasks, err := tg.generateStagingTasks(staging, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, stagingTasks...)
+	}
+
+	// Generate install/packaging tasks
+	if install, ok := config["install"].([]any); ok {
+		installTasks, err := tg.generateInstallTasks(install, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, installTasks...)
 	}
 
 	return tasks, nil
@@ -546,43 +550,1056 @@ func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
 	return nil
 }
 
-// generateLibraryTasks generates tasks for a library using unified task generation
-func (tg *TaskGenerator) generateLibraryTasks(
-	libConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
-	setupTaskID string,
-) ([]*BuildTask, error) {
-	// Mark this as a library target (used for default type detection)
-	libConfig["_is_library"] = true
+// artifactOutputs tracks artifact name -> output paths for staging
+var artifactOutputs = make(map[string][]string)
 
-	// Set default type if not specified
-	if _, hasType := libConfig["type"]; !hasType {
-		libConfig["type"] = "shared_library"
-	}
-
-	return tg.generateTargetTasks(libConfig, mergedConfig, outputDir, setupTaskID, []*BuildTask{})
+// GetArtifactOutputs returns the outputs for a named artifact
+func GetArtifactOutputs(name string) []string {
+	return artifactOutputs[name]
 }
 
-
-
-// generateExecutableTasks generates tasks for an executable using unified task generation
-func (tg *TaskGenerator) generateExecutableTasks(
-	exeConfig map[string]any,
+// generateTransformTasks generates transform tasks from artifacts.transform section
+func (tg *TaskGenerator) generateTransformTasks(
+	artifacts map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
-	setupTaskID string,
 	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
-	// Set default type if not specified
-	if _, hasType := exeConfig["type"]; !hasType {
-		exeConfig["type"] = "executable"
+	var tasks []*BuildTask
+
+	transformItems, ok := artifacts["transform"].([]any)
+	if !ok {
+		return tasks, nil
 	}
 
-	return tg.generateTargetTasks(exeConfig, mergedConfig, outputDir, setupTaskID, existingTasks)
+	// Use module directory (PathResolver.ConfigFileDir) for relative paths, not workspace root
+	moduleDir := ""
+	if tg.PathResolver != nil && tg.PathResolver.ConfigFileDir != "" {
+		moduleDir = tg.PathResolver.ConfigFileDir
+	} else if tg.Workspace != nil {
+		moduleDir = tg.Workspace.RootDir
+	}
+
+	for _, transformRaw := range transformItems {
+		transformItem, ok := transformRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// Extract transform configuration
+		name := ""
+		if n, ok := transformItem["name"].(string); ok {
+			name = n
+		}
+
+		toolName := ""
+		if t, ok := transformItem["tool"].(string); ok {
+			toolName = t
+		}
+
+		inputPattern := ""
+		if i, ok := transformItem["inputs"].(string); ok {
+			inputPattern = i
+		}
+
+		outputPattern := ""
+		if o, ok := transformItem["outputs"].(string); ok {
+			outputPattern = o
+		}
+
+		var args []string
+		if a, ok := transformItem["args"].([]any); ok {
+			for _, arg := range a {
+				if s, ok := arg.(string); ok {
+					args = append(args, s)
+				}
+			}
+		}
+
+		if toolName == "" || inputPattern == "" || outputPattern == "" {
+			log.Printf("WARNING: artifacts.transform item '%s' missing required fields (tool, inputs, outputs)", name)
+			continue
+		}
+
+		// Look up the toolchain by name
+		toolchain := tg.ToolchainManager.GetToolchain(toolName)
+		if toolchain == nil {
+			log.Printf("WARNING: artifacts.transform '%s': toolchain '%s' not found", name, toolName)
+			continue
+		}
+
+		// Find the transform/convert/compile tool in the toolchain
+		var tool *resource.Tool
+		for _, t := range toolchain.Tools {
+			if t.Action == "transform" || t.Action == "convert" || t.Action == "compile" {
+				tool = t
+				break
+			}
+		}
+		if tool == nil {
+			log.Printf("WARNING: artifacts.transform '%s': no transform/convert/compile tool found in toolchain '%s'", name, toolName)
+			continue
+		}
+
+		// Resolve input pattern - make it absolute if relative (use module directory)
+		if !filepath.IsAbs(inputPattern) && moduleDir != "" {
+			inputPattern = filepath.Join(moduleDir, inputPattern)
+		}
+
+		// Expand glob pattern to get input files
+		inputFiles, err := filepath.Glob(inputPattern)
+		if err != nil {
+			log.Printf("WARNING: artifacts.transform '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
+			continue
+		}
+
+		if len(inputFiles) == 0 {
+			log.Printf("WARNING: artifacts.transform '%s': no files matched pattern '%s'", name, inputPattern)
+			continue
+		}
+
+		var artifactOutputPaths []string
+
+		// Create a task for each input file
+		for _, inputFile := range inputFiles {
+			// Resolve output path with ${basename} and ${out_dir} substitution
+			baseName := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+			resolvedOutput := outputPattern
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${basename}", baseName)
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${out_dir}", outputDir)
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${output_dir}", outputDir)
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${config}", tg.Configuration)
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${platform}", tg.Platform)
+			resolvedOutput = strings.ReplaceAll(resolvedOutput, "${arch}", tg.Architecture)
+
+			// Make output path absolute if relative (use module directory)
+			if !filepath.IsAbs(resolvedOutput) && moduleDir != "" {
+				resolvedOutput = filepath.Join(moduleDir, resolvedOutput)
+			}
+
+			// Build the command
+			outputDir := filepath.Dir(resolvedOutput)
+			command := tool.Command
+
+			// Substitute command placeholders
+			command = strings.ReplaceAll(command, "{input}", inputFile)
+			command = strings.ReplaceAll(command, "{output}", resolvedOutput)
+			command = strings.ReplaceAll(command, "{output_dir}", outputDir)
+
+			// Add flags from tool configuration
+			flagsStr := ""
+			if flags, ok := tool.Flags[tg.Configuration]; ok {
+				flagsStr = strings.Join(flags, " ")
+			} else if flags, ok := tool.Flags["common"]; ok {
+				flagsStr = strings.Join(flags, " ")
+			}
+			command = strings.ReplaceAll(command, "{flags}", flagsStr)
+
+			// Add user-provided args
+			if len(args) > 0 {
+				argsStr := strings.Join(args, " ")
+				// If command has {args} placeholder, substitute it; otherwise append
+				if strings.Contains(command, "{args}") {
+					command = strings.ReplaceAll(command, "{args}", argsStr)
+				} else {
+					command = command + " " + argsStr
+				}
+			} else {
+				command = strings.ReplaceAll(command, "{args}", "")
+			}
+
+			// Clean up any remaining empty placeholders
+			command = strings.ReplaceAll(command, "{defines}", "")
+			command = strings.ReplaceAll(command, "{includes}", "")
+
+			// Create mkdir prefix for output directory
+			var fullCommand string
+			if strings.Contains(strings.ToLower(tg.Platform), "windows") {
+				fullCommand = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputDir, outputDir, command)
+			} else {
+				fullCommand = fmt.Sprintf("mkdir -p %s && %s", outputDir, command)
+			}
+
+			// Create the task
+			taskID := tg.TaskIDGen.Next("transform", baseName)
+			task := NewBuildTask(
+				taskID,
+				"transform",
+				[]TaskInput{NewTaskInput(inputFile)},
+				[]string{resolvedOutput},
+				[]string{}, // No dependencies by default
+				fullCommand,
+			)
+			task.Platform = tg.Platform
+			task.Architecture = tg.Architecture
+			task.Configuration = tg.Configuration
+			task.Toolchain = toolName
+			task.EstimatedTime = 1.0
+			task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50}
+			task.CacheKey = task.CalculateCacheKey()
+
+			tasks = append(tasks, &task)
+			artifactOutputPaths = append(artifactOutputPaths, resolvedOutput)
+			log.Printf("Generated transform task: %s -> %s", inputFile, resolvedOutput)
+		}
+
+		// Register artifact outputs for staging
+		if name != "" {
+			artifactOutputs[name] = artifactOutputPaths
+			log.Printf("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
+		}
+	}
+
+	return tasks, nil
 }
 
+// generateGenerateTasks generates tasks from artifacts.generate section
+func (tg *TaskGenerator) generateGenerateTasks(
+	artifacts map[string]any,
+	mergedConfig map[string]any,
+	outputDir string,
+	existingTasks []*BuildTask,
+) ([]*BuildTask, error) {
+	var tasks []*BuildTask
 
+	generateItems, ok := artifacts["generate"].([]any)
+	if !ok {
+		return tasks, nil
+	}
+
+	// Use module directory (PathResolver.ConfigFileDir) for relative paths, not workspace root
+	moduleDir := ""
+	if tg.PathResolver != nil && tg.PathResolver.ConfigFileDir != "" {
+		moduleDir = tg.PathResolver.ConfigFileDir
+	} else if tg.Workspace != nil {
+		moduleDir = tg.Workspace.RootDir
+	}
+
+	// Get gen_dir (generated files directory)
+	genDir := filepath.Join(outputDir, "gen")
+
+	for _, generateRaw := range generateItems {
+		generateItem, ok := generateRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		name := ""
+		if n, ok := generateItem["name"].(string); ok {
+			name = n
+		}
+
+		// Check if this is a template-based generation or tool-based generation
+		if templatePath, ok := generateItem["template"].(string); ok {
+			// Template-based generation
+			outputPath := ""
+			if o, ok := generateItem["output"].(string); ok {
+				outputPath = o
+			}
+
+			if outputPath == "" {
+				log.Printf("WARNING: artifacts.generate '%s' missing 'output' field", name)
+				continue
+			}
+
+			// Resolve template path (use module directory)
+			if !filepath.IsAbs(templatePath) && moduleDir != "" {
+				templatePath = filepath.Join(moduleDir, templatePath)
+			}
+
+			// Resolve output path
+			outputPath = strings.ReplaceAll(outputPath, "${gen_dir}", genDir)
+			outputPath = strings.ReplaceAll(outputPath, "${out_dir}", outputDir)
+			outputPath = strings.ReplaceAll(outputPath, "${output_dir}", outputDir)
+			outputPath = strings.ReplaceAll(outputPath, "${config}", tg.Configuration)
+			outputPath = strings.ReplaceAll(outputPath, "${platform}", tg.Platform)
+			outputPath = strings.ReplaceAll(outputPath, "${arch}", tg.Architecture)
+
+			if !filepath.IsAbs(outputPath) && moduleDir != "" {
+				outputPath = filepath.Join(moduleDir, outputPath)
+			}
+
+			// Get variables for substitution
+			vars := make(map[string]string)
+			if v, ok := generateItem["variables"].(map[string]any); ok {
+				for key, val := range v {
+					if strVal, ok := val.(string); ok {
+						// Resolve built-in variables
+						strVal = strings.ReplaceAll(strVal, "${project_version}", tg.getProjectVersion(mergedConfig))
+						strVal = strings.ReplaceAll(strVal, "${project_name}", tg.getProjectName(mergedConfig))
+						strVal = strings.ReplaceAll(strVal, "${config}", tg.Configuration)
+						strVal = strings.ReplaceAll(strVal, "${platform}", tg.Platform)
+						strVal = strings.ReplaceAll(strVal, "${arch}", tg.Architecture)
+						vars[key] = strVal
+					}
+				}
+			}
+
+			// Build sed command for template substitution (or use Go template processing)
+			// For simplicity, we'll use a shell-based approach with sed
+			outputFileDir := filepath.Dir(outputPath)
+			
+			// Build sed substitution commands
+			var sedCmds []string
+			for key, val := range vars {
+				// Escape special characters in value for sed
+				escapedVal := strings.ReplaceAll(val, "/", "\\/")
+				escapedVal = strings.ReplaceAll(escapedVal, "&", "\\&")
+				sedCmds = append(sedCmds, fmt.Sprintf("s/@%s@/%s/g", key, escapedVal))
+				sedCmds = append(sedCmds, fmt.Sprintf("s/${%s}/%s/g", key, escapedVal))
+			}
+
+			var command string
+			if strings.Contains(strings.ToLower(tg.Platform), "windows") {
+				// Windows: use PowerShell for template substitution
+				psScript := fmt.Sprintf("$content = Get-Content '%s' -Raw; ", templatePath)
+				for key, val := range vars {
+					psScript += fmt.Sprintf("$content = $content -replace '@%s@', '%s'; ", key, val)
+					psScript += fmt.Sprintf("$content = $content -replace '\\${%s}', '%s'; ", key, val)
+				}
+				psScript += fmt.Sprintf("$content | Set-Content '%s'", outputPath)
+				command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && powershell -Command \"%s\"",
+					outputFileDir, outputFileDir, psScript)
+			} else {
+				// Unix: use sed
+				sedExpr := strings.Join(sedCmds, "; ")
+				if sedExpr == "" {
+					// No substitutions, just copy
+					command = fmt.Sprintf("mkdir -p %s && cp %s %s", outputFileDir, templatePath, outputPath)
+				} else {
+					command = fmt.Sprintf("mkdir -p %s && sed '%s' %s > %s", outputFileDir, sedExpr, templatePath, outputPath)
+				}
+			}
+
+			taskID := tg.TaskIDGen.Next("generate", name)
+			task := NewBuildTask(
+				taskID,
+				"generate",
+				[]TaskInput{NewTaskInput(templatePath)},
+				[]string{outputPath},
+				[]string{}, // Generate tasks should run early
+				command,
+			)
+			task.Platform = tg.Platform
+			task.Architecture = tg.Architecture
+			task.Configuration = tg.Configuration
+			task.EstimatedTime = 0.1
+			task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1}
+			task.CacheKey = task.CalculateCacheKey()
+
+			tasks = append(tasks, &task)
+
+			// Register artifact outputs
+			if name != "" {
+				artifactOutputs[name] = []string{outputPath}
+			}
+
+			log.Printf("Generated template task: %s -> %s", templatePath, outputPath)
+
+		} else if toolName, ok := generateItem["tool"].(string); ok {
+			// Tool-based generation (e.g., protoc)
+			inputPattern := ""
+			if i, ok := generateItem["inputs"].(string); ok {
+				inputPattern = i
+			}
+
+			outputPatterns := []string{}
+			if o, ok := generateItem["outputs"].(string); ok {
+				outputPatterns = []string{o}
+			} else if o, ok := generateItem["outputs"].([]any); ok {
+				for _, p := range o {
+					if s, ok := p.(string); ok {
+						outputPatterns = append(outputPatterns, s)
+					}
+				}
+			}
+
+			var args []string
+			if a, ok := generateItem["args"].([]any); ok {
+				for _, arg := range a {
+					if s, ok := arg.(string); ok {
+						args = append(args, s)
+					}
+				}
+			}
+
+			if inputPattern == "" || len(outputPatterns) == 0 {
+				log.Printf("WARNING: artifacts.generate '%s' with tool '%s' missing inputs or outputs", name, toolName)
+				continue
+			}
+
+			// Look up the toolchain
+			toolchain := tg.ToolchainManager.GetToolchain(toolName)
+			if toolchain == nil {
+				log.Printf("WARNING: artifacts.generate '%s': toolchain '%s' not found", name, toolName)
+				continue
+			}
+
+			// Find the generate/compile tool
+			var tool *resource.Tool
+			for _, t := range toolchain.Tools {
+				if t.Action == "generate" || t.Action == "compile" {
+					tool = t
+					break
+				}
+			}
+			if tool == nil {
+				log.Printf("WARNING: artifacts.generate '%s': no generate/compile tool found in toolchain '%s'", name, toolName)
+				continue
+			}
+
+			// Resolve input pattern (use module directory)
+			if !filepath.IsAbs(inputPattern) && moduleDir != "" {
+				inputPattern = filepath.Join(moduleDir, inputPattern)
+			}
+
+			// Expand glob pattern
+			inputFiles, err := filepath.Glob(inputPattern)
+			if err != nil {
+				log.Printf("WARNING: artifacts.generate '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
+				continue
+			}
+
+			if len(inputFiles) == 0 {
+				log.Printf("WARNING: artifacts.generate '%s': no files matched pattern '%s'", name, inputPattern)
+				continue
+			}
+
+			var artifactOutputPaths []string
+
+			// Create a task for each input file
+			for _, inputFile := range inputFiles {
+				baseName := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+
+				// Resolve output paths
+				var resolvedOutputs []string
+				for _, pattern := range outputPatterns {
+					resolved := pattern
+					resolved = strings.ReplaceAll(resolved, "${basename}", baseName)
+					resolved = strings.ReplaceAll(resolved, "${gen_dir}", genDir)
+					resolved = strings.ReplaceAll(resolved, "${out_dir}", outputDir)
+					resolved = strings.ReplaceAll(resolved, "${output_dir}", outputDir)
+					if !filepath.IsAbs(resolved) && moduleDir != "" {
+						resolved = filepath.Join(moduleDir, resolved)
+					}
+					resolvedOutputs = append(resolvedOutputs, resolved)
+				}
+
+				// Build command
+				command := tool.Command
+				command = strings.ReplaceAll(command, "{input}", inputFile)
+				if len(resolvedOutputs) > 0 {
+					command = strings.ReplaceAll(command, "{output}", resolvedOutputs[0])
+					command = strings.ReplaceAll(command, "{output_dir}", filepath.Dir(resolvedOutputs[0]))
+				}
+				command = strings.ReplaceAll(command, "{gen_dir}", genDir)
+
+				// Add args
+				argsStr := strings.Join(args, " ")
+				argsStr = strings.ReplaceAll(argsStr, "${gen_dir}", genDir)
+				if strings.Contains(command, "{args}") {
+					command = strings.ReplaceAll(command, "{args}", argsStr)
+				} else if argsStr != "" {
+					command = command + " " + argsStr
+				}
+
+				// Clean up placeholders
+				command = strings.ReplaceAll(command, "{flags}", "")
+				command = strings.ReplaceAll(command, "{defines}", "")
+				command = strings.ReplaceAll(command, "{includes}", "")
+
+				// Create mkdir prefix
+				var fullCommand string
+				if len(resolvedOutputs) > 0 {
+					outputFileDir := filepath.Dir(resolvedOutputs[0])
+					if strings.Contains(strings.ToLower(tg.Platform), "windows") {
+						fullCommand = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputFileDir, outputFileDir, command)
+					} else {
+						fullCommand = fmt.Sprintf("mkdir -p %s && %s", outputFileDir, command)
+					}
+				} else {
+					fullCommand = command
+				}
+
+				taskID := tg.TaskIDGen.Next("generate", baseName)
+				task := NewBuildTask(
+					taskID,
+					"generate",
+					[]TaskInput{NewTaskInput(inputFile)},
+					resolvedOutputs,
+					[]string{},
+					fullCommand,
+				)
+				task.Platform = tg.Platform
+				task.Architecture = tg.Architecture
+				task.Configuration = tg.Configuration
+				task.Toolchain = toolName
+				task.EstimatedTime = 0.5
+				task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10}
+				task.CacheKey = task.CalculateCacheKey()
+
+				tasks = append(tasks, &task)
+				artifactOutputPaths = append(artifactOutputPaths, resolvedOutputs...)
+				log.Printf("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
+			}
+
+			// Register artifact outputs
+			if name != "" {
+				artifactOutputs[name] = artifactOutputPaths
+			}
+		}
+	}
+
+	return tasks, nil
+}
+
+// getProjectVersion extracts project version from config
+func (tg *TaskGenerator) getProjectVersion(config map[string]any) string {
+	if project, ok := config["project"].(map[string]any); ok {
+		if version, ok := project["version"].(string); ok {
+			return version
+		}
+	}
+	return "0.0.0"
+}
+
+// getProjectName extracts project name from config
+func (tg *TaskGenerator) getProjectName(config map[string]any) string {
+	if project, ok := config["project"].(map[string]any); ok {
+		if name, ok := project["name"].(string); ok {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+// stagingTaskInfo tracks staging task IDs for install dependencies
+var stagingTasksByName = make(map[string][]string)
+
+// generateStagingTasks generates tasks to populate a staging area using hierarchical folder structure
+func (tg *TaskGenerator) generateStagingTasks(
+	staging map[string]any,
+	mergedConfig map[string]any,
+	outputDir string,
+	existingTasks []*BuildTask,
+) ([]*BuildTask, error) {
+	var tasks []*BuildTask
+
+	// Get staging configuration
+	stagingName := "staging"
+	if n, ok := staging["name"].(string); ok {
+		stagingName = n
+	}
+
+	destination := filepath.Join(outputDir, "staging")
+	if d, ok := staging["destination"].(string); ok {
+		destination = d
+		destination = strings.ReplaceAll(destination, "${out_dir}", outputDir)
+		destination = strings.ReplaceAll(destination, "${output_dir}", outputDir)
+		destination = strings.ReplaceAll(destination, "${config}", tg.Configuration)
+		destination = strings.ReplaceAll(destination, "${platform}", tg.Platform)
+	}
+
+	workspaceRoot := ""
+	if tg.Workspace != nil {
+		workspaceRoot = tg.Workspace.RootDir
+	}
+	if !filepath.IsAbs(destination) && workspaceRoot != "" {
+		destination = filepath.Join(workspaceRoot, destination)
+	}
+
+	// Get top-level use_symlinks setting (default: false = copy)
+	defaultUseSymlinks := false
+	if us, ok := staging["use_symlinks"].(bool); ok {
+		defaultUseSymlinks = us
+	}
+
+	// Windows always uses copy (symlinks require admin/developer mode)
+	isWindows := strings.Contains(strings.ToLower(tg.Platform), "windows")
+	if isWindows {
+		defaultUseSymlinks = false
+	}
+
+	// Track staging task IDs for this staging area
+	var stagingTaskIDs []string
+
+	// Process contents section - new hierarchical folder-based format
+	if contents, ok := staging["contents"].([]any); ok {
+		folderTasks := tg.processStagingContents(contents, destination, "", defaultUseSymlinks, isWindows, outputDir, workspaceRoot)
+		tasks = append(tasks, folderTasks...)
+		for _, t := range folderTasks {
+			stagingTaskIDs = append(stagingTaskIDs, t.TaskID)
+		}
+	}
+
+	// Register staging tasks for install dependencies
+	stagingTasksByName[stagingName] = stagingTaskIDs
+	log.Printf("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
+
+	return tasks, nil
+}
+
+// processStagingContents recursively processes the hierarchical folder structure
+func (tg *TaskGenerator) processStagingContents(
+	contents []any,
+	stagingRoot string,
+	currentPath string,
+	defaultUseSymlinks bool,
+	isWindows bool,
+	outputDir string,
+	workspaceRoot string,
+) []*BuildTask {
+	var tasks []*BuildTask
+
+	for _, itemRaw := range contents {
+		item, ok := itemRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// Get folder name (use "." for root level)
+		folderName := "."
+		if f, ok := item["folder"].(string); ok {
+			folderName = f
+		}
+
+		// Calculate the destination path for this folder
+		var folderPath string
+		if folderName == "." {
+			folderPath = filepath.Join(stagingRoot, currentPath)
+		} else if currentPath == "" {
+			folderPath = filepath.Join(stagingRoot, folderName)
+		} else {
+			folderPath = filepath.Join(stagingRoot, currentPath, folderName)
+		}
+
+		// Process targets (executables and libraries - auto-detected)
+		if targets, ok := item["targets"].([]any); ok {
+			for _, targetRaw := range targets {
+				targetName := ""
+				useSymlink := defaultUseSymlinks
+
+				switch v := targetRaw.(type) {
+				case string:
+					targetName = v
+				case map[string]any:
+					if n, ok := v["name"].(string); ok {
+						targetName = n
+					}
+					if us, ok := v["use_symlink"].(bool); ok {
+						useSymlink = us
+					}
+				}
+
+				if targetName == "" {
+					continue
+				}
+
+				// Windows override
+				if isWindows {
+					useSymlink = false
+				}
+
+				// Look up the target - try to determine if it's an executable or library
+				task := tg.createTargetStagingTask(targetName, folderPath, useSymlink, isWindows, outputDir)
+				if task != nil {
+					tasks = append(tasks, task)
+				}
+			}
+		}
+
+		// Process artifacts
+		if artifacts, ok := item["artifacts"].([]any); ok {
+			for _, artifactRaw := range artifacts {
+				artifactName := ""
+				useSymlink := defaultUseSymlinks
+
+				switch v := artifactRaw.(type) {
+				case string:
+					artifactName = v
+				case map[string]any:
+					if n, ok := v["name"].(string); ok {
+						artifactName = n
+					}
+					if us, ok := v["use_symlink"].(bool); ok {
+						useSymlink = us
+					}
+				}
+
+				if artifactName == "" {
+					continue
+				}
+
+				if isWindows {
+					useSymlink = false
+				}
+
+				// Get artifact outputs
+				outputs := artifactOutputs[artifactName]
+				if len(outputs) == 0 {
+					log.Printf("WARNING: artifact '%s' has no outputs for staging", artifactName)
+					continue
+				}
+
+				for _, sourcePath := range outputs {
+					destPath := filepath.Join(folderPath, filepath.Base(sourcePath))
+					task := tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, []string{})
+					if task != nil {
+						tasks = append(tasks, task)
+					}
+				}
+			}
+		}
+
+		// Process files
+		if files, ok := item["files"].([]any); ok {
+			for _, fileRaw := range files {
+				useSymlink := defaultUseSymlinks
+				var sourcePattern string
+
+				switch v := fileRaw.(type) {
+				case string:
+					sourcePattern = v
+				case map[string]any:
+					if s, ok := v["source"].(string); ok {
+						sourcePattern = s
+					}
+					if us, ok := v["use_symlink"].(bool); ok {
+						useSymlink = us
+					}
+				}
+
+				if sourcePattern == "" {
+					continue
+				}
+
+				if isWindows {
+					useSymlink = false
+				}
+
+				// Resolve source pattern
+				if !filepath.IsAbs(sourcePattern) && workspaceRoot != "" {
+					sourcePattern = filepath.Join(workspaceRoot, sourcePattern)
+				}
+
+				// Check if source is a glob pattern
+				if strings.Contains(sourcePattern, "*") {
+					matches, err := filepath.Glob(sourcePattern)
+					if err != nil {
+						log.Printf("WARNING: invalid glob pattern '%s': %v", sourcePattern, err)
+						continue
+					}
+
+					for _, match := range matches {
+						destPath := filepath.Join(folderPath, filepath.Base(match))
+						task := tg.createSymlinkOrCopyTask(match, destPath, useSymlink, isWindows, []string{})
+						if task != nil {
+							tasks = append(tasks, task)
+						}
+					}
+				} else {
+					// Single file
+					destPath := filepath.Join(folderPath, filepath.Base(sourcePattern))
+					task := tg.createSymlinkOrCopyTask(sourcePattern, destPath, useSymlink, isWindows, []string{})
+					if task != nil {
+						tasks = append(tasks, task)
+					}
+				}
+			}
+		}
+
+		// Process nested contents (subfolders)
+		if nestedContents, ok := item["contents"].([]any); ok {
+			var nestedPath string
+			if folderName == "." {
+				nestedPath = currentPath
+			} else if currentPath == "" {
+				nestedPath = folderName
+			} else {
+				nestedPath = filepath.Join(currentPath, folderName)
+			}
+			nestedTasks := tg.processStagingContents(nestedContents, stagingRoot, nestedPath, defaultUseSymlinks, isWindows, outputDir, workspaceRoot)
+			tasks = append(tasks, nestedTasks...)
+		}
+	}
+
+	return tasks
+}
+
+// createTargetStagingTask creates a staging task for a target (auto-detects executable vs library)
+func (tg *TaskGenerator) createTargetStagingTask(
+	targetName string,
+	destFolder string,
+	useSymlink bool,
+	isWindows bool,
+	outputDir string,
+) *BuildTask {
+	// Look up the target's task ID - first try local generatedTargets, then global registry
+	taskID, found := tg.generatedTargets[targetName]
+	if !found {
+		// Try global registry (for workspace-level staging that references module targets)
+		taskID, found = globalTaskRegistry.GetLinkTaskID(targetName)
+	}
+	if !found {
+		log.Printf("WARNING: staging target '%s' not found in generated targets or global registry", targetName)
+		return nil
+	}
+
+	// Try to find the output file - check multiple locations
+	possiblePaths := []string{
+		// Executable paths
+		filepath.Join(outputDir, "bin", targetName),
+		filepath.Join(outputDir, "bin", targetName+".exe"),
+		// Library paths
+		filepath.Join(outputDir, "lib", "lib"+targetName+".so"),
+		filepath.Join(outputDir, "lib", "lib"+targetName+".a"),
+		filepath.Join(outputDir, "lib", "lib"+targetName+".dylib"),
+		filepath.Join(outputDir, "lib", targetName+".dll"),
+		filepath.Join(outputDir, "lib", targetName+".lib"),
+	}
+
+	var sourcePath string
+	for _, p := range possiblePaths {
+		// For now, construct based on platform conventions
+		// The actual file may not exist yet at task generation time
+		if isWindows {
+			if strings.HasSuffix(p, ".exe") || strings.HasSuffix(p, ".dll") || strings.HasSuffix(p, ".lib") {
+				sourcePath = p
+				break
+			}
+		} else if strings.Contains(tg.Platform, "darwin") || strings.Contains(tg.Platform, "macos") {
+			if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") {
+				if strings.HasSuffix(p, ".dylib") || !strings.Contains(p, ".") || strings.HasSuffix(p, ".a") {
+					sourcePath = p
+					break
+				}
+			}
+		} else {
+			// Linux
+			if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") && !strings.HasSuffix(p, ".dylib") {
+				sourcePath = p
+				break
+			}
+		}
+	}
+
+	if sourcePath == "" {
+		// Default fallback - assume executable
+		if isWindows {
+			sourcePath = filepath.Join(outputDir, "bin", targetName+".exe")
+		} else {
+			sourcePath = filepath.Join(outputDir, "bin", targetName)
+		}
+	}
+
+	destPath := filepath.Join(destFolder, filepath.Base(sourcePath))
+	return tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, []string{taskID})
+}
+
+// createSymlinkOrCopyTask creates a task that either symlinks or copies a file
+func (tg *TaskGenerator) createSymlinkOrCopyTask(
+	source string,
+	dest string,
+	useSymlink bool,
+	isWindows bool,
+	dependencies []string,
+) *BuildTask {
+	destDir := filepath.Dir(dest)
+
+	var command string
+	taskType := "copy"
+
+	if useSymlink && !isWindows {
+		taskType = "symlink"
+		// ln -sf: -s for symbolic link, -f to force overwrite
+		command = fmt.Sprintf("mkdir -p %s && ln -sf %s %s", destDir, source, dest)
+	} else {
+		// Copy command
+		if isWindows {
+			command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && copy /Y \"%s\" \"%s\"",
+				destDir, destDir, source, dest)
+		} else {
+			command = fmt.Sprintf("mkdir -p %s && cp %s %s", destDir, source, dest)
+		}
+	}
+
+	taskID := tg.TaskIDGen.Next("stage", filepath.Base(dest))
+
+	// For symlinks, cache key should include source path but not content hash
+	// For copies, include content hash
+	var inputs []TaskInput
+	if useSymlink && !isWindows {
+		// For symlinks, we still track the source as input but the symlink just points to path
+		inputs = []TaskInput{{Path: source, Hash: "symlink:" + source}}
+	} else {
+		inputs = []TaskInput{NewTaskInput(source)}
+	}
+
+	task := NewBuildTask(
+		taskID,
+		taskType,
+		inputs,
+		[]string{dest},
+		dependencies,
+		command,
+	)
+	task.Platform = tg.Platform
+	task.Architecture = tg.Architecture
+	task.Configuration = tg.Configuration
+	task.EstimatedTime = 0.1
+	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
+	task.CacheKey = task.CalculateCacheKey()
+
+	log.Printf("Generated %s task: %s -> %s", taskType, source, dest)
+	return &task
+}
+
+// generateInstallTasks generates packaging/install tasks
+func (tg *TaskGenerator) generateInstallTasks(
+	installItems []any,
+	mergedConfig map[string]any,
+	outputDir string,
+	existingTasks []*BuildTask,
+) ([]*BuildTask, error) {
+	var tasks []*BuildTask
+
+	workspaceRoot := ""
+	if tg.Workspace != nil {
+		workspaceRoot = tg.Workspace.RootDir
+	}
+
+	for _, installRaw := range installItems {
+		installItem, ok := installRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		name := ""
+		if n, ok := installItem["name"].(string); ok {
+			name = n
+		}
+
+		stagingName := ""
+		if s, ok := installItem["staging"].(string); ok {
+			stagingName = s
+		}
+
+		destination := filepath.Join(outputDir, "dist")
+		if d, ok := installItem["destination"].(string); ok {
+			destination = d
+			destination = strings.ReplaceAll(destination, "${out_dir}", outputDir)
+			destination = strings.ReplaceAll(destination, "${output_dir}", outputDir)
+		}
+		if !filepath.IsAbs(destination) && workspaceRoot != "" {
+			destination = filepath.Join(workspaceRoot, destination)
+		}
+
+		format := "tar.gz"
+		if f, ok := installItem["format"].(string); ok {
+			format = f
+		}
+
+		// followSymlinks defaults to true
+		followSymlinks := true
+		if fs, ok := installItem["follow_symlinks"].(bool); ok {
+			followSymlinks = fs
+		}
+
+		// Build filename
+		filename := name
+		if fn, ok := installItem["filename"].(string); ok {
+			filename = fn
+			filename = strings.ReplaceAll(filename, "${project_name}", tg.getProjectName(mergedConfig))
+			filename = strings.ReplaceAll(filename, "${project_version}", tg.getProjectVersion(mergedConfig))
+			filename = strings.ReplaceAll(filename, "${platform}", tg.Platform)
+			filename = strings.ReplaceAll(filename, "${arch}", tg.Architecture)
+			filename = strings.ReplaceAll(filename, "${config}", tg.Configuration)
+		}
+
+		// Get staging directory path
+		stagingDir := filepath.Join(outputDir, "staging")
+		if stagingName != "" {
+			// Look up staging destination from config (we'd need to track this, for now use convention)
+			stagingDir = filepath.Join(outputDir, "staging")
+		}
+
+		// Determine output file extension
+		ext := ".tar.gz"
+		switch format {
+		case "tar.gz", "tgz":
+			ext = ".tar.gz"
+		case "zip":
+			ext = ".zip"
+		case "tar":
+			ext = ".tar"
+		}
+
+		outputFile := filepath.Join(destination, filename+ext)
+
+		// Build archive command
+		var command string
+		isWindows := strings.Contains(strings.ToLower(tg.Platform), "windows")
+
+		if isWindows {
+			// Use PowerShell for compression on Windows
+			switch format {
+			case "zip":
+				command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && powershell -Command \"Compress-Archive -Path '%s\\*' -DestinationPath '%s' -Force\"",
+					destination, destination, stagingDir, outputFile)
+			default:
+				// tar.gz using tar if available
+				command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && tar -czvf \"%s\" -C \"%s\" .",
+					destination, destination, outputFile, stagingDir)
+			}
+		} else {
+			mkdirCmd := fmt.Sprintf("mkdir -p %s", destination)
+			switch format {
+			case "zip":
+				// zip follows symlinks by default
+				command = fmt.Sprintf("%s && cd %s && zip -r %s .", mkdirCmd, stagingDir, outputFile)
+			case "tar":
+				if followSymlinks {
+					command = fmt.Sprintf("%s && tar -chf %s -C %s .", mkdirCmd, outputFile, stagingDir)
+				} else {
+					command = fmt.Sprintf("%s && tar -cf %s -C %s .", mkdirCmd, outputFile, stagingDir)
+				}
+			default: // tar.gz
+				if followSymlinks {
+					command = fmt.Sprintf("%s && tar -czhf %s -C %s .", mkdirCmd, outputFile, stagingDir)
+				} else {
+					command = fmt.Sprintf("%s && tar -czf %s -C %s .", mkdirCmd, outputFile, stagingDir)
+				}
+			}
+		}
+
+		// Dependencies: all staging tasks for the referenced staging area
+		var dependencies []string
+		if stagingTaskIDs, ok := stagingTasksByName[stagingName]; ok {
+			dependencies = stagingTaskIDs
+		}
+
+		taskID := tg.TaskIDGen.Next("install", name)
+		task := NewBuildTask(
+			taskID,
+			"install",
+			[]TaskInput{{Path: stagingDir, Hash: "directory"}},
+			[]string{outputFile},
+			dependencies,
+			command,
+		)
+		task.Platform = tg.Platform
+		task.Architecture = tg.Architecture
+		task.Configuration = tg.Configuration
+		task.EstimatedTime = 5.0
+		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 512, DiskMB: 500}
+		task.CacheKey = task.CalculateCacheKey()
+
+		tasks = append(tasks, &task)
+		log.Printf("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
+	}
+
+	return tasks, nil
+}
 
 // GetGeneratedTargets returns the mapping of target names to their link task IDs
 func (tg *TaskGenerator) GetGeneratedTargets() map[string]string {

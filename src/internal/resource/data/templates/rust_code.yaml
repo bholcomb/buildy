@@ -1,5 +1,10 @@
 # Rust Build Templates
-# Templates for building Rust executables and libraries with Cargo
+# Templates for building Rust executables and C-compatible libraries with Cargo
+#
+# Note: For pure Rust projects, dependencies are handled by Cargo and you
+# typically only need executables. The library templates are for C/C++ interop:
+# - static_libraries: produces .a files (staticlib crate type)
+# - shared_libraries: produces .so/.dll files (cdylib crate type)
 
 templates:
   # Rust executable: single-step build (Cargo handles compilation internally)
@@ -28,12 +33,13 @@ templates:
           features: "{item.features}"
           bin: "{item.bin}"
 
-  # Rust library crate
-  rust_library:
-    description: "Build Rust library"
+  # Rust static library: C-compatible static library (staticlib)
+  # Use this for linking into C/C++ projects
+  rust_static_library:
+    description: "Build Rust static library for C interop"
     metadata:
       language: rust
-      target_types: [library, static_library, shared_library]
+      target_types: [static_library]
       toolchain_language: rust
       pre_processing:
         resolve_packages: false
@@ -52,4 +58,31 @@ templates:
         working_dir: "{item.path}"
         tool_params:
           features: "{item.features}"
-          lib: true
+          crate_type: "staticlib"
+
+  # Rust shared library: C-compatible dynamic library (cdylib)
+  # Use this for creating .so/.dll for C interop
+  rust_shared_library:
+    description: "Build Rust shared library for C interop"
+    metadata:
+      language: rust
+      target_types: [shared_library]
+      toolchain_language: rust
+      pre_processing:
+        resolve_packages: false
+        resolve_sources: false
+        resolve_include_dirs: false
+        resolve_path: true
+      post_processing:
+        scan_sources_pattern: "*.rs"
+        register_target: true
+        add_setup_dependency: true
+    steps:
+      - name: build
+        action: build
+        output: "{output_dir}/{config}/lib/{tool.output_pattern}"
+        inputs: ["{item.path}"]
+        working_dir: "{item.path}"
+        tool_params:
+          features: "{item.features}"
+          crate_type: "cdylib"

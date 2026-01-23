@@ -18,9 +18,8 @@ environment:
       defines: ["NDEBUG=1", "MATH_LIB_VERSION=1"]
 
 targets:
-  libraries:
+  static_libraries:
     - name: mathcore
-      type: static_library
       language: cpp
       sources: ["libsrc/*.cpp"]
       public_headers: ["include/*.h"]
