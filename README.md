@@ -1,211 +1,287 @@
-# Buildy - Task-Based Build System
+# Buildy
 
-A modern, cache-aware build system with support for multiple toolchains, parallel execution, and universal build templates.
+A modern, data-driven build system for multi-language projects.
 
 ## Features
 
-- **Content-Addressable Caching**: Git-style sharded cache for fast incremental builds
-- **Header Dependency Tracking**: Automatic rebuild when header files change
-- **Parallel Execution**: Resource-aware task scheduling
-- **Multiple Toolchains**: Support for GCC, Clang, MSVC, Emscripten, and more
-- **Universal Build Templates**: Data-driven build patterns for libraries, executables, shaders, and textures
-- **Hierarchical Variables**: Flexible variable system with provenance tracking
-- **Execution Environments**: Native, Docker, and WSL support
+- **Multi-Language Support**: Build C, C++, Go, and Rust projects with a unified configuration
+- **Data-Driven**: All build logic defined in YAML - templates, toolchains, and build configurations
+- **Content-Addressable Caching**: Fast incremental builds with Git-style sharded cache
+- **Parallel Execution**: Automatic dependency resolution and parallel task execution
+- **Cross-Platform**: Same `buildy.yaml` works on Linux, Windows, and macOS
+- **Extensible**: Add new languages and tools via YAML template and toolchain files
 
 ## Quick Start
 
-### Setup Virtual Environment
+### Building Buildy
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
+# Bootstrap build (first time)
+./bootstrap.sh
 
-# Activate virtual environment
-source venv/bin/activate  # On Linux/macOS
-# or
-venv\Scripts\activate  # On Windows
-
-# Install dependencies
-pip install -r requirements.txt
+# Subsequent builds
+./bin/buildy
 ```
 
-### Build a Project
+### Building a Project
 
 ```bash
-# Build with default settings (auto-detected toolchain)
-python3 buildy.py examples/math/simple_project.yaml
+# Build with default settings (debug, auto-detected platform)
+buildy
 
-# Build with specific toolchain
-python3 buildy.py --toolchain gcc-linux examples/math/simple_project.yaml
+# Build release configuration
+buildy --config release
 
-# Build with custom variables
-python3 buildy.py -D MY_VAR=value examples/math/simple_project.yaml
-
-# Dry run (show what would be built)
-python3 buildy.py --dry-run examples/math/simple_project.yaml
+# Specify platform for cross-compilation
+buildy --platform linux --arch x86_64
 
 # Verbose output
-python3 buildy.py -v examples/math/simple_project.yaml
+buildy --verbose
 ```
 
-### List Available Toolchains
+## Project Configuration
 
-```bash
-python3 buildy.py --list-toolchains
-```
-
-### View Cache Statistics
-
-```bash
-python3 buildy.py --cache-stats
-```
-
-## Running Tests
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=buildy_lib --cov-report=html
-
-# Run specific test file
-pytest tests/test_cache.py -v
-```
-
-## Project Structure
-
-```
-buildy/
-├── buildy.py                    # Main entry point
-├── buildy_lib/                  # Core library modules
-│   ├── __init__.py
-│   ├── cache.py                 # Build cache with header tracking
-│   ├── config_parser.py         # YAML config parser
-│   ├── constants.py             # System constants
-│   ├── execution.py             # Execution environments
-│   ├── executor.py              # Task executor
-│   ├── models.py                # Data models
-│   ├── task_graph.py            # Dependency graph
-│   ├── template_engine.py       # Build template engine
-│   ├── toolchain.py             # Toolchain system
-│   └── variables.py             # Variable environment
-├── data/
-│   ├── templates/
-│   │   └── buildy_templates.yaml  # Universal build templates
-│   └── toolchains/                # Toolchain configurations
-│       ├── gcc-linux.yaml
-│       ├── clang-linux.yaml
-│       ├── msvc-windows.yaml
-│       └── ...
-├── examples/                    # Example projects
-│   └── math/
-│       └── simple_project.yaml
-├── tests/                       # Test suite
-│   ├── conftest.py
-│   ├── test_cache.py
-│   ├── test_task_graph.py
-│   ├── test_toolchain.py
-│   ├── test_template_engine.py
-│   └── test_variables.py
-└── requirements.txt             # Python dependencies
-```
-
-## Configuration Example
+Projects are configured using `buildy.yaml` files. Here's a simple example:
 
 ```yaml
 project:
-  name: my_project
-  version: 1.0.0
+  name: my-project
+  version: "1.0.0"
 
-toolchain: gcc-linux
+environment:
+  compile:
+    cpp_standard: "c++20"
+    warnings: ["-Wall", "-Wextra"]
+  
+  configurations:
+    debug:
+      optimization: "-O0"
+      flags: ["-g"]
+    release:
+      optimization: "-O3"
+      defines: ["NDEBUG=1"]
 
-variables:
-  MY_DEFINE: "VALUE"
+targets:
+  static_libraries:
+    - name: mylib
+      language: cpp
+      sources: ["src/*.cpp"]
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]
 
-output:
-  base_dir: build
-  pattern: ${base_dir}/${platform}-${arch}-${config}
+  executables:
+    - name: myapp
+      language: cpp
+      sources: ["app/*.cpp"]
+      libs: [mylib]
+      depends_on:
+        targets: [mylib]
+```
 
-libraries:
-  - name: mylib
-    type: shared_library
-    sources: "src/*.cpp"
-    include_dirs: ["include"]
+## Target Sections
 
-executables:
-  - name: myapp
-    sources: "app/*.cpp"
-    include_dirs: ["include"]
-    depends_on: ["local(mylib)"]
+Buildy uses explicit sections for different target types:
 
-configurations:
-  debug:
-    defines: ["DEBUG"]
-    compiler_flags: ["-g", "-O0"]
-  release:
-    defines: ["NDEBUG"]
-    compiler_flags: ["-O3"]
+| Section | Output | Supported Languages |
+|---------|--------|---------------------|
+| `static_libraries` | Static library (.a, .lib) | c, cpp, rust |
+| `shared_libraries` | Shared library (.so, .dll) | c, cpp, rust, go |
+| `executables` | Executable binary | c, cpp, rust, go |
+
+### Language Field
+
+The `language` field is **required** for all targets:
+
+```yaml
+targets:
+  executables:
+    - name: myapp
+      language: cpp    # Required: c, cpp, go, or rust
+      sources: ["src/*.cpp"]
+```
+
+### Go and Rust Projects
+
+For Go and Rust, typically only `executables` are needed since dependencies are managed by Go modules and Cargo:
+
+```yaml
+# Go executable
+targets:
+  executables:
+    - name: myapp
+      language: go
+      path: "cmd/myapp"      # Directory with go.mod or main package
+      ldflags: ["-s", "-w"]  # Optional linker flags
+
+# Rust executable  
+targets:
+  executables:
+    - name: myapp
+      language: rust
+      path: "."              # Directory with Cargo.toml
+      features: ["feature1"] # Optional Cargo features
+```
+
+Go/Rust library targets (`shared_libraries`, `static_libraries`) are for C/C++ interop only.
+
+## Workspaces
+
+Multi-module projects use the `workspace` section:
+
+```yaml
+# Root buildy.yaml
+project:
+  name: game-engine
+
+workspace:
+  modules:
+    common:       # Built on all platforms
+      - core
+      - renderer
+      - audio
+    linux:        # Linux only
+      - platform/linux
+    windows:      # Windows only
+      - platform/windows
+```
+
+Each subdirectory contains its own `buildy.yaml`.
+
+## Dependencies
+
+External dependencies are defined in the `dependencies` section:
+
+```yaml
+dependencies:
+  system:
+    common:
+      - name: zlib
+        pkg_config: zlib
+    linux:
+      - name: pthread
+        libs: ["pthread"]
+
+  packages:
+    - glfw3        # Resolves to buildy/packages/glfw3.yaml
+
+  fetch:
+    - name: imgui
+      git: "https://github.com/ocornut/imgui.git"
+      ref: "v1.90.1"
 ```
 
 ## Command-Line Options
 
 ```
-usage: buildy.py [-h] [--platform PLATFORM] [--architecture ARCHITECTURE]
-                 [--configuration CONFIGURATION] [--cache-dir CACHE_DIR]
-                 [--dry-run] [--workers WORKERS] [--cache-stats] [--verbose]
-                 [--define VAR=VALUE] [--toolchain NAME] [--list-toolchains]
-                 [--toolchains-dir TOOLCHAINS_DIR]
-                 [config_files ...]
+Usage: buildy [options]
 
-positional arguments:
-  config_files          Build configuration files
-
-options:
-  -h, --help            show this help message and exit
-  --platform PLATFORM   Target platform (default: linux)
-  --architecture ARCHITECTURE
-                        Target architecture (default: x86_64)
-  --configuration CONFIGURATION
-                        Build configuration (default: debug)
-  --cache-dir CACHE_DIR
-                        Cache directory (default: .buildy_cache)
-  --dry-run             Generate tasks but don't execute
-  --workers WORKERS     Max parallel workers (default: 4)
-  --cache-stats         Show cache statistics
-  --verbose, -v         Enable verbose logging
-  --define VAR=VALUE, -D VAR=VALUE
-                        Define a variable
-  --toolchain NAME, -t NAME
-                        Specify toolchain to use
-  --list-toolchains     List available toolchains and exit
-  --toolchains-dir TOOLCHAINS_DIR
-                        Directory containing toolchain configurations
+Options:
+  --config <name>       Build configuration (debug, release)
+  --platform <name>     Target platform (linux, windows, macos)
+  --arch <name>         Target architecture (x86_64, arm64)
+  --toolchain <name>    Override toolchain selection
+  --target <name>       Build specific target only
+  --jobs <n>            Number of parallel jobs
+  --verbose             Enable verbose output
+  --dry-run             Show what would be built
+  --clean               Clean build outputs
+  --force               Ignore cache, rebuild all
+  --compile-commands    Generate compile_commands.json
 ```
+
+## Project Structure
+
+```
+my-project/
+├── buildy.yaml              # Project configuration
+├── buildy/
+│   ├── dependencies.yaml    # External dependencies (optional)
+│   ├── packages/            # Package definitions
+│   │   └── glfw3.yaml
+│   └── toolchains/          # Custom toolchains (optional)
+│       └── custom-gcc.yaml
+├── src/                     # Source files
+├── include/                 # Headers
+└── build/                   # Output directory (auto-created)
+```
+
+## Built-in Toolchains
+
+Buildy includes toolchains for common compilers:
+
+| Toolchain | Platform | Description |
+|-----------|----------|-------------|
+| `gcc-linux` | Linux | GCC compiler suite |
+| `clang-linux` | Linux | Clang/LLVM |
+| `clang-macos` | macOS | Apple Clang |
+| `msvc-windows` | Windows | Visual Studio |
+| `go-linux` | Linux | Go compiler |
+| `rust-linux` | Linux | Rust/Cargo |
+| `emscripten` | Any | WebAssembly |
+
+## Build Templates
+
+Build templates define how targets are compiled and linked. Templates are data-driven YAML files with metadata for:
+
+- **Pre-processing**: Package resolution, source file scanning
+- **Build steps**: Compile, link, or single-step builds
+- **Post-processing**: Target registration, dependency tracking
+
+Templates are automatically selected based on `language` and target type.
 
 ## Architecture
 
-### Module Responsibilities
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        buildy.yaml                          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Config Parser                            │
+│  - Parse YAML configuration                                  │
+│  - Resolve variables and imports                             │
+│  - Merge platform/configuration overrides                    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Task Generator                            │
+│  - Look up templates by language + target type               │
+│  - Apply pre-processing (packages, sources, paths)           │
+│  - Expand templates into concrete build tasks                │
+│  - Apply post-processing (register targets, scan sources)    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Task Graph                              │
+│  - Build dependency graph                                    │
+│  - Topological sort                                          │
+│  - Parallel execution stages                                 │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       Executor                               │
+│  - Check cache for up-to-date outputs                        │
+│  - Execute tasks in parallel                                 │
+│  - Update cache with results                                 │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- **cache.py**: Content-addressable caching with Git-style sharding and header dependency tracking
-- **config_parser.py**: Parse YAML configs, resolve variables, generate tasks using templates
-- **execution.py**: Execution environment abstraction (native, Docker, WSL)
-- **executor.py**: Parallel task execution with resource-aware scheduling
-- **models.py**: Data models (BuildTask, TaskInput, ResourceRequirements)
-- **task_graph.py**: Dependency graph with topological sorting
-- **template_engine.py**: Expand universal build templates into concrete tasks
-- **toolchain.py**: Toolchain management, tool matching, command building
-- **variables.py**: Hierarchical variable resolution with provenance tracking
+## Documentation
 
-### Build Flow
+- [DSL Specification](doc/DSL_SPEC.md) - Complete configuration reference
 
-1. **Parse Config**: Load YAML, resolve variables hierarchically
-2. **Select Toolchain**: CLI > Project > Workspace > Auto-detect
-3. **Generate Tasks**: Expand templates into concrete build tasks
-4. **Build Graph**: Create dependency graph, topological sort
-5. **Execute**: Parallel execution with caching and resource management
+## Examples
+
+See the `examples/` directory:
+
+- `examples/math/` - Simple C++ library and executable
+- `examples/game_engine/` - Multi-module C++ project with dependencies
 
 ## License
 
-MIT License (or your preferred license)
-
+MIT License

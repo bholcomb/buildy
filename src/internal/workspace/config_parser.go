@@ -285,8 +285,76 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 	// Second pass: resolve cross-module dependencies
 	allTasks = cp.resolveCrossModuleDependencies(allTasks)
 
+	// Third pass: generate workspace-level staging and install tasks from root config
+	workspaceTasks, err := cp.generateWorkspaceLevelTasks(allTasks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate workspace-level tasks: %w", err)
+	}
+	allTasks = append(allTasks, workspaceTasks...)
+
 	log.Printf("Generated %d tasks from %d modules", len(allTasks), len(cp.Workspace.Modules))
 	return allTasks, nil
+}
+
+// generateWorkspaceLevelTasks generates staging and install tasks from the workspace root config
+func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) ([]*BuildTask, error) {
+	var tasks []*BuildTask
+
+	rootConfig := cp.Workspace.Config.RawConfig
+	if rootConfig == nil {
+		return tasks, nil
+	}
+
+	// Determine output directory for workspace-level tasks
+	outputDir := filepath.Join(cp.Workspace.RootDir, "build", fmt.Sprintf("%s-%s-%s", cp.Platform, cp.Architecture, cp.Configuration))
+
+	// Create a task generator for workspace-level tasks
+	tg := NewTaskGenerator(
+		cp.Platform,
+		cp.Architecture,
+		cp.Configuration,
+		cp.ToolchainManager,
+		cp.TemplateEngine,
+		cp.PackageManager,
+		cp.VarEnv,
+		cp.Workspace,
+	)
+	tg.TaskIDGen = NewTaskIDGenerator("workspace")
+	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir)
+	if cp.CurrentToolchain != nil {
+		tg.SetToolchain(cp.CurrentToolchain)
+	}
+
+	// Generate staging tasks from workspace root config
+	if staging, ok := rootConfig["staging"].(map[string]any); ok {
+		// Merge config for variable resolution
+		mergedConfig := make(map[string]any)
+		for k, v := range rootConfig {
+			mergedConfig[k] = v
+		}
+
+		stagingTasks, err := tg.generateStagingTasks(staging, mergedConfig, outputDir, existingTasks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate staging tasks: %w", err)
+		}
+		tasks = append(tasks, stagingTasks...)
+	}
+
+	// Generate install tasks from workspace root config
+	if install, ok := rootConfig["install"].([]any); ok {
+		mergedConfig := make(map[string]any)
+		for k, v := range rootConfig {
+			mergedConfig[k] = v
+		}
+
+		installTasks, err := tg.generateInstallTasks(install, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate install tasks: %w", err)
+		}
+		tasks = append(tasks, installTasks...)
+	}
+
+	return tasks, nil
 }
 
 // resolveCrossModuleDependencies resolves cross-module dependencies using the global task registry

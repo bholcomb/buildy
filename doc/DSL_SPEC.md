@@ -6,7 +6,7 @@ Version: 1.0.0
 
 Buildy is a multi-language build system designed for:
 
-- **C/C++ and Go** projects (with extensible language support via toolchains)
+- **C, C++, Go, and Rust** projects with data-driven task generation
 - **Cross-platform builds** (Linux, Windows, macOS) from a single configuration
 - **Explicit, reproducible builds** with optional lockfiles
 - **Highly parallel execution** with content-addressable caching
@@ -17,7 +17,7 @@ Buildy is a multi-language build system designed for:
 1. **Pure YAML** - Standard syntax, no embedded scripting
 2. **Explicit over implicit** - All operations declared, no hidden behavior
 3. **Hierarchical configuration** - Workspace → Module → Target with clear override semantics
-4. **Multi-language** - C/C++ primary, Go for self-hosting, extensible via toolchain files
+4. **Multi-language** - C/C++ primary with Go and Rust support, extensible via templates
 5. **Flexible dependencies** - System, user paths, fetched sources, package managers
 6. **Reproducible by default** - Lockfiles optional but encouraged, warnings for system deps
 7. **Configurable cache** - `BUILDY_CACHE_DIR` env var or config, default to project-local
@@ -72,6 +72,8 @@ dependencies:      # External dependencies (optional, root only)
 environment:       # Build configuration (optional)
 targets:           # What to build (optional)
 artifacts:         # File operations (optional)
+staging:           # Product assembly (optional)
+install:           # Packaging for distribution (optional)
 ```
 
 ---
@@ -223,8 +225,9 @@ workspace:
       - windows            # platform/windows/buildy.yaml
 
 targets:
-  libraries:
+  shared_libraries:
     - name: platform_common
+      language: cpp
       sources: ["src/*.cpp"]
 ```
 
@@ -238,8 +241,9 @@ project:
   name: platform_linux
 
 targets:
-  libraries:
+  shared_libraries:
     - name: platform_linux
+      language: cpp
       sources: ["src/*.cpp"]
       depends_on:
         targets: ["platform_common"]
@@ -500,16 +504,25 @@ environment:
 
 ## 6. Targets Section
 
-Define what to build: libraries, executables, Go modules.
+Define what to build. Targets are organized into explicit sections by type.
 
-### Libraries
+### Target Sections
+
+| Section | Output Type | Languages |
+|---------|-------------|-----------|
+| `static_libraries` | Static library (.a, .lib) | c, cpp, rust |
+| `shared_libraries` | Shared library (.so, .dll, .dylib) | c, cpp, rust, go |
+| `executables` | Executable binary | c, cpp, rust, go |
+
+**Note:** Go and Rust library targets are for C/C++ interop only. For pure Go/Rust projects, use `executables` - dependencies are handled by Go modules and Cargo respectively.
+
+### Static Libraries
 
 ```yaml
 targets:
-  libraries:
+  static_libraries:
     - name: engine_core
-      type: static_library    # static_library | shared_library
-      language: c++           # c++ | c
+      language: cpp           # Required: c | cpp | rust
       sources: ["src/*.cpp"]
       public_headers: ["include/*.h"]
       include_dirs:
@@ -518,10 +531,6 @@ targets:
       
       # packages: External packages (add include_dirs, lib_dirs, libs, defines)
       packages: ["glfw3"]
-      
-      # libs: Libraries this library links against (for shared libraries)
-      # For static libraries, consumers handle transitive linking
-      libs: []
       
       # depends_on: Build ordering
       depends_on:
@@ -532,6 +541,25 @@ targets:
         standard: "c++20"
         defines: ["ENGINE_EXPORTS"]
         flags: ["-ffast-math"]
+```
+
+### Shared Libraries
+
+```yaml
+targets:
+  shared_libraries:
+    - name: engine_renderer
+      language: cpp           # Required: c | cpp | rust | go
+      sources: ["src/*.cpp"]
+      public_headers: ["include/*.h"]
+      include_dirs:
+        public: ["include"]
+      
+      # libs: Libraries this shared library links against
+      libs: ["engine_core"]
+      
+      depends_on:
+        targets: ["engine_core"]
 ```
 
 ### Source Patterns
@@ -561,8 +589,9 @@ sources:
 
 ```yaml
 targets:
-  libraries:
+  static_libraries:
     - name: my_lib
+      language: cpp
       sources:
         - "src/core/*.cpp"                              # Must have at least one file
         - {pattern: "src/optional/*.cpp", optional: true}  # May be empty
@@ -581,7 +610,7 @@ targets:
 targets:
   executables:
     - name: game
-      language: c++
+      language: cpp           # Required: c | cpp | rust | go
       sources: ["src/*.cpp"]
       
       # packages: External packages (add include_dirs, lib_dirs, libs, defines)
@@ -601,6 +630,34 @@ targets:
         deps: ["zlib"]                               # From dependencies section
       
       runtime_deps: ["game_assets", "shaders"]  # Artifacts needed at runtime
+```
+
+### Go Executables
+
+Go projects typically only need `executables` since dependencies are managed by Go modules:
+
+```yaml
+targets:
+  executables:
+    - name: myapp
+      language: go
+      path: "cmd/myapp"       # Directory containing go.mod or main package
+      build_tags: []
+      ldflags: ["-s", "-w"]   # For release builds
+```
+
+### Rust Executables
+
+Rust projects typically only need `executables` since dependencies are managed by Cargo:
+
+```yaml
+targets:
+  executables:
+    - name: myapp
+      language: rust
+      path: "."               # Directory containing Cargo.toml
+      features: ["feature1"]
+      bin: "myapp"            # Binary name if multiple binaries in crate
 ```
 
 ### packages vs libs vs depends_on
@@ -651,24 +708,13 @@ targets:
       # No libs or packages needed for the code generator itself
 ```
 
-### Go Modules
-
-```yaml
-targets:
-  go_modules:
-    - name: buildy
-      path: "src"                 # Directory containing go.mod
-      output: "bin/buildy"
-      build_tags: []
-      ldflags: ["-s", "-w"]       # For release builds
-```
-
 ### Per-Target Toolchain Override
 
 ```yaml
 targets:
-  libraries:
+  static_libraries:
     - name: perf_critical
+      language: cpp
       toolchain: clang-linux      # Override default toolchain
       sources: ["src/*.cpp"]
 ```
@@ -722,24 +768,165 @@ artifacts:
       args: ["--cpp_out=${gen_dir}"]
 ```
 
-### Install
+---
+
+## 8. Staging Section
+
+The staging section defines how to assemble build outputs into a product directory structure. This is useful for:
+- Testing the final product layout before packaging
+- Fast developer iteration with symlinks
+- Collecting executables, libraries, and assets into a deliverable structure
+
+### Hierarchical Folder Structure
+
+Staging uses a folder-based hierarchy that mirrors the output layout directly:
 
 ```yaml
-artifacts:
-  install:
-    - name: sdk_package
-      includes:
-        targets: ["engine_core"]
-        artifacts: ["public_headers"]
-      destination: "${install_dir}"
-      formats:
-        linux: tar.gz
-        windows: zip
+staging:
+  name: my_product
+  destination: "${out_dir}/staging"
+  use_symlinks: true              # Default for all contents (default: false = copy)
+
+  contents:
+    # Root level files (folder: "." or omit folder)
+    - folder: "."
+      files: ["LICENSE.txt", "README.md"]
+
+    # Binaries folder - executables and shared libraries
+    - folder: bin
+      targets:
+        - game
+        - launcher
+        - engine_core
+        - engine_renderer
+
+    # Data folder with nested subfolders
+    - folder: data
+      contents:
+        - folder: shaders
+          artifacts:
+            - vertex_shaders
+            - fragment_shaders
+
+        - folder: textures
+          files: ["assets/textures/*.png"]
+
+        - folder: meshes
+          files: ["assets/meshes/*.mesh"]
+
+        - folder: config
+          files: ["config/*.ini"]
+
+    # Scripts with symlinks for live editing
+    - folder: scripts
+      files:
+        - source: "scripts/*.lua"
+          use_symlink: true
 ```
+
+### Folder Entry Keys
+
+Each folder entry can contain:
+
+| Key | Description |
+|-----|-------------|
+| `folder` | Destination folder name (use `"."` for root) |
+| `targets` | Build targets (executables or libraries - auto-detected) |
+| `artifacts` | Named artifact outputs from transform/generate |
+| `files` | Source file paths or glob patterns |
+| `contents` | Nested folder entries (for subfolders) |
+
+### Targets
+
+The `targets` list references build targets by name. Buildy auto-detects whether each is an executable or library:
+
+```yaml
+- folder: bin
+  targets:
+    - game              # Executable
+    - engine_core       # Shared library (auto-detected)
+    - name: launcher    # Extended form with options
+      use_symlink: false
+```
+
+### Files
+
+Files can be specified as simple strings or with options:
+
+```yaml
+files:
+  - "docs/README.md"              # Simple path
+  - "assets/textures/*.png"       # Glob pattern
+  - source: "scripts/*.lua"       # Extended form
+    use_symlink: true             # Override symlink setting
+```
+
+### Symlink Behavior
+
+Symlinks provide fast developer iteration:
+- Changes to source files are immediately reflected in the staging area
+- No copy overhead during development
+- Controlled by `use_symlinks` at staging level with per-item override
+
+| Setting | Behavior |
+|---------|----------|
+| `use_symlinks: true` (staging) | Default to symlinks for all contents |
+| `use_symlinks: false` (staging) | Default to copy for all contents (default) |
+| `use_symlink: true/false` (per item) | Override the staging default |
+
+**Platform Notes:**
+- **Linux/macOS**: Symlinks work as expected
+- **Windows**: Always uses copy (symlinks require admin or Developer Mode)
+
+### Cache Integration
+
+Staging operations are cached tasks:
+- For symlinks: cache key includes source path and symlink flag
+- For copies: cache key includes source content hash
+- The cache automatically detects when staging needs to update
 
 ---
 
-## 8. Toolchain System
+## 9. Install Section
+
+The install section creates distributable packages from staging areas.
+
+### Basic Packaging
+
+```yaml
+install:
+  - name: release_package
+    staging: my_product           # Reference staging area by name
+    destination: "${out_dir}/dist"
+    format: tar.gz                # tar.gz | zip | tar
+    follow_symlinks: true         # Dereference symlinks (default: true)
+    
+    # Optional: filename pattern
+    filename: "${project_name}-${project_version}-${platform}-${arch}"
+```
+
+### Supported Formats
+
+| Format | Extension | Symlink Handling |
+|--------|-----------|------------------|
+| `tar.gz` | .tar.gz | Uses `-h` flag to dereference symlinks |
+| `zip` | .zip | Follows symlinks by default |
+| `tar` | .tar | Uses `-h` flag to dereference symlinks |
+
+### Filename Variables
+
+The `filename` field supports these variables:
+- `${project_name}` - From project.name
+- `${project_version}` - From project.version
+- `${platform}` - Target platform (linux, windows, macos)
+- `${arch}` - Target architecture (x86_64, arm64)
+- `${config}` - Build configuration (debug, release)
+
+**Example output:** `my_game-1.0.0-linux-x86_64.tar.gz`
+
+---
+
+## 10. Toolchain System
 
 Toolchains define how to compile, link, and transform files.
 
@@ -819,7 +1006,7 @@ tools:
 
 ---
 
-## 9. Build Systems
+## 11. Build Systems
 
 Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make projects). Buildy includes built-in definitions for common build systems and supports custom definitions.
 
@@ -951,7 +1138,7 @@ Available in command templates:
 
 ---
 
-## 10. Lockfile
+## 12. Lockfile
 
 Optional lockfile for reproducible builds. Located at `buildy/dependencies.lock`.
 
@@ -997,7 +1184,7 @@ system_warnings:
 
 ---
 
-## 11. Complete Example
+## 13. Complete Example
 
 ### Root: `buildy.yaml`
 
@@ -1107,9 +1294,9 @@ project:
   name: engine_core
 
 targets:
-  libraries:
+  static_libraries:
     - name: engine_core
-      type: static_library
+      language: cpp
       sources: ["src/*.cpp"]
       public_headers: ["include/*.h"]
       include_dirs:
@@ -1125,9 +1312,9 @@ project:
   name: engine_renderer
 
 targets:
-  libraries:
+  static_libraries:
     - name: engine_renderer
-      type: static_library
+      language: cpp
       sources: ["src/*.cpp"]
       include_dirs:
         public: ["include"]
@@ -1146,6 +1333,7 @@ project:
 targets:
   executables:
     - name: game
+      language: cpp
       sources: ["src/*.cpp"]
       include_dirs:
         private: ["../core/include", "../renderer/include"]
@@ -1168,7 +1356,7 @@ targets:
 
 ---
 
-## 12. CLI Reference
+## 14. CLI Reference
 
 ```bash
 # Basic build (platform/architecture auto-detected from host)
@@ -1260,7 +1448,7 @@ ln -s buildy/compile_commands.json compile_commands.json
 9. Warn once about system library reproducibility (at end)
 ```
 
-## 14. Build Reports
+## 16. Build Reports
 
 After each build, buildy generates a comprehensive build report with statistics and timing information.
 

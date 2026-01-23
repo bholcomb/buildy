@@ -19,6 +19,8 @@ var knownTopLevelKeys = map[string]bool{
 	"environment":  true,
 	"targets":      true,
 	"artifacts":    true,
+	"staging":      true,
+	"install":      true,
 	// Legacy keys
 	"library":     true,
 	"executable":  true,
@@ -47,7 +49,7 @@ var knownEnvironmentKeys = map[string]bool{
 }
 
 var knownTargetKeys = map[string]bool{
-	"libraries": true, "executables": true, "go_modules": true,
+	"static_libraries": true, "shared_libraries": true, "executables": true,
 }
 
 var knownLibraryKeys = map[string]bool{
@@ -64,10 +66,6 @@ var knownExecutableKeys = map[string]bool{
 	"path": true, "output": true, "build_tags": true, "ldflags": true,
 	// Rust-specific keys (when language: rust)
 	"features": true, "bin": true,
-}
-
-var knownGoModuleKeys = map[string]bool{
-	"name": true, "path": true, "output": true, "build_tags": true, "ldflags": true,
 }
 
 var knownArtifactsKeys = map[string]bool{
@@ -158,6 +156,16 @@ func (yp *YAMLParser) ValidateConfig(config map[string]any) []string {
 	// Validate artifacts section
 	if artifacts, ok := config["artifacts"].(map[string]any); ok {
 		errors = append(errors, yp.validateArtifacts(artifacts)...)
+	}
+
+	// Validate staging section
+	if staging, ok := config["staging"].(map[string]any); ok {
+		errors = append(errors, yp.validateStaging(staging)...)
+	}
+
+	// Validate install section
+	if install, ok := config["install"].([]any); ok {
+		errors = append(errors, yp.validateInstall(install)...)
 	}
 
 	// Validate dependencies section
@@ -279,17 +287,28 @@ func (yp *YAMLParser) validateTargets(targets map[string]any) []string {
 
 	for key := range targets {
 		if !knownTargetKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'targets.%s'. Valid keys: libraries, executables, go_modules", key))
+			errors = append(errors, fmt.Sprintf("Unknown key 'targets.%s'. Valid keys: static_libraries, shared_libraries, executables", key))
 		}
 	}
 
-	// Validate libraries
-	if libs, ok := targets["libraries"].([]any); ok {
+	// Validate static_libraries
+	if libs, ok := targets["static_libraries"].([]any); ok {
 		for i, libRaw := range libs {
 			if lib, ok := libRaw.(map[string]any); ok {
-				errors = append(errors, yp.validateLibrary(lib, i)...)
+				errors = append(errors, yp.validateLibrary(lib, i, "static_libraries")...)
 			} else {
-				errors = append(errors, fmt.Sprintf("targets.libraries[%d] must be a map", i))
+				errors = append(errors, fmt.Sprintf("targets.static_libraries[%d] must be a map", i))
+			}
+		}
+	}
+
+	// Validate shared_libraries
+	if libs, ok := targets["shared_libraries"].([]any); ok {
+		for i, libRaw := range libs {
+			if lib, ok := libRaw.(map[string]any); ok {
+				errors = append(errors, yp.validateLibrary(lib, i, "shared_libraries")...)
+			} else {
+				errors = append(errors, fmt.Sprintf("targets.shared_libraries[%d] must be a map", i))
 			}
 		}
 	}
@@ -305,29 +324,18 @@ func (yp *YAMLParser) validateTargets(targets map[string]any) []string {
 		}
 	}
 
-	// Validate go_modules
-	if goMods, ok := targets["go_modules"].([]any); ok {
-		for i, modRaw := range goMods {
-			if mod, ok := modRaw.(map[string]any); ok {
-				errors = append(errors, yp.validateGoModule(mod, i)...)
-			} else {
-				errors = append(errors, fmt.Sprintf("targets.go_modules[%d] must be a map", i))
-			}
-		}
-	}
-
 	return errors
 }
 
 // validateLibrary validates a library target
-func (yp *YAMLParser) validateLibrary(lib map[string]any, index int) []string {
+func (yp *YAMLParser) validateLibrary(lib map[string]any, index int, section string) []string {
 	errors := []string{}
-	targetName := fmt.Sprintf("targets.libraries[%d]", index)
+	targetName := fmt.Sprintf("targets.%s[%d]", section, index)
 
 	if name, ok := lib["name"].(string); ok {
 		targetName = fmt.Sprintf("library '%s'", name)
 	} else {
-		errors = append(errors, fmt.Sprintf("targets.libraries[%d] missing required 'name' field", index))
+		errors = append(errors, fmt.Sprintf("targets.%s[%d] missing required 'name' field", section, index))
 	}
 
 	// Check for unknown keys
@@ -395,28 +403,6 @@ func (yp *YAMLParser) validateExecutable(exe map[string]any, index int) []string
 	return errors
 }
 
-// validateGoModule validates a Go module target
-func (yp *YAMLParser) validateGoModule(mod map[string]any, index int) []string {
-	errors := []string{}
-	targetName := fmt.Sprintf("targets.go_modules[%d]", index)
-
-	if name, ok := mod["name"].(string); ok {
-		targetName = fmt.Sprintf("go_module '%s'", name)
-	} else {
-		errors = append(errors, fmt.Sprintf("targets.go_modules[%d] missing required 'name' field", index))
-	}
-
-	// Check for unknown keys
-	for key := range mod {
-		if !knownGoModuleKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key in %s: '%s'. Valid keys: name, path, output, build_tags, ldflags",
-				targetName, key))
-		}
-	}
-
-	return errors
-}
-
 // validateArtifacts validates the artifacts section
 func (yp *YAMLParser) validateArtifacts(artifacts map[string]any) []string {
 	errors := []string{}
@@ -424,6 +410,74 @@ func (yp *YAMLParser) validateArtifacts(artifacts map[string]any) []string {
 	for key := range artifacts {
 		if !knownArtifactsKeys[key] {
 			errors = append(errors, fmt.Sprintf("Unknown key 'artifacts.%s'. Valid keys: copy, transform, generate, install", key))
+		}
+	}
+
+	return errors
+}
+
+// Known staging keys
+var knownStagingKeys = map[string]bool{
+	"name": true, "destination": true, "use_symlinks": true, "contents": true,
+}
+
+// Known staging folder entry keys
+var knownStagingFolderKeys = map[string]bool{
+	"folder": true, "targets": true, "artifacts": true, "files": true, "contents": true,
+}
+
+// validateStaging validates the staging section
+func (yp *YAMLParser) validateStaging(staging map[string]any) []string {
+	errors := []string{}
+
+	for key := range staging {
+		if !knownStagingKeys[key] {
+			errors = append(errors, fmt.Sprintf("Unknown key 'staging.%s'. Valid keys: name, destination, use_symlinks, contents", key))
+		}
+	}
+
+	// Validate contents section if present (array of folder entries)
+	if contents, ok := staging["contents"].([]any); ok {
+		for i, itemRaw := range contents {
+			if item, ok := itemRaw.(map[string]any); ok {
+				for key := range item {
+					if !knownStagingFolderKeys[key] {
+						errors = append(errors, fmt.Sprintf("Unknown key 'staging.contents[%d].%s'. Valid keys: folder, targets, artifacts, files, contents", i, key))
+					}
+				}
+			}
+		}
+	}
+
+	return errors
+}
+
+// Known install keys
+var knownInstallKeys = map[string]bool{
+	"name": true, "staging": true, "destination": true, "format": true,
+	"follow_symlinks": true, "filename": true,
+}
+
+// validateInstall validates the install section
+func (yp *YAMLParser) validateInstall(install []any) []string {
+	errors := []string{}
+
+	for i, itemRaw := range install {
+		item, ok := itemRaw.(map[string]any)
+		if !ok {
+			errors = append(errors, fmt.Sprintf("install[%d] must be a map", i))
+			continue
+		}
+
+		for key := range item {
+			if !knownInstallKeys[key] {
+				errors = append(errors, fmt.Sprintf("Unknown key 'install[%d].%s'. Valid keys: name, staging, destination, format, follow_symlinks, filename", i, key))
+			}
+		}
+
+		// Validate required fields
+		if _, ok := item["name"]; !ok {
+			errors = append(errors, fmt.Sprintf("install[%d] missing required 'name' field", i))
 		}
 	}
 

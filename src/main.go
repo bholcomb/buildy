@@ -228,6 +228,33 @@ func main() {
 		} else {
 			log.Printf("Build directory not found: %s", buildPath)
 		}
+
+		// Clean staging directories (check common locations)
+		stagingPaths := []string{
+			filepath.Join(workspaceRoot, "staging"),
+			filepath.Join(buildPath, "staging"),
+		}
+		for _, stagingPath := range stagingPaths {
+			if _, err := os.Stat(stagingPath); err == nil {
+				log.Printf("Removing staging directory: %s", stagingPath)
+				if err := os.RemoveAll(stagingPath); err != nil {
+					log.Printf("WARNING: Failed to remove staging directory: %v", err)
+				} else {
+					log.Printf("✓ Staging directory removed: %s", stagingPath)
+				}
+			}
+		}
+
+		// Clean dist directory (install outputs)
+		distPath := filepath.Join(workspaceRoot, "dist")
+		if _, err := os.Stat(distPath); err == nil {
+			log.Printf("Removing dist directory: %s", distPath)
+			if err := os.RemoveAll(distPath); err != nil {
+				log.Printf("WARNING: Failed to remove dist directory: %v", err)
+			} else {
+				log.Printf("✓ Dist directory removed")
+			}
+		}
 		
 		log.Printf("✓ Clean complete")
 		os.Exit(0)

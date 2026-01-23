@@ -1,5 +1,9 @@
 # Go Build Templates
-# Templates for building Go executables and libraries
+# Templates for building Go executables and C-compatible shared libraries
+#
+# Note: Go doesn't support traditional static libraries. Go packages are
+# compiled directly into the final binary. For C interop, use shared_libraries
+# with buildmode=c-shared.
 
 templates:
   # Go executable: single-step build (Go handles its own compilation internally)
@@ -28,12 +32,13 @@ templates:
           build_tags: "{item.build_tags}"
           ldflags: "{item.ldflags}"
 
-  # Go library (plugin): single-step build with -buildmode=plugin
-  go_library:
-    description: "Build Go plugin/library"
+  # Go shared library: C-compatible shared library using buildmode=c-shared
+  # Use this for C/C++ interop - exports functions with //export directives
+  go_shared_library:
+    description: "Build Go C-compatible shared library"
     metadata:
       language: go
-      target_types: [library, shared_library, plugin]
+      target_types: [shared_library]
       toolchain_language: go
       pre_processing:
         resolve_packages: false
@@ -53,4 +58,4 @@ templates:
         tool_params:
           build_tags: "{item.build_tags}"
           ldflags: "{item.ldflags}"
-          buildmode: "plugin"
+          buildmode: "c-shared"

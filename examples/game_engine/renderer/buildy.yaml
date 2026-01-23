@@ -6,9 +6,8 @@ variables:
   MODULE_NAME: "engine_renderer"
 
 targets:
-  libraries:
+  shared_libraries:
     - name: engine_renderer
-      type: shared_library
       language: cpp
       sources:
         - "src/*.cpp"

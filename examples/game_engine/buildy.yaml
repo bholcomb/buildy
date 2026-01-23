@@ -18,8 +18,8 @@ workspace:
       - platform
       - renderer
       - audio
+      - shaders
       - game
-      # Note: shaders module not included yet - glslc toolchain support needed
 
 dependencies:
   file: buildy/dependencies.yaml
@@ -43,3 +43,45 @@ environment:
       optimization: "-O3"
       defines: ["NDEBUG=1"]
       flags: ["-flto"]
+
+# Assemble the final product structure
+staging:
+  name: game_engine
+  destination: "${out_dir}/staging"
+  use_symlinks: true
+
+  contents:
+    # Root level files
+    - folder: "."
+      files: ["LICENSE.txt", "README.md"]
+
+    # Binaries - executables and shared libraries together
+    - folder: bin
+      targets:
+        - mygame
+        - engine_core
+        - engine_platform
+        - engine_renderer
+        - engine_audio
+
+    # Data folder with subfolders
+    - folder: data
+      contents:
+        - folder: shaders
+          artifacts:
+            - vertex_shaders
+            - fragment_shaders
+
+        - folder: textures
+          files: ["assets/textures/*.png"]
+
+        - folder: meshes
+          files: ["assets/meshes/*.mesh"]
+
+# Package for distribution
+install:
+  - name: game_engine_release
+    staging: game_engine
+    destination: "${out_dir}/dist"
+    format: zip
+    filename: "${project_name}-${project_version}-${platform}-${arch}"
