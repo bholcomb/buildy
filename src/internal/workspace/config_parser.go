@@ -358,6 +358,14 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 		return nil, err
 	}
 
+	// Compute output_dir early so it can be used in artifacts section
+	outputDir, err := cp.getOutputDir(config)
+	if err != nil {
+		return nil, err
+	}
+	// Add output_dir to variable environment for use in artifacts and other sections
+	cp.VarEnv.SetVariable("output_dir", outputDir, "built-in")
+
 	// Resolve all variables in the config
 	errors := []string{}
 	resolvedConfigRaw := cp.VarEnv.ResolveRecursive(config, &errors)
@@ -372,12 +380,6 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	resolvedConfig, ok := resolvedConfigRaw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("resolved config is not a map")
-	}
-
-	// Get output directory
-	outputDir, err := cp.getOutputDir(resolvedConfig)
-	if err != nil {
-		return nil, err
 	}
 
 	// Create path resolver

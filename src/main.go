@@ -17,7 +17,14 @@ import (
 	flag "github.com/spf13/pflag"
 )
 
-const Version = "0.1.0-go"
+const Version = "0.1.0"
+
+// Build information - set via ldflags at build time
+var (
+	BuildTime   = "unknown"
+	GitCommit   = "unknown"
+	BuildConfig = "debug"
+)
 
 // Global verbose flag and logger
 var Verbose bool
@@ -102,7 +109,7 @@ func main() {
 	
 	platform := flag.StringP("platform", "p", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
-	configuration := flag.StringP("configuration", "c", "debug", "Build configuration")
+	configuration := flag.StringP("config", "c", "debug", "Build configuration")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
 	dryRun := flag.BoolP("dry-run", "n", false, "Generate tasks but don't execute")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
@@ -132,7 +139,9 @@ func main() {
 	flag.StringArrayVar(&packageDirs, "package-dir", []string{}, "Additional package directory (can be used multiple times)")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n\n", Version)
+		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n", Version)
+		fmt.Fprintf(os.Stderr, "  Build:   %s (%s)\n", BuildConfig, BuildTime)
+		fmt.Fprintf(os.Stderr, "  Commit:  %s\n\n", GitCommit)
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [config_files...]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()

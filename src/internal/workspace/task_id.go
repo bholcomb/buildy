@@ -168,7 +168,7 @@ func (r *TaskIDRegistry) Clear() {
 
 // isTaskID checks if a string looks like a task ID (rather than a target name)
 func isTaskID(s string) bool {
-	prefixes := []string{"setup_", "compile_", "link_", "go_build_", "transform_", "generate_"}
+	prefixes := []string{"setup_", "compile_", "link_", "build_", "copy_", "transform_", "generate_"}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(s, prefix) {
 			return true

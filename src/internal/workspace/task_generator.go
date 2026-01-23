@@ -162,7 +162,7 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 		}
 	}
 
-	// Generate Go module tasks
+	// Generate Go module tasks (legacy support)
 	if targets, ok := config["targets"].(map[string]any); ok {
 		if goModules, ok := targets["go_modules"].([]any); ok {
 			for _, goModRaw := range goModules {
@@ -175,6 +175,15 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 				}
 			}
 		}
+	}
+
+	// Generate artifact copy tasks
+	if artifacts, ok := config["artifacts"].(map[string]any); ok {
+		copyTasks, err := tg.generateArtifactCopyTasks(artifacts, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, copyTasks...)
 	}
 
 	return tasks, nil
@@ -822,6 +831,120 @@ func findRustSourceFiles(rootDir string) ([]string, error) {
 // GetGeneratedTargets returns the mapping of target names to their link task IDs
 func (tg *TaskGenerator) GetGeneratedTargets() map[string]string {
 	return tg.generatedTargets
+}
+
+// generateArtifactCopyTasks generates copy tasks from the artifacts.copy section
+func (tg *TaskGenerator) generateArtifactCopyTasks(
+	artifacts map[string]any,
+	mergedConfig map[string]any,
+	outputDir string,
+	existingTasks []*BuildTask,
+) ([]*BuildTask, error) {
+	var tasks []*BuildTask
+
+	copyItems, ok := artifacts["copy"].([]any)
+	if !ok {
+		return tasks, nil
+	}
+
+	// Log available targets for debugging
+	log.Printf("Available targets for artifact dependencies: %v", tg.generatedTargets)
+
+	// Get workspace root for resolving relative paths
+	workspaceRoot := ""
+	if tg.Workspace != nil {
+		workspaceRoot = tg.Workspace.RootDir
+	}
+
+	for _, copyRaw := range copyItems {
+		copyItem, ok := copyRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// Get source and destination
+		source := ""
+		if s, ok := copyItem["source"].(string); ok {
+			source = s
+		}
+		dest := ""
+		if d, ok := copyItem["dest"].(string); ok {
+			dest = d
+		}
+
+		if source == "" || dest == "" {
+			log.Printf("WARNING: artifacts.copy item missing source or dest")
+			continue
+		}
+
+		// Resolve variables in source and dest
+		source = strings.ReplaceAll(source, "${output_dir}", outputDir)
+		source = strings.ReplaceAll(source, "${config}", tg.Configuration)
+		source = strings.ReplaceAll(source, "${platform}", tg.Platform)
+		source = strings.ReplaceAll(source, "${arch}", tg.Architecture)
+
+		dest = strings.ReplaceAll(dest, "${output_dir}", outputDir)
+		dest = strings.ReplaceAll(dest, "${config}", tg.Configuration)
+		dest = strings.ReplaceAll(dest, "${platform}", tg.Platform)
+		dest = strings.ReplaceAll(dest, "${arch}", tg.Architecture)
+
+		// Make relative paths absolute
+		if !filepath.IsAbs(source) && workspaceRoot != "" {
+			source = filepath.Join(workspaceRoot, source)
+		}
+		if !filepath.IsAbs(dest) && workspaceRoot != "" {
+			dest = filepath.Join(workspaceRoot, dest)
+		}
+
+		// Resolve dependencies
+		var dependencies []string
+		if deps, ok := copyItem["depends_on"].([]any); ok {
+			for _, dep := range deps {
+				if depStr, ok := dep.(string); ok {
+					// Look up the task ID for this target name
+					if taskID, found := tg.generatedTargets[depStr]; found {
+						dependencies = append(dependencies, taskID)
+						log.Printf("Resolved dependency '%s' -> task '%s'", depStr, taskID)
+					} else {
+						log.Printf("WARNING: artifacts.copy dependency '%s' not found in generated targets", depStr)
+					}
+				}
+			}
+		}
+
+		// Create the copy command
+		var command string
+		destDir := filepath.Dir(dest)
+		if strings.Contains(strings.ToLower(tg.Platform), "windows") {
+			command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && copy /Y \"%s\" \"%s\"",
+				destDir, destDir, source, dest)
+		} else {
+			command = fmt.Sprintf("mkdir -p %s && cp %s %s", destDir, source, dest)
+		}
+
+		// Create the copy task
+		taskID := tg.TaskIDGen.Next("copy", filepath.Base(dest))
+		task := NewBuildTask(
+			taskID,
+			"copy",
+			[]TaskInput{NewTaskInput(source)},
+			[]string{dest},
+			dependencies,
+			command,
+		)
+		task.Platform = tg.Platform
+		task.Architecture = tg.Architecture
+		task.Configuration = tg.Configuration
+		task.Toolchain = ""
+		task.EstimatedTime = 0.1
+		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
+		task.CacheKey = task.CalculateCacheKey()
+
+		tasks = append(tasks, &task)
+		log.Printf("Generated copy task: %s -> %s", source, dest)
+	}
+
+	return tasks, nil
 }
 
 // extractIncludeDirs extracts include directories from various formats
