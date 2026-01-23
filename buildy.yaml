@@ -3,18 +3,17 @@ project:
   version: "1.0.0"
   description: "Multi-language build system"
 
+workspace:
+  modules:
+    common:
+      - "."
+
 variables:
   import_env_vars:
     - name: BUILDY_CACHE_DIR
       default: ".buildy_cache"
 
 environment:
-  toolchains:
-    default: go
-    linux: go-linux
-    windows: go-windows
-    macos: go-macos
-    
   configurations:
     debug:
       defines: []
@@ -22,8 +21,9 @@ environment:
       defines: []
 
 targets:
-  go_modules:
+  executables:
     - name: buildy
+      language: go
       path: "src"
       output: "bin/buildy"
       build_tags: []

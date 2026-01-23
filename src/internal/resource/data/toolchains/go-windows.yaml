@@ -1,0 +1,41 @@
+# Go Toolchain for Windows (cross-compile)
+
+toolchain:
+  name: "go-windows"
+  description: "Go compiler for Windows"
+  language: "go"
+  
+  target:
+    platform: windows
+    architecture: x86_64
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+    env:
+      GOOS: windows
+      GOARCH: amd64
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ".exe"
+      output_pattern: "{name}.exe"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w -H windowsgui", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+        gcflags: true
+        gcflags_flag: "-gcflags"
+        trimpath: true
+        trimpath_flag: "-trimpath"

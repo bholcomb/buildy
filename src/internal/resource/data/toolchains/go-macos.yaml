@@ -1,0 +1,38 @@
+# Go Toolchain for macOS x86_64
+
+toolchain:
+  name: "go-macos"
+  description: "Go compiler for macOS"
+  language: "go"
+  
+  target:
+    platform: macos
+    architecture: x86_64
+  
+  host:
+    platform: macos
+    architecture: x86_64
+  
+  execution:
+    type: native
+  
+  tools:
+    go_build:
+      action: build
+      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: ["-gcflags=all=-N -l"]
+        release: ["-ldflags=-s -w", "-trimpath"]
+      supports:
+        build_tags: true
+        build_tags_flag: "-tags"
+        ldflags: true
+        ldflags_flag: "-ldflags"
+        gcflags: true
+        gcflags_flag: "-gcflags"
+        trimpath: true
+        trimpath_flag: "-trimpath"

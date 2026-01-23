@@ -1,0 +1,30 @@
+# Go Build Templates
+# Templates for building Go executables and libraries
+
+templates:
+  # Go executable: single-step build (Go handles its own compilation internally)
+  go_executable:
+    description: "Build Go executable"
+    steps:
+      - name: build
+        action: build
+        output: "{output_dir}/bin/{tool.output_pattern}"
+        inputs: ["{item.path}"]
+        working_dir: "{item.path}"
+        tool_params:
+          build_tags: "{item.build_tags}"
+          ldflags: "{item.ldflags}"
+
+  # Go library (plugin): single-step build with -buildmode=plugin
+  go_library:
+    description: "Build Go plugin/library"
+    steps:
+      - name: build
+        action: build
+        output: "{output_dir}/lib/{tool.output_pattern}"
+        inputs: ["{item.path}"]
+        working_dir: "{item.path}"
+        tool_params:
+          build_tags: "{item.build_tags}"
+          ldflags: "{item.ldflags}"
+          buildmode: "plugin"
