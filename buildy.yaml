@@ -25,6 +25,11 @@ targets:
     - name: buildy
       language: go
       path: "src"
-      output: "bin/buildy"
       build_tags: []
-      ldflags: []
+      ldflags:
+        - -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        - -X main.GitCommit=$(git rev-parse --short HEAD)
+        - -X main.BuildConfig=${config}
+
+# Note: artifacts.copy is handled by bootstrap.sh to avoid "text file busy"
+# when buildy builds itself

@@ -885,19 +885,25 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	command = strings.ReplaceAll(command, "{build_tags}", buildTags)
 
 	// Handle ldflags (for Go)
+	// ldflags can contain shell command substitutions like $(date ...) and variables like ${config}
 	ldflags := ""
+	var lfStrs []string
 	if lf, ok := toolParams["ldflags"].([]string); ok && len(lf) > 0 {
-		ldflags = "-ldflags '" + strings.Join(lf, " ") + "'"
+		lfStrs = lf
 	} else if lf, ok := itemConfig["ldflags"].([]any); ok && len(lf) > 0 {
-		lfStrs := []string{}
 		for _, f := range lf {
 			if str, ok := f.(string); ok {
 				lfStrs = append(lfStrs, str)
 			}
 		}
-		if len(lfStrs) > 0 {
-			ldflags = "-ldflags '" + strings.Join(lfStrs, " ") + "'"
+	}
+	if len(lfStrs) > 0 {
+		// Replace ${config} with actual configuration value
+		for i, lf := range lfStrs {
+			lfStrs[i] = strings.ReplaceAll(lf, "${config}", configuration)
 		}
+		// Use double quotes to allow shell command substitution ($(date ...), $(git ...))
+		ldflags = "-ldflags \"" + strings.Join(lfStrs, " ") + "\""
 	}
 	command = strings.ReplaceAll(command, "{ldflags}", ldflags)
 
