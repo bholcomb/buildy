@@ -553,9 +553,27 @@ func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
 // artifactOutputs tracks artifact name -> output paths for staging
 var artifactOutputs = make(map[string][]string)
 
+// artifactTaskIDs tracks artifact name -> task IDs that produce the outputs
+// This is used to establish proper dependencies for staging tasks
+var artifactTaskIDs = make(map[string][]string)
+
+// outputToTaskID tracks output file path -> task ID that produces it
+// This allows looking up dependencies for any file path, not just named artifacts
+var outputToTaskID = make(map[string]string)
+
 // GetArtifactOutputs returns the outputs for a named artifact
 func GetArtifactOutputs(name string) []string {
 	return artifactOutputs[name]
+}
+
+// GetArtifactTaskIDs returns the task IDs that produce outputs for a named artifact
+func GetArtifactTaskIDs(name string) []string {
+	return artifactTaskIDs[name]
+}
+
+// GetTaskIDForOutput returns the task ID that produces a given output file path
+func GetTaskIDForOutput(outputPath string) string {
+	return outputToTaskID[outputPath]
 }
 
 // generateTransformTasks generates transform tasks from artifacts.transform section
@@ -659,6 +677,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 		}
 
 		var artifactOutputPaths []string
+		var artifactTaskIDList []string
 
 		// Create a task for each input file
 		for _, inputFile := range inputFiles {
@@ -740,12 +759,16 @@ func (tg *TaskGenerator) generateTransformTasks(
 
 			tasks = append(tasks, &task)
 			artifactOutputPaths = append(artifactOutputPaths, resolvedOutput)
+			artifactTaskIDList = append(artifactTaskIDList, taskID)
+			// Register output path -> task ID mapping for dependency lookup
+			outputToTaskID[resolvedOutput] = taskID
 			log.Printf("Generated transform task: %s -> %s", inputFile, resolvedOutput)
 		}
 
-		// Register artifact outputs for staging
+		// Register artifact outputs and task IDs for staging
 		if name != "" {
 			artifactOutputs[name] = artifactOutputPaths
+			artifactTaskIDs[name] = artifactTaskIDList
 			log.Printf("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
 		}
 	}
@@ -889,10 +912,13 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 			tasks = append(tasks, &task)
 
-			// Register artifact outputs
+			// Register artifact outputs and task IDs
 			if name != "" {
 				artifactOutputs[name] = []string{outputPath}
+				artifactTaskIDs[name] = []string{taskID}
 			}
+			// Register output path -> task ID mapping for dependency lookup
+			outputToTaskID[outputPath] = taskID
 
 			log.Printf("Generated template task: %s -> %s", templatePath, outputPath)
 
@@ -966,6 +992,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			}
 
 			var artifactOutputPaths []string
+			var artifactTaskIDList []string
 
 			// Create a task for each input file
 			for _, inputFile := range inputFiles {
@@ -1040,12 +1067,18 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 				tasks = append(tasks, &task)
 				artifactOutputPaths = append(artifactOutputPaths, resolvedOutputs...)
+				artifactTaskIDList = append(artifactTaskIDList, taskID)
+				// Register output path -> task ID mapping for dependency lookup
+				for _, outputPath := range resolvedOutputs {
+					outputToTaskID[outputPath] = taskID
+				}
 				log.Printf("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
 			}
 
-			// Register artifact outputs
+			// Register artifact outputs and task IDs
 			if name != "" {
 				artifactOutputs[name] = artifactOutputPaths
+				artifactTaskIDs[name] = artifactTaskIDList
 			}
 		}
 	}
@@ -1234,16 +1267,22 @@ func (tg *TaskGenerator) processStagingContents(
 					useSymlink = false
 				}
 
-				// Get artifact outputs
+				// Get artifact outputs and their producing task IDs
 				outputs := artifactOutputs[artifactName]
+				taskIDs := artifactTaskIDs[artifactName]
 				if len(outputs) == 0 {
 					log.Printf("WARNING: artifact '%s' has no outputs for staging", artifactName)
 					continue
 				}
 
-				for _, sourcePath := range outputs {
+				for i, sourcePath := range outputs {
 					destPath := filepath.Join(folderPath, filepath.Base(sourcePath))
-					task := tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, []string{})
+					// Add dependency on the task that produces this specific output
+					var deps []string
+					if i < len(taskIDs) {
+						deps = []string{taskIDs[i]}
+					}
+					task := tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, deps)
 					if task != nil {
 						tasks = append(tasks, task)
 					}
@@ -1292,7 +1331,12 @@ func (tg *TaskGenerator) processStagingContents(
 
 					for _, match := range matches {
 						destPath := filepath.Join(folderPath, filepath.Base(match))
-						task := tg.createSymlinkOrCopyTask(match, destPath, useSymlink, isWindows, []string{})
+						// Check if this file is produced by a task and add dependency if so
+						var deps []string
+						if taskID := outputToTaskID[match]; taskID != "" {
+							deps = []string{taskID}
+						}
+						task := tg.createSymlinkOrCopyTask(match, destPath, useSymlink, isWindows, deps)
 						if task != nil {
 							tasks = append(tasks, task)
 						}
@@ -1300,7 +1344,12 @@ func (tg *TaskGenerator) processStagingContents(
 				} else {
 					// Single file
 					destPath := filepath.Join(folderPath, filepath.Base(sourcePattern))
-					task := tg.createSymlinkOrCopyTask(sourcePattern, destPath, useSymlink, isWindows, []string{})
+					// Check if this file is produced by a task and add dependency if so
+					var deps []string
+					if taskID := outputToTaskID[sourcePattern]; taskID != "" {
+						deps = []string{taskID}
+					}
+					task := tg.createSymlinkOrCopyTask(sourcePattern, destPath, useSymlink, isWindows, deps)
 					if task != nil {
 						tasks = append(tasks, task)
 					}
