@@ -256,8 +256,13 @@ func (tg *TaskGenerator) generateTargetTasks(
 			}
 			if targetTask != nil {
 				tg.generatedTargets[name] = targetTask.TaskID
-				globalTaskRegistry.RegisterTarget(name, targetTask.TaskID, tg.CurrentModule)
-				log.Printf("Registered target '%s' -> task '%s'", name, targetTask.TaskID)
+				// Get the primary output path (first output)
+				outputPath := ""
+				if len(targetTask.Outputs) > 0 {
+					outputPath = targetTask.Outputs[0]
+				}
+				globalTaskRegistry.RegisterTargetWithOutput(name, targetTask.TaskID, tg.CurrentModule, outputPath)
+				log.Printf("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
 			}
 		}
 	}
@@ -1194,12 +1199,25 @@ func (tg *TaskGenerator) processStagingContents(
 		folderName := "."
 		if f, ok := item["folder"].(string); ok {
 			folderName = f
+			// Resolve variables in folder name using VarEnv if available
+			if tg.VarEnv != nil && strings.Contains(folderName, "${") {
+				var errors []string
+				folderName = tg.VarEnv.ResolveString(folderName, &errors, 10)
+				if len(errors) > 0 {
+					log.Printf("WARNING: Variable resolution errors in staging folder '%s': %v", f, errors)
+				}
+			}
 		}
 
 		// Calculate the destination path for this folder
+		// Folder paths are always relative to the staging root
+		// Use ${workspace} variable in folder name if you need workspace-relative paths
 		var folderPath string
 		if folderName == "." {
 			folderPath = filepath.Join(stagingRoot, currentPath)
+		} else if filepath.IsAbs(folderName) {
+			// Absolute path - use as-is (likely from ${workspace}/... resolution)
+			folderPath = folderName
 		} else if currentPath == "" {
 			folderPath = filepath.Join(stagingRoot, folderName)
 		} else {
@@ -1394,50 +1412,56 @@ func (tg *TaskGenerator) createTargetStagingTask(
 		return nil
 	}
 
-	// Try to find the output file - check multiple locations
-	possiblePaths := []string{
-		// Executable paths
-		filepath.Join(outputDir, "bin", targetName),
-		filepath.Join(outputDir, "bin", targetName+".exe"),
-		// Library paths
-		filepath.Join(outputDir, "lib", "lib"+targetName+".so"),
-		filepath.Join(outputDir, "lib", "lib"+targetName+".a"),
-		filepath.Join(outputDir, "lib", "lib"+targetName+".dylib"),
-		filepath.Join(outputDir, "lib", targetName+".dll"),
-		filepath.Join(outputDir, "lib", targetName+".lib"),
-	}
-
+	// First, try to get the registered output path from the registry
 	var sourcePath string
-	for _, p := range possiblePaths {
-		// For now, construct based on platform conventions
-		// The actual file may not exist yet at task generation time
-		if isWindows {
-			if strings.HasSuffix(p, ".exe") || strings.HasSuffix(p, ".dll") || strings.HasSuffix(p, ".lib") {
-				sourcePath = p
-				break
-			}
-		} else if strings.Contains(tg.Platform, "darwin") || strings.Contains(tg.Platform, "macos") {
-			if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") {
-				if strings.HasSuffix(p, ".dylib") || !strings.Contains(p, ".") || strings.HasSuffix(p, ".a") {
+	if registeredOutput, ok := globalTaskRegistry.GetTargetOutputPath(targetName); ok && registeredOutput != "" {
+		sourcePath = registeredOutput
+		log.Printf("Using registered output path for target '%s': %s", targetName, sourcePath)
+	} else {
+		// Fallback: Try to find the output file by checking multiple locations
+		possiblePaths := []string{
+			// Executable paths
+			filepath.Join(outputDir, "bin", targetName),
+			filepath.Join(outputDir, "bin", targetName+".exe"),
+			// Library paths
+			filepath.Join(outputDir, "lib", "lib"+targetName+".so"),
+			filepath.Join(outputDir, "lib", "lib"+targetName+".a"),
+			filepath.Join(outputDir, "lib", "lib"+targetName+".dylib"),
+			filepath.Join(outputDir, "lib", targetName+".dll"),
+			filepath.Join(outputDir, "lib", targetName+".lib"),
+		}
+
+		for _, p := range possiblePaths {
+			// For now, construct based on platform conventions
+			// The actual file may not exist yet at task generation time
+			if isWindows {
+				if strings.HasSuffix(p, ".exe") || strings.HasSuffix(p, ".dll") || strings.HasSuffix(p, ".lib") {
+					sourcePath = p
+					break
+				}
+			} else if strings.Contains(tg.Platform, "darwin") || strings.Contains(tg.Platform, "macos") {
+				if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") {
+					if strings.HasSuffix(p, ".dylib") || !strings.Contains(p, ".") || strings.HasSuffix(p, ".a") {
+						sourcePath = p
+						break
+					}
+				}
+			} else {
+				// Linux
+				if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") && !strings.HasSuffix(p, ".dylib") {
 					sourcePath = p
 					break
 				}
 			}
-		} else {
-			// Linux
-			if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") && !strings.HasSuffix(p, ".dylib") {
-				sourcePath = p
-				break
-			}
 		}
-	}
 
-	if sourcePath == "" {
-		// Default fallback - assume executable
-		if isWindows {
-			sourcePath = filepath.Join(outputDir, "bin", targetName+".exe")
-		} else {
-			sourcePath = filepath.Join(outputDir, "bin", targetName)
+		if sourcePath == "" {
+			// Default fallback - assume executable
+			if isWindows {
+				sourcePath = filepath.Join(outputDir, "bin", targetName+".exe")
+			} else {
+				sourcePath = filepath.Join(outputDir, "bin", targetName)
+			}
 		}
 	}
 
@@ -1684,42 +1708,75 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			continue
 		}
 
-		// Get source and destination
-		source := ""
-		if s, ok := copyItem["source"].(string); ok {
+		var source string
+		var dependencies []string
+		var targetName string
+
+		// Check for target reference (preferred for build outputs)
+		if t, ok := copyItem["target"].(string); ok {
+			targetName = t
+			// Look up the target's output path from the registry
+			if outputPath, found := globalTaskRegistry.GetTargetOutputPath(targetName); found && outputPath != "" {
+				source = outputPath
+				log.Printf("Resolved target '%s' to output path: %s", targetName, source)
+			} else {
+				log.Printf("WARNING: artifacts.copy target '%s' not found in registry or has no output path", targetName)
+				continue
+			}
+			// Auto-add dependency on the target's link task
+			if taskID, found := globalTaskRegistry.GetLinkTaskID(targetName); found {
+				dependencies = append(dependencies, taskID)
+			}
+		} else if s, ok := copyItem["source"].(string); ok {
+			// Explicit source path
 			source = s
 		}
+
+		// Get destination
 		dest := ""
 		if d, ok := copyItem["dest"].(string); ok {
 			dest = d
 		}
 
 		if source == "" || dest == "" {
-			log.Printf("WARNING: artifacts.copy item missing source or dest")
+			log.Printf("WARNING: artifacts.copy item missing source/target or dest")
 			continue
 		}
 
-		// Resolve variables in source and dest
-		source = strings.ReplaceAll(source, "${output_dir}", outputDir)
-		source = strings.ReplaceAll(source, "${config}", tg.Configuration)
-		source = strings.ReplaceAll(source, "${platform}", tg.Platform)
-		source = strings.ReplaceAll(source, "${arch}", tg.Architecture)
+		// Resolve variables in source and dest using VarEnv if available
+		if tg.VarEnv != nil {
+			var errors []string
+			source = tg.VarEnv.ResolveString(source, &errors, 10)
+			dest = tg.VarEnv.ResolveString(dest, &errors, 10)
+			if len(errors) > 0 {
+				log.Printf("WARNING: Variable resolution errors in artifacts.copy: %v", errors)
+			}
+		} else {
+			// Fallback to simple string replacement
+			source = strings.ReplaceAll(source, "${output_dir}", outputDir)
+			source = strings.ReplaceAll(source, "${config}", tg.Configuration)
+			source = strings.ReplaceAll(source, "${platform}", tg.Platform)
+			source = strings.ReplaceAll(source, "${arch}", tg.Architecture)
 
-		dest = strings.ReplaceAll(dest, "${output_dir}", outputDir)
-		dest = strings.ReplaceAll(dest, "${config}", tg.Configuration)
-		dest = strings.ReplaceAll(dest, "${platform}", tg.Platform)
-		dest = strings.ReplaceAll(dest, "${arch}", tg.Architecture)
-
-		// Make relative paths absolute
-		if !filepath.IsAbs(source) && workspaceRoot != "" {
-			source = filepath.Join(workspaceRoot, source)
+			dest = strings.ReplaceAll(dest, "${output_dir}", outputDir)
+			dest = strings.ReplaceAll(dest, "${config}", tg.Configuration)
+			dest = strings.ReplaceAll(dest, "${platform}", tg.Platform)
+			dest = strings.ReplaceAll(dest, "${arch}", tg.Architecture)
 		}
-		if !filepath.IsAbs(dest) && workspaceRoot != "" {
-			dest = filepath.Join(workspaceRoot, dest)
+
+		// Make relative paths absolute (relative to module dir if available, else workspace)
+		baseDir := workspaceRoot
+		if tg.PathResolver != nil && tg.PathResolver.ConfigFileDir != "" {
+			baseDir = tg.PathResolver.ConfigFileDir
+		}
+		if !filepath.IsAbs(source) && baseDir != "" {
+			source = filepath.Join(baseDir, source)
+		}
+		if !filepath.IsAbs(dest) && baseDir != "" {
+			dest = filepath.Join(baseDir, dest)
 		}
 
-		// Resolve dependencies
-		var dependencies []string
+		// Resolve additional explicit dependencies
 		if deps, ok := copyItem["depends_on"].([]any); ok {
 			for _, dep := range deps {
 				if depStr, ok := dep.(string); ok {
@@ -1727,11 +1784,23 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 					if taskID, found := tg.generatedTargets[depStr]; found {
 						dependencies = append(dependencies, taskID)
 						log.Printf("Resolved dependency '%s' -> task '%s'", depStr, taskID)
+					} else if taskID, found := globalTaskRegistry.GetLinkTaskID(depStr); found {
+						dependencies = append(dependencies, taskID)
+						log.Printf("Resolved dependency '%s' -> task '%s' (from registry)", depStr, taskID)
 					} else {
-						log.Printf("WARNING: artifacts.copy dependency '%s' not found in generated targets", depStr)
+						log.Printf("WARNING: artifacts.copy dependency '%s' not found", depStr)
 					}
 				}
 			}
+		}
+
+		// If dest looks like a directory (ends with / or has no extension and source has one),
+		// append the source filename to make it a full file path
+		if strings.HasSuffix(dest, "/") || strings.HasSuffix(dest, string(filepath.Separator)) {
+			dest = filepath.Join(dest, filepath.Base(source))
+		} else if filepath.Ext(dest) == "" && filepath.Ext(source) != "" {
+			// dest has no extension but source does - treat dest as directory
+			dest = filepath.Join(dest, filepath.Base(source))
 		}
 
 		// Create the copy command

@@ -41,7 +41,7 @@ A typical project layout:
 ```
 project/
 ├── buildy.yaml                    # Root configuration
-├── buildy/
+├── buildy_config/
 │   ├── dependencies.yaml          # External dependencies (optional)
 │   ├── dependencies.lock          # Lockfile (auto-generated)
 │   ├── packages/
@@ -169,11 +169,14 @@ Priority from highest to lowest:
 | `${platform}` | Target platform | `linux`, `windows`, `macos` |
 | `${arch}` | Target architecture | `x86_64`, `arm64` |
 | `${config}` | Build configuration | `debug`, `release` |
+| `${workspace}` | Workspace root directory | `/home/user/myproject` |
 | `${project_name}` | From `project.name` | `game_engine` |
 | `${project_version}` | From `project.version` | `2.0.0` |
 | `${out_dir}` | Output directory | `build/linux-x86_64-debug` |
 | `${cache_dir}` | Cache directory | `.buildy_cache` |
 | `${gen_dir}` | Generated files directory | `build/.../gen` |
+
+The `${workspace}` variable is particularly useful in modules for referencing paths relative to the workspace root rather than the module directory.
 
 ### Error Messages
 
@@ -282,11 +285,11 @@ For cleaner configuration, reference an external file:
 ```yaml
 # buildy.yaml
 dependencies:
-  file: buildy/dependencies.yaml
+  file: buildy_config/dependencies.yaml
 ```
 
 ```yaml
-# buildy/dependencies.yaml
+# buildy_config/dependencies.yaml
 system:
   common:
     - name: zlib
@@ -380,15 +383,15 @@ Packages are standalone YAML files that define platform-specific include paths, 
 **Declaring packages in dependencies:**
 
 ```yaml
-# buildy/dependencies.yaml
+# buildy_config/dependencies.yaml
 system:
   - name: zlib
     pkg_config: zlib
 
 # Packages: reference package files by name
 packages:
-  - glfw3      # Resolves to buildy/packages/glfw3.yaml
-  - opengl     # Resolves to buildy/packages/opengl.yaml
+  - glfw3      # Resolves to buildy_config/packages/glfw3.yaml
+  - opengl     # Resolves to buildy_config/packages/opengl.yaml
 ```
 
 **Using packages in targets:**
@@ -407,7 +410,7 @@ targets:
 
 **Package search order:**
 
-1. `./buildy/packages/*.yaml` - Project-specific
+1. `./buildy_config/packages/*.yaml` - Project-specific
 2. `~/.buildy/packages/*.yaml` - User-shared
 3. System locations (`/usr/share/buildy/packages/`, etc.)
 4. Built-in (embedded in binary)
@@ -415,7 +418,7 @@ targets:
 **Custom search paths (optional):**
 
 ```yaml
-# buildy/dependencies.yaml
+# buildy_config/dependencies.yaml
 package_paths:                    # Additional search paths (checked first)
   - "${THIRD_PARTY_ROOT}/packages"
   - "/opt/company/buildy/packages"
@@ -428,7 +431,7 @@ packages:
 **Package file format:**
 
 ```yaml
-# buildy/packages/glfw3.yaml
+# buildy_config/packages/glfw3.yaml
 package:
   name: glfw3
   description: "GLFW - OpenGL window and input library"
@@ -723,9 +726,23 @@ targets:
 
 ## 7. Artifacts Section
 
-File operations: copy, transform, generate, install.
+File operations: copy, transform, generate. Use `artifacts` in modules for post-build deployment tasks (like copying native libraries for interop). Use `staging` at the workspace level for assembling distribution packages.
 
 ### Copy
+
+Copy files or build target outputs to a destination. Supports both explicit source paths and target references.
+
+**Copy build target output:**
+
+```yaml
+artifacts:
+  copy:
+    # Copy a build target's output to a specific location
+    - target: my_native_lib           # Reference target by name
+      dest: "${workspace}/dotnet/runtimes/linux-x64/native"
+```
+
+**Copy files with glob patterns:**
 
 ```yaml
 artifacts:
@@ -736,6 +753,25 @@ artifacts:
       preserve_structure: true
       incremental: true
 ```
+
+**Copy with explicit source:**
+
+```yaml
+artifacts:
+  copy:
+    - source: "${out_dir}/lib/libfoo.so"
+      dest: "${workspace}/external/lib"
+      depends_on: [foo]               # Ensure target builds first
+```
+
+| Field | Description |
+|-------|-------------|
+| `target` | Reference a build target by name - source path is resolved automatically |
+| `source` | Explicit source file path (use if not referencing a target) |
+| `dest` | Destination path - if directory, filename is appended from source |
+| `depends_on` | Build targets that must complete first (auto-added for `target:`) |
+
+**Path resolution:** Relative paths in `dest` are resolved relative to the module directory. Use `${workspace}` to reference the workspace root.
 
 ### Transform
 
@@ -772,7 +808,13 @@ artifacts:
 
 ## 8. Staging Section
 
-The staging section defines how to assemble build outputs into a product directory structure. This is useful for:
+The staging section defines how to assemble build outputs into a product directory structure for distribution. **Staging is typically defined at the workspace root level** to create a complete product layout.
+
+**Staging vs Artifacts.copy:**
+- Use **staging** (workspace root) for assembling a complete distribution package
+- Use **artifacts.copy** (in modules) for post-build deployment tasks like copying native libraries for interop
+
+Staging is useful for:
 - Testing the final product layout before packaging
 - Fast developer iteration with symlinks
 - Collecting executables, libraries, and assets into a deliverable structure
@@ -932,7 +974,7 @@ Toolchains define how to compile, link, and transform files.
 
 ### Search Order
 
-1. `./buildy/toolchains/*.yaml` - Project-specific
+1. `./buildy_config/toolchains/*.yaml` - Project-specific
 2. `~/.buildy/toolchains/*.yaml` - User-shared
 3. Built-in (embedded in binary)
 
@@ -963,7 +1005,7 @@ All tools use the same format. The `action` field distinguishes behavior:
 ### Custom Toolchain Example
 
 ```yaml
-# buildy/toolchains/mesh-converter.yaml
+# buildy_config/toolchains/mesh-converter.yaml
 toolchain:
   name: "mesh-converter"
   description: "Convert mesh files to runtime format"
@@ -1079,10 +1121,10 @@ dependencies:
 
 ### Custom Build System Definition
 
-Create custom build system definitions in `buildy/build_systems/`:
+Create custom build system definitions in `buildy_config/build_systems/`:
 
 ```yaml
-# buildy/build_systems/bazel.yaml
+# buildy_config/build_systems/bazel.yaml
 build_system:
   name: bazel
   description: "Google Bazel build system"
@@ -1120,7 +1162,7 @@ build_system:
 
 ### Search Order
 
-1. `./buildy/build_systems/*.yaml` - Project-specific
+1. `./buildy_config/build_systems/*.yaml` - Project-specific
 2. `~/.buildy/build_systems/*.yaml` - User-shared
 3. Built-in (embedded in binary)
 
@@ -1140,7 +1182,7 @@ Available in command templates:
 
 ## 12. Lockfile
 
-Optional lockfile for reproducible builds. Located at `buildy/dependencies.lock`.
+Optional lockfile for reproducible builds. Located at `buildy_config/dependencies.lock`.
 
 ### Generation
 
@@ -1153,7 +1195,7 @@ buildy --ignore-lock    # Ignore existing lockfile
 ### Format
 
 ```yaml
-# buildy/dependencies.lock (auto-generated)
+# buildy_config/dependencies.lock (auto-generated)
 version: 1
 generated: "2026-01-22T10:30:00Z"
 platform: linux-x86_64
@@ -1213,7 +1255,7 @@ workspace:
       - platform/windows
 
 dependencies:
-  file: buildy/dependencies.yaml
+  file: buildy_config/dependencies.yaml
 
 environment:
   toolchains:
@@ -1248,7 +1290,7 @@ artifacts:
       outputs: "${out_dir}/shaders/${basename}.spv"
 ```
 
-### Dependencies: `buildy/dependencies.yaml`
+### Dependencies: `buildy_config/dependencies.yaml`
 
 ```yaml
 system:
@@ -1282,7 +1324,7 @@ fetch:
     ref: "master"
     type: header_only
 
-# Packages: resolved from buildy/packages/*.yaml
+# Packages: resolved from buildy_config/packages/*.yaml
 packages:
   - glfw3
 ```
@@ -1387,7 +1429,7 @@ buildy --target engine_core
 buildy --target game
 
 # IDE integration
-buildy --compile-commands  # Generate buildy/compile_commands.json for IDE tooling
+buildy --compile-commands  # Generate buildy_config/compile_commands.json for IDE tooling
 
 # Other options
 buildy --jobs 8            # Parallel jobs
@@ -1423,7 +1465,7 @@ The `--compile-commands` flag generates a `compile_commands.json` file in the `b
 buildy --compile-commands
 
 # Symlink to project root for IDE discovery (optional)
-ln -s buildy/compile_commands.json compile_commands.json
+ln -s buildy_config/compile_commands.json compile_commands.json
 ```
 
 ---
@@ -1494,7 +1536,7 @@ A detailed JSON report is saved to `.buildy_cache/build_report.json`:
   "platform": "linux",
   "architecture": "x86_64",
   "configuration": "debug",
-  "toolchain": "clang-linux",
+  "toolchain": "clang-cpp-linux",
   "cache_hits": 18,
   "cache_misses": 6,
   "failed_tasks": [],

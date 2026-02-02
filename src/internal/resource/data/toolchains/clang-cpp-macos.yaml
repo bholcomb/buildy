@@ -1,29 +1,24 @@
 toolchain:
-  name: "docker-linux"
-  description: "GCC in Docker for cross-platform builds"
+  name: "clang-cpp-macos"
+  description: "Apple Clang C++ for macOS"
   language: cpp
   
   target:
-    platform: linux
+    platform: macos
     architecture: x86_64
   
   host:
-    platform: any
-    architecture: any
+    platform: macos
+    architecture: x86_64
   
   execution:
-    type: docker
-    image: "gcc:13"
-    volumes:
-      - "${PWD}:/workspace"
-    working_dir: "/workspace"
-    user: "${UID}:${GID}"
+    type: native
   
   tools:
     # C compilation
     c_compile:
       action: compile
-      command: "gcc {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "clang {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -42,8 +37,8 @@ toolchain:
     # C++ compilation
     cpp_compile:
       action: compile
-      command: "g++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
+      command: "clang++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      input_extensions: [".cpp", ".cc", ".cxx", ".C", ".mm"]
       output_extension: ".o"
       flags:
         common: ["-Wall", "-Wextra"]
@@ -59,17 +54,17 @@ toolchain:
         dependencies: "-MMD -MP -MF {dep_file}"
         std: true
     
-    # Shared library linking
+    # Shared library linking (dylib on macOS)
     link_shared_library:
       action: link
-      command: "g++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang++ -dynamiclib {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
-      output_extension: ".so"
-      output_pattern: "lib{name}.so"
+      output_extension: ".dylib"
+      output_pattern: "lib{name}.dylib"
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: ["-Wl,-S"]
       supports:
         output_type: "shared_library"
         lib_dirs: true
@@ -96,14 +91,14 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "g++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang++ {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: ["-Wl,-S"]
       supports:
         output_type: "executable"
         lib_dirs: true

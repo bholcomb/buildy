@@ -1,7 +1,7 @@
 toolchain:
-  name: "msvc-windows"
-  description: "Microsoft Visual C++ for Windows x86_64"
-  language: cpp
+  name: "msvc-c-windows"
+  description: "Microsoft Visual C for Windows x86_64"
+  language: c
   
   target:
     platform: windows
@@ -18,11 +18,11 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "cl.exe {dep_flags} {flags} {defines} {includes} /c {input} /Fo{output}"
+      command: "cl.exe /nologo {flags} {defines} {includes} /c {input} /Fo{output}"
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
-        common: ["/W4", "/nologo"]
+        common: ["/W3"]
         debug: ["/Od", "/Zi", "/MDd"]
         release: ["/O2", "/MD", "/DNDEBUG"]
       supports:
@@ -31,36 +31,16 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
-        dependencies: "/sourceDependencies {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "cl.exe {dep_flags} /std:{std} {flags} {defines} {includes} /c {input} /Fo{output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
-      output_extension: ".obj"
-      flags:
-        common: ["/W4", "/nologo", "/EHsc"]
-        debug: ["/Od", "/Zi", "/MDd"]
-        release: ["/O2", "/MD", "/DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "/D"
-        includes: true
-        include_flag: "/I"
-        pic: false
-        dependencies: "/sourceDependencies {dep_file}"
-        std: true
     
     # Shared library linking (DLL)
     link_shared_library:
       action: link
-      command: "link.exe /DLL {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
+      command: "link.exe /nologo /DLL {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
       input_extensions: [".obj"]
       output_extension: ".dll"
       output_pattern: "{name}.dll"
       flags:
-        common: ["/nologo"]
+        common: []
         debug: ["/DEBUG"]
         release: []
       supports:
@@ -73,12 +53,12 @@ toolchain:
     # Static library archiving
     link_static_library:
       action: link
-      command: "lib.exe {flags} {objects} /OUT:{output}"
+      command: "lib.exe /nologo {objects} /OUT:{output}"
       input_extensions: [".obj"]
       output_extension: ".lib"
       output_pattern: "{name}.lib"
       flags:
-        common: ["/nologo"]
+        common: []
         debug: []
         release: []
       supports:
@@ -89,12 +69,12 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "link.exe {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
+      command: "link.exe /nologo {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
       input_extensions: [".obj"]
       output_extension: ".exe"
       output_pattern: "{name}.exe"
       flags:
-        common: ["/nologo"]
+        common: []
         debug: ["/DEBUG"]
         release: []
       supports:

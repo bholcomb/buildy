@@ -1,0 +1,64 @@
+toolchain:
+  name: "doxygen"
+  description: "Doxygen documentation generator"
+  language: docs
+  
+  target:
+    platform: any
+    architecture: any
+  
+  host:
+    platform: any
+    architecture: any
+  
+  execution:
+    type: native
+  
+  tools:
+    # Generate documentation from a Doxyfile
+    generate_docs:
+      action: generate
+      command: "doxygen {input}"
+      input_extensions: [".doxyfile", ".doxy", "Doxyfile"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        defines: false
+        includes: false
+
+    # Generate documentation with custom output directory
+    generate_docs_dir:
+      action: generate
+      command:
+        linux: "( cat {input} ; echo 'OUTPUT_DIRECTORY={output_dir}' ) | doxygen -"
+        macos: "( cat {input} ; echo 'OUTPUT_DIRECTORY={output_dir}' ) | doxygen -"
+        windows: "type {input} & echo OUTPUT_DIRECTORY={output_dir} | doxygen -"
+      input_extensions: [".doxyfile", ".doxy", "Doxyfile"]
+      output_extension: ""
+      output_pattern: "{name}"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        defines: false
+        includes: false
+
+    # Generate default Doxyfile configuration
+    generate_doxyfile:
+      action: generate
+      command: "doxygen -g {output}"
+      input_extensions: []
+      output_extension: ".doxyfile"
+      output_pattern: "{name}.doxyfile"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        defines: false
+        includes: false

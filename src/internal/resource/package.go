@@ -55,9 +55,9 @@ func NewPackageManager(workspaceRoot string, packageDirs []string, varEnv *util.
 	}
 
 	// Build package search paths in order:
-	// 1. Workspace buildy/packages
+	// 1. Workspace buildy_config/packages
 	if workspaceRoot != "" {
-		pm.packageDirs = append(pm.packageDirs, filepath.Join(workspaceRoot, "buildy", "packages"))
+		pm.packageDirs = append(pm.packageDirs, filepath.Join(workspaceRoot, "buildy_config", "packages"))
 	}
 
 	// 2. Command-line --package-dir
@@ -68,7 +68,7 @@ func NewPackageManager(workspaceRoot string, packageDirs []string, varEnv *util.
 
 	// 4. Executable location
 	if execDir, err := filepath.Abs(filepath.Dir(os.Args[0])); err == nil {
-		pm.packageDirs = append(pm.packageDirs, filepath.Join(execDir, "buildy", "packages"))
+		pm.packageDirs = append(pm.packageDirs, filepath.Join(execDir, "buildy_config", "packages"))
 	}
 
 	return pm
@@ -163,7 +163,17 @@ func (pm *PackageManager) LoadPackage(name string, platform, architecture string
 
 	// Check for new format with top-level platform subsections (common, linux, windows, etc.)
 	// vs old format with per-field platform subsections
-	if _, hasCommon := packageData["common"]; hasCommon {
+	// New format is detected by presence of platform keys at the package root level
+	isNewFormat := false
+	platformKeys := []string{"common", "linux", "windows", "darwin", "macos", "android", "ios"}
+	for _, key := range platformKeys {
+		if _, exists := packageData[key]; exists {
+			isNewFormat = true
+			break
+		}
+	}
+
+	if isNewFormat {
 		// New format: top-level platform subsections
 		pm.resolveNewPackageFormat(pkg, packageData, platform, architecture, pkgVarEnv)
 	} else {

@@ -79,6 +79,9 @@ type TaskIDRegistry struct {
 	
 	// moduleTargets maps module path -> list of target names
 	moduleTargets map[string][]string
+	
+	// targetOutputPath maps target name -> primary output file path
+	targetOutputPath map[string]string
 }
 
 // NewTaskIDRegistry creates a new TaskIDRegistry
@@ -87,6 +90,7 @@ func NewTaskIDRegistry() *TaskIDRegistry {
 		targetToLinkTask: make(map[string]string),
 		taskToTarget:     make(map[string]string),
 		moduleTargets:    make(map[string][]string),
+		targetOutputPath: make(map[string]string),
 	}
 }
 
@@ -100,6 +104,28 @@ func (r *TaskIDRegistry) RegisterTarget(targetName, linkTaskID, modulePath strin
 	
 	// Track targets per module
 	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
+}
+
+// RegisterTargetWithOutput registers a target name with its link task ID and output path
+func (r *TaskIDRegistry) RegisterTargetWithOutput(targetName, linkTaskID, modulePath, outputPath string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	r.targetToLinkTask[targetName] = linkTaskID
+	r.taskToTarget[linkTaskID] = targetName
+	r.targetOutputPath[targetName] = outputPath
+	
+	// Track targets per module
+	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
+}
+
+// GetTargetOutputPath returns the output path for a target name
+func (r *TaskIDRegistry) GetTargetOutputPath(targetName string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	outputPath, ok := r.targetOutputPath[targetName]
+	return outputPath, ok
 }
 
 // GetLinkTaskID returns the link task ID for a target name
@@ -164,6 +190,7 @@ func (r *TaskIDRegistry) Clear() {
 	r.targetToLinkTask = make(map[string]string)
 	r.taskToTarget = make(map[string]string)
 	r.moduleTargets = make(map[string][]string)
+	r.targetOutputPath = make(map[string]string)
 }
 
 // isTaskID checks if a string looks like a task ID (rather than a target name)

@@ -1,14 +1,14 @@
 toolchain:
-  name: "clang-macos"
-  description: "Apple Clang for macOS"
-  language: cpp
+  name: "gcc-c-linux"
+  description: "GCC C compiler for Linux x86_64"
+  language: c
   
   target:
-    platform: macos
+    platform: linux
     architecture: x86_64
   
   host:
-    platform: macos
+    platform: linux
     architecture: x86_64
   
   execution:
@@ -18,27 +18,8 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "clang {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "gcc {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
-      output_extension: ".o"
-      flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "-D"
-        includes: true
-        include_flag: "-I"
-        pic: true
-        pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "clang++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C", ".mm"]
       output_extension: ".o"
       flags:
         common: ["-Wall", "-Wextra"]
@@ -54,23 +35,24 @@ toolchain:
         dependencies: "-MMD -MP -MF {dep_file}"
         std: true
     
-    # Shared library linking (dylib on macOS)
+    # Shared library linking
     link_shared_library:
       action: link
-      command: "clang++ -dynamiclib {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "gcc -shared {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
-      output_extension: ".dylib"
-      output_pattern: "lib{name}.dylib"
+      output_extension: ".so"
+      output_pattern: "lib{name}.so"
       flags:
         common: []
         debug: []
-        release: ["-Wl,-S"]
+        release: ["-s"]
       supports:
         output_type: "shared_library"
         lib_dirs: true
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: false
     
     # Static library archiving
     link_static_library:
@@ -91,17 +73,18 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "clang++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "gcc {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"
       flags:
         common: []
         debug: []
-        release: ["-Wl,-S"]
+        release: ["-s"]
       supports:
         output_type: "executable"
         lib_dirs: true
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: false

@@ -1,14 +1,14 @@
 toolchain:
-  name: "gcc-arm-cross"
-  description: "GCC ARM cross-compiler for embedded systems"
-  language: cpp
+  name: "clang-c-macos"
+  description: "Apple Clang C for macOS"
+  language: c
   
   target:
-    platform: linux
-    architecture: arm
+    platform: macos
+    architecture: x86_64
   
   host:
-    platform: linux
+    platform: macos
     architecture: x86_64
   
   execution:
@@ -18,27 +18,8 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "arm-linux-gnueabihf-gcc {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "clang {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
-      output_extension: ".o"
-      flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "-D"
-        includes: true
-        include_flag: "-I"
-        pic: true
-        pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "arm-linux-gnueabihf-g++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
         common: ["-Wall", "-Wextra"]
@@ -54,28 +35,30 @@ toolchain:
         dependencies: "-MMD -MP -MF {dep_file}"
         std: true
     
-    # Shared library linking
+    # Shared library linking (dylib on macOS)
     link_shared_library:
       action: link
-      command: "arm-linux-gnueabihf-g++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang -dynamiclib {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
-      output_extension: ".so"
-      output_pattern: "lib{name}.so"
+      output_extension: ".dylib"
+      output_pattern: "lib{name}.dylib"
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "shared_library"
         lib_dirs: true
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: true
+        framework_flag: "-framework"
     
     # Static library archiving
     link_static_library:
       action: link
-      command: "arm-linux-gnueabihf-ar rcs {output} {objects}"
+      command: "ar rcs {output} {objects}"
       input_extensions: [".o"]
       output_extension: ".a"
       output_pattern: "lib{name}.a"
@@ -91,17 +74,19 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "arm-linux-gnueabihf-g++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "executable"
         lib_dirs: true
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: true
+        framework_flag: "-framework"

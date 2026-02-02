@@ -1,7 +1,7 @@
 toolchain:
-  name: "emscripten"
-  description: "Emscripten for WebAssembly compilation"
-  language: cpp
+  name: "emscripten-c"
+  description: "Emscripten C for WebAssembly compilation"
+  language: c
   
   target:
     platform: wasm
@@ -18,26 +18,8 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "emcc {dep_flags} {flags} {defines} {includes} -c {input} -o {output}"
+      command: "emcc {dep_flags} -std={std} {flags} {defines} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
-      output_extension: ".o"
-      flags:
-        common: ["-Wall"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "-D"
-        includes: true
-        include_flag: "-I"
-        pic: false
-        dependencies: "-MMD -MP -MF {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "em++ {dep_flags} -std={std} {flags} {defines} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
         common: ["-Wall"]
@@ -71,7 +53,7 @@ toolchain:
     # WebAssembly executable linking
     link_executable:
       action: link
-      command: "em++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "emcc {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ".html"
       output_pattern: "{name}.html"
