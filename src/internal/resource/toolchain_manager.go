@@ -139,11 +139,12 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 	}
 
 	// Define platform-specific preferred toolchains
+	// GCC is preferred over Clang on Linux since it's more commonly installed
 	preferredToolchains := map[string][]string{
-		"linux":   {"gcc-linux", "clang-linux"},
-		"windows": {"msvc-windows", "gcc-mingw", "clang-windows"},
-		"macos":   {"clang-macos", "gcc-macos"},
-		"darwin":  {"clang-macos", "gcc-macos"}, // darwin is macOS
+		"linux":   {"gcc-cpp-linux", "gcc-c-linux", "clang-cpp-linux", "clang-c-linux"},
+		"windows": {"msvc-cpp-windows", "msvc-c-windows", "gcc-cpp-mingw", "gcc-c-mingw"},
+		"macos":   {"clang-cpp-macos", "clang-c-macos"},
+		"darwin":  {"clang-cpp-macos", "clang-c-macos"}, // darwin is macOS
 	}
 
 	// Try to find preferred toolchain for this platform
@@ -196,12 +197,43 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 		return nil
 	}
 
-	// Sort for deterministic selection and return first match
+	// Define platform-specific preferred toolchains by language
+	// GCC is preferred over Clang on Linux since it's more commonly installed
+	preferredToolchains := map[string]map[string][]string{
+		"c": {
+			"linux":   {"gcc-c-linux", "clang-c-linux"},
+			"windows": {"msvc-c-windows", "gcc-c-mingw"},
+			"macos":   {"clang-c-macos"},
+			"darwin":  {"clang-c-macos"},
+		},
+		"cpp": {
+			"linux":   {"gcc-cpp-linux", "clang-cpp-linux"},
+			"windows": {"msvc-cpp-windows", "gcc-cpp-mingw"},
+			"macos":   {"clang-cpp-macos"},
+			"darwin":  {"clang-cpp-macos"},
+		},
+	}
+
+	// Try to find preferred toolchain for this language/platform
+	if langPrefs, ok := preferredToolchains[language]; ok {
+		if platformPrefs, ok := langPrefs[platform]; ok {
+			for _, preferredName := range platformPrefs {
+				for _, tc := range matches {
+					if tc.Name == preferredName {
+						log.Printf("Auto-selected toolchain for %s: %s", language, tc.Name)
+						return tc
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: sort for deterministic selection and return first match
 	sort.Slice(matches, func(i, j int) bool {
 		return matches[i].Name < matches[j].Name
 	})
 
-	log.Printf("Auto-selected toolchain for %s: %s", language, matches[0].Name)
+	log.Printf("Auto-selected toolchain for %s: %s (fallback)", language, matches[0].Name)
 	return matches[0]
 }
 

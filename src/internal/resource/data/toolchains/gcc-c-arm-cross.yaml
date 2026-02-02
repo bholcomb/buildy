@@ -1,11 +1,11 @@
 toolchain:
-  name: "gcc-linux"
-  description: "GCC compiler for Linux x86_64"
-  language: cpp
+  name: "gcc-c-arm-cross"
+  description: "GCC C ARM cross-compiler for embedded systems"
+  language: c
   
   target:
     platform: linux
-    architecture: x86_64
+    architecture: arm
   
   host:
     platform: linux
@@ -18,27 +18,8 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "gcc {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "arm-linux-gnueabihf-gcc {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
-      output_extension: ".o"
-      flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "-D"
-        includes: true
-        include_flag: "-I"
-        pic: true
-        pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "g++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
         common: ["-Wall", "-Wextra"]
@@ -57,7 +38,7 @@ toolchain:
     # Shared library linking
     link_shared_library:
       action: link
-      command: "g++ -shared {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
+      command: "arm-linux-gnueabihf-gcc -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ".so"
       output_pattern: "lib{name}.so"
@@ -71,12 +52,11 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
-        frameworks: false
     
     # Static library archiving
     link_static_library:
       action: link
-      command: "ar rcs {output} {objects}"
+      command: "arm-linux-gnueabihf-ar rcs {output} {objects}"
       input_extensions: [".o"]
       output_extension: ".a"
       output_pattern: "lib{name}.a"
@@ -92,7 +72,7 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "g++ {flags} {objects} {lib_dirs} {libs} {frameworks} -o {output}"
+      command: "arm-linux-gnueabihf-gcc {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"
@@ -106,4 +86,3 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
-        frameworks: false

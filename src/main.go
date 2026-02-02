@@ -57,13 +57,13 @@ func detectArchitecture() string {
 	}
 }
 
-// getAutoBuildyDirs returns automatic buildy/ directory search paths
+// getAutoBuildyDirs returns automatic buildy_config/ directory search paths
 func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 	dirs := []string{}
 	
-	// 1. Workspace buildy/<subdir>
+	// 1. Workspace buildy_config/<subdir>
 	if workspaceRoot != "" {
-		dirs = append(dirs, filepath.Join(workspaceRoot, "buildy", subdir))
+		dirs = append(dirs, filepath.Join(workspaceRoot, "buildy_config", subdir))
 	}
 	
 	// 2. System locations
@@ -87,7 +87,7 @@ func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 	}
 	
 	// 3. Executable location
-	dirs = append(dirs, filepath.Join(buildyDir, "buildy", subdir))
+	dirs = append(dirs, filepath.Join(buildyDir, "buildy_config", subdir))
 	
 	return dirs
 }
@@ -119,7 +119,7 @@ func main() {
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
 	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
-	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy/ folder")
+	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 
 	// Custom flag for multiple defines
@@ -265,26 +265,6 @@ func main() {
 		log.Fatalf("Failed to verify embedded data: %v", err)
 	}
 
-	// Initialize toolchain manager with base directory and additional directories
-	toolchainsDir := filepath.Join(buildyDir, "data", "toolchains")
-	toolchainDirs := []string{toolchainsDir}
-	for _, dataDir := range additionalDataDirs {
-		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
-	}
-	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
-	if err != nil {
-		log.Fatalf("Failed to initialize toolchain manager: %v", err)
-	}
-
-	// Handle --list-toolchains
-	if *listToolchains {
-		log.Printf("Available toolchains:")
-		for _, tc := range toolchainManager.ListToolchains() {
-			log.Printf("  %-20s - %s", tc.Name, tc.Description)
-		}
-		os.Exit(0)
-	}
-
 	// Initialize cache
 	buildCache, err := cache.NewBuildCache(*cacheDir)
 	if err != nil {
@@ -385,6 +365,31 @@ func main() {
 	rootVarEnv.SetVariable("architecture", *architecture, "builtin")
 	rootVarEnv.SetVariable("configuration", *configuration, "builtin")
 
+	// Initialize toolchain manager with workspace and built-in paths
+	toolchainDirs := []string{}
+	// 1. Workspace buildy_config/toolchains (highest priority)
+	toolchainDirs = append(toolchainDirs, filepath.Join(ws.RootDir, "buildy_config", "toolchains"))
+	// 2. Additional data directories from CLI
+	for _, dataDir := range additionalDataDirs {
+		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
+	}
+	// 3. Built-in toolchains directory
+	toolchainDirs = append(toolchainDirs, filepath.Join(buildyDir, "data", "toolchains"))
+	
+	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
+	if err != nil {
+		log.Fatalf("Failed to initialize toolchain manager: %v", err)
+	}
+
+	// Handle --list-toolchains (after workspace is loaded so we include workspace toolchains)
+	if *listToolchains {
+		log.Printf("Available toolchains:")
+		for _, tc := range toolchainManager.ListToolchains() {
+			log.Printf("  %-20s - %s", tc.Name, tc.Description)
+		}
+		os.Exit(0)
+	}
+
 	// Initialize package manager
 	var workspacePackagePaths []string
 	if ws.Config != nil {
@@ -451,7 +456,7 @@ func main() {
 		
 		// Generate compile_commands.json if requested
 		if *compileCommands && result.Success {
-			compileCommandsPath := filepath.Join(ws.RootDir, "buildy", "compile_commands.json")
+			compileCommandsPath := filepath.Join(ws.RootDir, "buildy_config", "compile_commands.json")
 			if err := result.GenerateCompileCommands(compileCommandsPath); err != nil {
 				log.Printf("WARNING: Failed to generate compile_commands.json: %v", err)
 			} else {

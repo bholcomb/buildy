@@ -184,8 +184,19 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 	workspaceVarEnv := util.NewVariableEnvironment(nil)
 	workspaceVarEnv.PushScope("workspace")
 	if variables, ok := cp.Workspace.Config.RawConfig["variables"].(map[string]any); ok {
+		// Extract platform-specific variables from variables.platforms.<platform>
+		workspaceVarEnv.ExtractPlatformVariables(variables, cp.Platform, "workspace.variables")
+		// Extract general variables from variables section
 		workspaceVarEnv.ExtractVariablesFromSection(variables, "workspace")
 	}
+	// Add built-in variables
+	workspaceVarEnv.SetVariable("platform", cp.Platform, "built-in")
+	workspaceVarEnv.SetVariable("arch", cp.Architecture, "built-in")
+	workspaceVarEnv.SetVariable("config", cp.Configuration, "built-in")
+	workspaceVarEnv.SetVariable("workspace", cp.Workspace.RootDir, "built-in")
+	
+	// Store workspace VarEnv for use in generateWorkspaceLevelTasks
+	cp.VarEnv = workspaceVarEnv
 
 	// Process each module
 	for modulePath, moduleInfo := range cp.Workspace.Modules {
@@ -521,6 +532,9 @@ func (cp *ConfigParser) setupVariableEnvironment(config map[string]any) error {
 	cp.VarEnv.SetVariable("platform", cp.Platform, "built-in")
 	cp.VarEnv.SetVariable("arch", cp.Architecture, "built-in")
 	cp.VarEnv.SetVariable("config", cp.Configuration, "built-in")
+	if cp.Workspace != nil {
+		cp.VarEnv.SetVariable("workspace", cp.Workspace.RootDir, "built-in")
+	}
 
 	projectName := "unknown"
 	if name, ok := project["name"].(string); ok {

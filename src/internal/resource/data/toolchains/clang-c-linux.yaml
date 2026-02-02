@@ -1,7 +1,7 @@
 toolchain:
-  name: "clang-linux"
-  description: "Clang/LLVM compiler for Linux x86_64"
-  language: cpp
+  name: "clang-c-linux"
+  description: "Clang/LLVM C compiler for Linux x86_64"
+  language: c
   
   target:
     platform: linux
@@ -18,27 +18,8 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "clang {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "clang {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
       input_extensions: [".c"]
-      output_extension: ".o"
-      flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
-      supports:
-        defines: true
-        define_flag: "-D"
-        includes: true
-        include_flag: "-I"
-        pic: true
-        pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
-    
-    # C++ compilation
-    cpp_compile:
-      action: compile
-      command: "clang++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
-      input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
         common: ["-Wall", "-Wextra"]
@@ -57,7 +38,7 @@ toolchain:
     # Shared library linking
     link_shared_library:
       action: link
-      command: "clang++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ".so"
       output_pattern: "lib{name}.so"
@@ -91,7 +72,7 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "clang++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang {flags} {objects} {lib_dirs} {libs} -o {output}"
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "{name}"

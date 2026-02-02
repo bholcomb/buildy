@@ -22,13 +22,13 @@ workspace:
       - game
 
 dependencies:
-  file: buildy/dependencies.yaml
+  file: buildy_config/dependencies.yaml
 
 environment:
   toolchains:
-    default: gcc-linux
-    windows: msvc-windows
-    macos: clang-macos
+    default: gcc-cpp-linux
+    windows: msvc-cpp-windows
+    macos: clang-cpp-macos
     
   compile:
     cpp_standard: "c++17"
