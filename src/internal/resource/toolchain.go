@@ -9,14 +9,37 @@ import (
 
 // Tool represents an individual tool within a toolchain
 type Tool struct {
-	Name            string              `yaml:"name"`
-	Action          string              `yaml:"action"`
-	Command         string              `yaml:"command"`
-	InputExtensions []string            `yaml:"input_extensions"`
-	OutputExtension string              `yaml:"output_extension"`
-	OutputPattern   string              `yaml:"output_pattern"`
-	Flags           map[string][]string `yaml:"flags"`
-	Supports        map[string]any      `yaml:"supports"`
+	Name               string              `yaml:"name"`
+	Action             string              `yaml:"action"`
+	Command            string              `yaml:"command"`
+	CommandsByPlatform map[string]string   `yaml:"-"` // Platform-specific commands (linux, windows, macos, darwin)
+	InputExtensions    []string            `yaml:"input_extensions"`
+	OutputExtension    string              `yaml:"output_extension"`
+	OutputPattern      string              `yaml:"output_pattern"`
+	Flags              map[string][]string `yaml:"flags"`
+	Supports           map[string]any      `yaml:"supports"`
+}
+
+// GetCommand returns the command for the given platform, falling back to the default Command
+func (t *Tool) GetCommand(platform string) string {
+	if t.CommandsByPlatform != nil {
+		// Check for exact platform match
+		if cmd, ok := t.CommandsByPlatform[platform]; ok {
+			return cmd
+		}
+		// Handle darwin/macos alias
+		if platform == "darwin" {
+			if cmd, ok := t.CommandsByPlatform["macos"]; ok {
+				return cmd
+			}
+		}
+		if platform == "macos" {
+			if cmd, ok := t.CommandsByPlatform["darwin"]; ok {
+				return cmd
+			}
+		}
+	}
+	return t.Command
 }
 
 // NewTool creates a new Tool with defaults
@@ -35,16 +58,17 @@ func NewTool(name, action, command string, inputExts []string, outputExt string)
 
 // ToolchainConfig represents a toolchain configuration loaded from YAML
 type ToolchainConfig struct {
-	Name               string           `yaml:"name"`
-	Description        string           `yaml:"description"`
-	Language           string           `yaml:"language"` // Programming language this toolchain supports (e.g., "go", "c++", "rust")
-	TargetPlatform     string           `yaml:"-"`
-	TargetArchitecture string           `yaml:"-"`
-	HostPlatform       string           `yaml:"-"`
-	HostArchitecture   string           `yaml:"-"`
-	ExecutionType      string           `yaml:"-"`
-	ExecutionConfig    map[string]any   `yaml:"-"`
-	Tools              map[string]*Tool `yaml:"-"`
+	Name               string            `yaml:"name"`
+	Description        string            `yaml:"description"`
+	Language           string            `yaml:"language"` // Programming language this toolchain supports (e.g., "go", "c++", "rust")
+	TargetPlatform     string            `yaml:"-"`
+	TargetArchitecture string            `yaml:"-"`
+	HostPlatform       string            `yaml:"-"`
+	HostArchitecture   string            `yaml:"-"`
+	ExecutionType      string            `yaml:"-"`
+	ExecutionConfig    map[string]any    `yaml:"-"`
+	Tools              map[string]*Tool  `yaml:"-"`
+	Variables          map[string]string `yaml:"-"` // Toolchain-specific variables for command substitution
 }
 
 // NewToolchainConfig creates a new ToolchainConfig
@@ -54,6 +78,7 @@ func NewToolchainConfig(name, description string) *ToolchainConfig {
 		Description:     description,
 		ExecutionConfig: make(map[string]any),
 		Tools:           make(map[string]*Tool),
+		Variables:       make(map[string]string),
 	}
 }
 

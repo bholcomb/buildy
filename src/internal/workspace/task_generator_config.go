@@ -46,12 +46,15 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
 		}
 	}
 
-	return tg.mergeConfigs(
+	merged := tg.mergeConfigs(
 		globalConfig,
 		platforms[tg.Platform],
 		architectures[tg.Architecture],
 		configurations[tg.Configuration],
 	)
+
+	// Resolve variables in the merged config
+	return tg.resolveConfigMap(merged)
 }
 
 // mergeConfigs merges configuration hierarchy

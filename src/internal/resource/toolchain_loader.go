@@ -71,6 +71,15 @@ func LoadToolchainConfig(toolchainFile string) (*ToolchainConfig, error) {
 		}
 	}
 
+	// Parse variables
+	if varsData, ok := tcData["variables"].(map[string]any); ok {
+		for key, val := range varsData {
+			if strVal, ok := val.(string); ok {
+				tc.Variables[key] = strVal
+			}
+		}
+	}
+
 	// Parse tools
 	if toolsData, ok := tcData["tools"].(map[string]any); ok {
 		for toolName, toolDataRaw := range toolsData {
@@ -143,6 +152,15 @@ func LoadToolchainConfigFromData(data []byte, sourceName string) (*ToolchainConf
 		tc.ExecutionConfig = execData
 		if execType, ok := execData["type"].(string); ok {
 			tc.ExecutionType = execType
+		}
+	}
+
+	// Parse variables
+	if varsData, ok := tcData["variables"].(map[string]any); ok {
+		for key, val := range varsData {
+			if strVal, ok := val.(string); ok {
+				tc.Variables[key] = strVal
+			}
 		}
 	}
 
@@ -233,8 +251,25 @@ func LoadToolchainConfigFromDict(configDict map[string]any) (*ToolchainConfig, e
 			if action, ok := toolData["action"].(string); ok {
 				tool.Action = action
 			}
+			// Handle command as either a string or a map of platform-specific commands
 			if command, ok := toolData["command"].(string); ok {
 				tool.Command = command
+			} else if cmdMap, ok := toolData["command"].(map[string]any); ok {
+				tool.CommandsByPlatform = make(map[string]string)
+				for platform, cmdRaw := range cmdMap {
+					if cmdStr, ok := cmdRaw.(string); ok {
+						tool.CommandsByPlatform[platform] = cmdStr
+					}
+				}
+				// Set default Command to linux if available, else first available
+				if cmd, ok := tool.CommandsByPlatform["linux"]; ok {
+					tool.Command = cmd
+				} else {
+					for _, cmd := range tool.CommandsByPlatform {
+						tool.Command = cmd
+						break
+					}
+				}
 			}
 			if outputExt, ok := toolData["output_extension"].(string); ok {
 				tool.OutputExtension = outputExt
@@ -303,8 +338,25 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 	if action, ok := toolData["action"].(string); ok {
 		tool.Action = action
 	}
+	// Handle command as either a string or a map of platform-specific commands
 	if command, ok := toolData["command"].(string); ok {
 		tool.Command = command
+	} else if cmdMap, ok := toolData["command"].(map[string]any); ok {
+		tool.CommandsByPlatform = make(map[string]string)
+		for platform, cmdRaw := range cmdMap {
+			if cmdStr, ok := cmdRaw.(string); ok {
+				tool.CommandsByPlatform[platform] = cmdStr
+			}
+		}
+		// Set default Command to linux if available, else first available
+		if cmd, ok := tool.CommandsByPlatform["linux"]; ok {
+			tool.Command = cmd
+		} else {
+			for _, cmd := range tool.CommandsByPlatform {
+				tool.Command = cmd
+				break
+			}
+		}
 	}
 	if outputExt, ok := toolData["output_extension"].(string); ok {
 		tool.OutputExtension = outputExt
