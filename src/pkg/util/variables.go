@@ -7,18 +7,6 @@ import (
 	"regexp"
 )
 
-// reservedTaskTimeVars are variables resolved at task generation time, not config parsing time
-// These should not trigger "unresolved variable" errors during config validation
-var reservedTaskTimeVars = map[string]bool{
-	"basename":   true, // Resolved per input file in transform/generate tasks
-	"source":     true, // Source file path
-	"input":      true, // Input file path
-	"output":     true, // Output file path
-	"gen_dir":    true, // Generated files directory (may be resolved late)
-	"item":       true, // Template item reference
-	"tool":       true, // Tool reference in templates
-}
-
 // VariableValue stores a variable's value and its source for provenance tracking
 type VariableValue struct {
 	Value  string
@@ -180,15 +168,11 @@ func (ve *VariableEnvironment) ResolveString(text string, collectedErrors *[]str
 	
 	// Collect errors if requested
 	if collectedErrors != nil {
-		// Check for remaining unresolved variables (skip reserved task-time vars)
+		// Check for remaining unresolved variables
 		matches := pattern.FindAllStringSubmatch(text, -1)
 		if len(matches) > 0 {
 			for _, match := range matches {
 				varName := match[1]
-				// Skip reserved task-time variables
-				if reservedTaskTimeVars[varName] {
-					continue
-				}
 				*collectedErrors = append(*collectedErrors, 
 					fmt.Sprintf("Unresolved variable '${%s}' in: %s", varName, text))
 			}

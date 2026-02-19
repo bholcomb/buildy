@@ -445,21 +445,9 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	// Add output_dir to variable environment for use in artifacts and other sections
 	cp.VarEnv.SetVariable("output_dir", outputDir, "built-in")
 
-	// Resolve all variables in the config
-	errors := []string{}
-	resolvedConfigRaw := cp.VarEnv.ResolveRecursive(config, &errors)
-	if len(errors) > 0 {
-		log.Printf("ERROR: Unresolved variables found in configuration:")
-		for _, errMsg := range errors {
-			log.Printf("  - %s", errMsg)
-		}
-		return nil, fmt.Errorf("configuration contains %d unresolved variable(s)", len(errors))
-	}
-
-	resolvedConfig, ok := resolvedConfigRaw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("resolved config is not a map")
-	}
+	// Note: Variable resolution is deferred to task generation time.
+	// This allows task-time variables (like ${basename}, ${filename}) to be
+	// resolved in context, and consolidates all resolution to one location.
 
 	// Create path resolver
 	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, "")
@@ -484,8 +472,8 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.TargetRegistry = cp.TargetRegistry
 
-	// Generate tasks
-	return taskGen.GenerateTasks(resolvedConfig, outputDir)
+	// Generate tasks - pass raw config, resolution happens during task generation
+	return taskGen.GenerateTasks(config, outputDir)
 }
 
 // setupVariableEnvironment builds the variable environment hierarchy

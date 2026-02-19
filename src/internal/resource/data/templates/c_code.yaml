@@ -95,7 +95,7 @@ templates:
         resolve_path: false
       post_processing:
         scan_sources_pattern: ""
-        register_target: false
+        register_target: true
         add_setup_dependency: false
     steps:
       - name: compile

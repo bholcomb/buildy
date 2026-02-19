@@ -847,6 +847,36 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		return nil, err
 	}
 
+	// Apply target-specific link flags from itemConfig["link"]["flags"]
+	if linkConfig, ok := itemConfig["link"].(map[string]any); ok {
+		if flagsConfig, ok := linkConfig["flags"].(map[string]any); ok {
+			// Check for platform-specific flags
+			platformKey := platform
+			if flags, ok := flagsConfig[platformKey].([]any); ok {
+				for _, f := range flags {
+					if flagStr, ok := f.(string); ok {
+						command = command + " " + flagStr
+					}
+				}
+			}
+			// Also check for "common" flags
+			if flags, ok := flagsConfig["common"].([]any); ok {
+				for _, f := range flags {
+					if flagStr, ok := f.(string); ok {
+						command = command + " " + flagStr
+					}
+				}
+			}
+		} else if flags, ok := linkConfig["flags"].([]any); ok {
+			// Flat array of flags (not platform-specific)
+			for _, f := range flags {
+				if flagStr, ok := f.(string); ok {
+					command = command + " " + flagStr
+				}
+			}
+		}
+	}
+
 	// Create task
 	taskName := "unnamed"
 	if name, ok := itemConfig["name"].(string); ok {
