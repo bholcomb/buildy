@@ -19,14 +19,14 @@ toolchain:
   tools:
     go_build:
       action: build
-      command: "go build ${buildmode} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
+      command: "go build ${buildmode} ${flags} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
       input_extensions: [".go"]
       output_extension: ""
       output_pattern: "${name}"
       flags:
         common: []
-        debug: ["-gcflags=all=-N -l"]
-        release: ["-ldflags=-s -w", "-trimpath"]
+        debug: []
+        release: ["-trimpath"]
       
       command_params:
         buildmode:
@@ -45,9 +45,8 @@ toolchain:
           resolve_variables: true
           optional: true
         gcflags:
-          sources: ["tool_params.gcflags", "tool.flags.${config}"]
-          format: "${value}"
-          quote_if_spaces: true
+          sources: ["tool_params.gcflags", "item.gcflags"]
+          format: "-gcflags=${value}"
           optional: true
       
       manifest_files:

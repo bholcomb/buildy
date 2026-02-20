@@ -640,7 +640,10 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
-	resolvedOutputPattern := strings.ReplaceAll(tool.OutputPattern, "${name}", itemName)
+	// Resolve output pattern using VarEnv (set name temporarily for resolution)
+	patternVarEnv := varEnv.CreateChild()
+	patternVarEnv.SetVariable("name", itemName, "output-pattern")
+	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
 
 	// Create step context with tool info
 	sc := newStepContext(context, varEnv, "link_step", struct {
@@ -914,7 +917,10 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
-	resolvedOutputPattern := strings.ReplaceAll(tool.OutputPattern, "${name}", itemName)
+	// Resolve output pattern using VarEnv (set name temporarily for resolution)
+	patternVarEnv := varEnv.CreateChild()
+	patternVarEnv.SetVariable("name", itemName, "output-pattern")
+	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
 
 	// Create step context with tool info
 	sc := newStepContext(context, varEnv, "build_step", struct {
@@ -946,24 +952,36 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		toolParams = bte.resolveToolParams(tp, sc.Context, sc.VarEnv)
 	}
 
-	// Build the command using tool's command template
-	command := tool.Command
+	// Create a child VarEnv for command resolution with all needed variables
+	cmdVarEnv := sc.VarEnv.CreateChild()
 
-	// Replace common template variables
-	command = strings.ReplaceAll(command, "${output}", output)
+	// Set command-specific variables
+	cmdVarEnv.SetVariable("output", output, "build-command")
+	cmdVarEnv.SetVariable("input", ".", "build-command")
 	if outDir, ok := mergedConfig["output_dir"].(string); ok {
-		command = strings.ReplaceAll(command, "${output_dir}", outDir)
+		cmdVarEnv.SetVariable("output_dir", outDir, "build-command")
 	}
-	command = strings.ReplaceAll(command, "${input}", ".")
 
-	// Resolve command parameters using data-driven approach
+	// Set flags from tool's configuration-specific flags
+	var flagsList []string
+	if commonFlags, ok := tool.Flags["common"]; ok {
+		flagsList = append(flagsList, commonFlags...)
+	}
+	if configFlags, ok := tool.Flags[configuration]; ok {
+		flagsList = append(flagsList, configFlags...)
+	}
+	cmdVarEnv.SetVariable("flags", strings.Join(flagsList, " "), "build-command")
+
+	// Resolve command parameters using data-driven approach and set them in VarEnv
 	if len(tool.CommandParams) > 0 {
-		// Use the new data-driven parameter resolution
 		resolvedParams := tool.ResolveCommandParams(toolParams, itemConfig, configuration)
 		for paramName, paramValue := range resolvedParams {
-			command = strings.ReplaceAll(command, "${"+paramName+"}", paramValue)
+			cmdVarEnv.SetVariable(paramName, paramValue, "command-param")
 		}
 	}
+
+	// Build and resolve the command using VarEnv
+	command := cmdVarEnv.ResolveString(tool.Command, nil, 10)
 
 	// Clean up extra spaces from empty optional parameters
 	command = strings.Join(strings.Fields(command), " ")

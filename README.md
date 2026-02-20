@@ -210,25 +210,59 @@ my-project/
 
 Buildy includes toolchains for common compilers:
 
-| Toolchain | Platform | Description |
-|-----------|----------|-------------|
-| `gcc-linux` | Linux | GCC compiler suite |
-| `clang-linux` | Linux | Clang/LLVM |
-| `clang-macos` | macOS | Apple Clang |
-| `msvc-windows` | Windows | Visual Studio |
-| `go-linux` | Linux | Go compiler |
-| `rust-linux` | Linux | Rust/Cargo |
-| `emscripten` | Any | WebAssembly |
+| Toolchain | Platform | Language | Description |
+|-----------|----------|----------|-------------|
+| `gcc-c-linux` | Linux | C | GCC C compiler |
+| `gcc-cpp-linux` | Linux | C++ | GCC C++ compiler |
+| `clang-c-linux` | Linux | C | Clang C compiler |
+| `clang-cpp-linux` | Linux | C++ | Clang C++ compiler |
+| `clang-c-macos` | macOS | C | Apple Clang C |
+| `clang-cpp-macos` | macOS | C++ | Apple Clang C++ |
+| `msvc-c-windows` | Windows | C | MSVC C compiler |
+| `msvc-cpp-windows` | Windows | C++ | MSVC C++ compiler |
+| `gcc-c-mingw` | Linux→Windows | C | MinGW cross-compiler |
+| `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
+| `go-linux` | Linux | Go | Go compiler |
+| `go-macos` | macOS | Go | Go compiler |
+| `go-windows` | Windows | Go | Go compiler |
+| `rust-linux` | Linux | Rust | Cargo/rustc |
+| `rust-macos` | macOS | Rust | Cargo/rustc |
+| `rust-windows` | Windows | Rust | Cargo/rustc |
+| `emscripten-cpp` | Any | C++ | C++ to WebAssembly |
+| `glslc` | Any | GLSL | GLSL to SPIR-V |
 
-## Build Templates
+## Templates vs Toolchains
 
-Build templates define how targets are compiled and linked. Templates are data-driven YAML files with metadata for:
+Buildy separates **what** to build from **how** to build:
 
-- **Pre-processing**: Package resolution, source file scanning
-- **Build steps**: Compile, link, or single-step builds
-- **Post-processing**: Target registration, dependency tracking
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Templates** | Define build workflow (steps, inputs, outputs) | "Compile each source, then link them" |
+| **Toolchains** | Define actual commands and flags | "Use `gcc -c` for compiling" |
 
-Templates are automatically selected based on `language` and target type.
+**Templates** are language-agnostic recipes selected by `language` + target type:
+- `cpp_executable`, `cpp_static_library`, `cpp_shared_library`
+- `c_executable`, `c_static_library`, `c_shared_library`
+- `go_executable`, `go_shared_library`
+- `rust_executable`, `rust_static_library`, `rust_shared_library`
+
+**Toolchains** are platform-specific implementations that provide the actual commands.
+
+### Data-Driven Command Parameters
+
+Toolchains use declarative `command_params` to define how command placeholders are resolved:
+
+```yaml
+# Example from go-linux.yaml
+command_params:
+  build_tags:
+    sources: ["tool_params.build_tags", "item.build_tags"]
+    format: "-tags ${value}"
+    join: ","
+    optional: true
+```
+
+This eliminates hardcoded language-specific logic and makes the build system fully extensible via YAML.
 
 ## Architecture
 
