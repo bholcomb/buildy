@@ -398,6 +398,31 @@ func main() {
 	allPackageDirs := append(workspacePackagePaths, packageDirs...)
 	packageManager := resource.NewPackageManager(ws.RootDir, allPackageDirs, rootVarEnv)
 
+	// Resolve fetch dependencies if defined in workspace config
+	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
+	depResolver := resource.NewDependencyResolver(*platform, *architecture, workspaceCacheDir, rootVarEnv)
+	if ws.Config != nil && ws.Config.RawConfig != nil {
+		depsConfig, err := depResolver.LoadDependencies(ws.Config.RawConfig, ws.RootDir)
+		if err != nil {
+			log.Fatalf("Failed to load dependencies: %v", err)
+		}
+		if depsConfig != nil {
+			if _, err := depResolver.ResolveAll(depsConfig); err != nil {
+				log.Fatalf("Failed to resolve dependencies: %v", err)
+			}
+			// Print any dependency warnings
+			for _, warning := range depResolver.GetWarnings() {
+				log.Printf("WARNING: %s", warning)
+			}
+			// Add buildy-config fetch dependencies as workspace modules
+			for name, depInfo := range depResolver.GetBuildyDependencies() {
+				if err := ws.AddFetchDependencyModule(name, depInfo.SourcePath, depInfo.ConfigFile); err != nil {
+					log.Fatalf("Failed to add fetch dependency module %s: %v", name, err)
+				}
+			}
+		}
+	}
+
 	// Create workspace-aware config parser
 	configParser := workspace.NewConfigParser(
 		*platform,
@@ -412,8 +437,7 @@ func main() {
 		nil, // No parent var env
 	)
 
-	// Set cache directory relative to workspace root
-	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
+	// Create builder (cache directory already set above for dependency resolution)
 	builder, err := build.NewBuilder(workspaceCacheDir, *workers)
 	if err != nil {
 		log.Fatalf("Failed to create builder: %v", err)

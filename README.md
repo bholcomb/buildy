@@ -66,9 +66,7 @@ targets:
     - name: mylib
       language: cpp
       sources: ["src/*.cpp"]
-      public_headers: ["include/*.h"]
-      include_dirs:
-        public: ["include"]
+      include_dirs: ["include"]
 
   executables:
     - name: myapp

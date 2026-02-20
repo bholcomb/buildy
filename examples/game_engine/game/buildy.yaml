@@ -12,11 +12,10 @@ targets:
       sources:
         - "src/*.cpp"
       include_dirs:
-        private:
-          - "../core/include"
-          - "../platform/include"
-          - "../renderer/include"
-          - "../audio/include"
+        - "../core/include"
+        - "../platform/include"
+        - "../renderer/include"
+        - "../audio/include"
       
       # packages: External packages (provide include_dirs, lib_dirs, libs, defines)
       packages:

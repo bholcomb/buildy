@@ -53,7 +53,7 @@ var knownTargetKeys = map[string]bool{
 }
 
 var knownLibraryKeys = map[string]bool{
-	"name": true, "type": true, "language": true, "sources": true, "public_headers": true,
+	"name": true, "type": true, "language": true, "sources": true,
 	"include_dirs": true, "packages": true, "libs": true, "depends_on": true,
 	"compile": true, "toolchain": true, "defines": true, "flags": true,
 }
@@ -66,6 +66,10 @@ var knownExecutableKeys = map[string]bool{
 	"path": true, "output": true, "build_tags": true, "ldflags": true,
 	// Rust-specific keys (when language: rust)
 	"features": true, "bin": true,
+}
+
+var knownDependsOnKeys = map[string]bool{
+	"targets": true, "deps": true, "artifacts": true,
 }
 
 var knownArtifactsKeys = map[string]bool{
@@ -563,13 +567,6 @@ func (yp *YAMLParser) suggestKey(unknownKey string, knownKeys map[string]bool) s
 		return strings.Join(keys, ", ")
 	}
 	return strings.Join(keys[:5], ", ") + "..."
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ExtractSection extracts a typed section from config

@@ -2,6 +2,12 @@
 
 Version: 1.0.0
 
+This document is the complete reference for all buildy configuration fields. For how-to guidance, see the [User Guide](USER_GUIDE.md). For step-by-step tutorials, see:
+
+- [Basic Tutorial](TUTORIAL_BASIC.md) - Single-target project
+- [Multi-Module Tutorial](TUTORIAL_MULTIMODULE.md) - Workspace with multiple modules
+- [Advanced Tutorial](TUTORIAL_ADVANCED.md) - Fetch dependencies and Docker builds
+
 ## Overview
 
 Buildy is a multi-language build system designed for:
@@ -376,6 +382,85 @@ dependencies:
 | `fetch` | Downloaded from git or URL | imgui, stb |
 | `packages` | Package files with platform-specific settings | glfw3, opengl |
 
+### Fetch Dependency Reference
+
+Fetched dependencies are stored locally within the project:
+- **Source**: `.buildy_cache/deps/<name>/`
+- **Build**: `.buildy_cache/deps/<name>/_build/`
+- **Install**: `.buildy_cache/deps/<name>/_install/`
+
+Dependencies are **not** installed system-wide. The `${dest}` variable refers to the source directory.
+
+Complete schema for fetch dependencies:
+
+```yaml
+fetch:
+  - name: mylib                     # Required: identifier
+    git: "https://..."              # Git repository URL (or use url:)
+    url: "https://..."              # Archive URL (or use git:)
+    ref: "v1.0.0"                   # Git ref: tag, branch, or commit
+    checksum: "sha256:..."          # SHA256 checksum for URL downloads
+    dest: "${cache_dir}/custom"     # Custom destination directory
+    type: source                    # source | header_only
+    config: "buildy.yaml"           # Use buildy config instead of build_system
+    build_system: cmake             # auto | cmake | meson | make | autoconf | cargo | go_mod | none
+    build_phases: [configure, build]  # Phases to run
+    build_args: ["-DFOO=ON"]        # Extra arguments for build system
+    include_dirs: ["${dest}/include"]  # Override include directories
+    execution:                      # Per-dependency Docker config
+      type: docker
+      image: "gcc:13"
+      volumes: ["${PWD}:/workspace"]
+      working_dir: "/workspace"
+      user: "${UID}:${GID}"
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `name` | Dependency identifier (required) | - |
+| `git` | Git repository URL | - |
+| `url` | Archive URL (.tar.gz, .zip, .tar, .tar.xz) | - |
+| `ref` | Git ref (tag, branch, commit) | Default branch |
+| `checksum` | SHA256 checksum for URL downloads | - |
+| `dest` | Custom destination directory | `${cache_dir}/deps/${name}` |
+| `type` | `source` (build it) or `header_only` | `source` |
+| `config` | Build with buildy config file instead of `build_system` | - |
+| `build_system` | Build system to use (ignored if `config` set) | `auto` |
+| `build_phases` | Phases to execute | `[configure, build]` |
+| `build_args` | Extra build arguments | `[]` |
+| `include_dirs` | Custom include directories | Auto-detected |
+| `execution` | Per-dependency execution config | Global default |
+
+**Building with Buildy Config:**
+
+When a fetched dependency already has a `buildy.yaml` or you provide a custom one, use `config` instead of `build_system`:
+
+```yaml
+fetch:
+  - name: imgui
+    git: "https://github.com/ocornut/imgui.git"
+    ref: "v1.90.1"
+    config: imgui_build.yaml   # Custom buildy config in the repo root
+```
+
+This approach is useful when:
+- The fetched dependency already has its own `buildy.yaml`
+- You provide a custom buildy config file for the dependency
+- You want buildy to build the dependency the same way it builds your project modules
+
+The dependency is registered as a module and its targets become available for `depends_on.targets` in your own targets.
+
+**Header-only libraries:**
+
+```yaml
+- name: stb
+  url: "https://github.com/nothings/stb/archive/master.tar.gz"
+  type: header_only
+  include_dirs: ["${dest}"]
+```
+
+Setting `type: header_only` skips the build step and defaults `include_dirs` to `${dest}`.
+
 ### Packages
 
 Packages are standalone YAML files that define platform-specific include paths, library paths, library names, defines, and frameworks. They're ideal for complex dependencies that vary significantly across platforms.
@@ -527,10 +612,7 @@ targets:
     - name: engine_core
       language: cpp           # Required: c | cpp | rust
       sources: ["src/*.cpp"]
-      public_headers: ["include/*.h"]
-      include_dirs:
-        public: ["include"]   # Exported to consumers
-        private: ["src"]      # Internal only
+      include_dirs: ["include", "src"]
       
       # packages: External packages (add include_dirs, lib_dirs, libs, defines)
       packages: ["glfw3"]
@@ -554,9 +636,7 @@ targets:
     - name: engine_renderer
       language: cpp           # Required: c | cpp | rust | go
       sources: ["src/*.cpp"]
-      public_headers: ["include/*.h"]
-      include_dirs:
-        public: ["include"]
+      include_dirs: ["include"]
       
       # libs: Libraries this shared library links against
       libs: ["engine_core"]
@@ -671,14 +751,15 @@ These are **intentionally separate** concepts:
 |-------|---------|---------|
 | `packages` | External packages (provide include paths, libs, defines) | `[glfw3, opengl]` |
 | `libs` | Internal project libraries to link against | `[engine_core, engine_renderer]` |
-| `depends_on.targets` | Build ordering - these must complete first | Code generators, libraries, tools |
+| `depends_on.targets` | Build ordering - these targets must complete first | Libraries, tools |
+| `depends_on.artifacts` | Build ordering + virtual files for globs | Code generators (protobuf, etc.) |
 | `depends_on.deps` | External dependencies (from `dependencies:` section) | System libs, fetched sources |
 
 **Why separate?**
 
 1. **Packages are external**: They provide platform-specific settings (includes, libs, defines)
 2. **libs are internal**: Project libraries you've built
-3. **depends_on is ordering**: Ensures targets are built first (may or may not involve linking)
+3. **depends_on is ordering**: Ensures targets/artifacts are built first (may or may not involve linking)
 4. **Explicit is better**: Each field has one clear purpose
 
 **Example: Using packages and libs together**
@@ -699,17 +780,36 @@ targets:
           - engine_renderer
 ```
 
-**Example: Depending on a code generator (no linking)**
+**Example: Depending on a code generator artifact**
+
+For code generation with protobuf or similar tools, use `depends_on.artifacts`. Buildy automatically makes artifact outputs available for glob matching:
 
 ```yaml
+artifacts:
+  generate:
+    - name: protos
+      tool: protoc
+      inputs: "proto/*.proto"
+      outputs: ["${gen_dir}/${basename}.pb.h", "${gen_dir}/${basename}.pb.cc"]
+      args: ["--cpp_out=${gen_dir}"]
+
 targets:
   executables:
     - name: my_app
-      sources: ["src/*.cpp", "${gen_dir}/*.cpp"]
+      language: cpp
+      sources:
+        - "src/*.cpp"
+        - "${gen_dir}/*.pb.cc"    # Globs can match artifact outputs
       depends_on:
-        targets: ["my_codegen"]  # Build order only - tool runs first
-      # No libs or packages needed for the code generator itself
+        artifacts: ["protos"]      # Ensures protoc runs first + enables glob matching
 ```
+
+When a target declares `depends_on.artifacts`:
+1. The artifact tasks are added as build dependencies (artifact runs first)
+2. The artifact's `outputs` are registered as "virtual files"
+3. Source globs in the target can match these virtual files even though they don't exist yet
+
+**Note:** Artifact dependencies work within a single module. For multi-module projects, the artifact and dependent target should be in the same module.
 
 ### Per-Target Toolchain Override
 
@@ -1027,6 +1127,51 @@ environment:
 
 CLI override: `buildy --toolchain clang-cpp-linux`
 
+### Toolchain File Structure
+
+A toolchain file defines a complete compiler/build tool configuration:
+
+```yaml
+toolchain:
+  name: "gcc-cpp-linux"
+  description: "GCC C++ compiler for Linux"
+  language: cpp
+
+  target:
+    platform: linux           # Target platform (linux, windows, macos, any)
+    architecture: x86_64      # Target architecture (x86_64, arm64, any)
+
+  host:
+    platform: linux           # Host platform
+    architecture: x86_64      # Host architecture
+
+  variables:                  # Toolchain-specific variables
+    CC: "gcc"
+    CXX: "g++"
+
+  execution:
+    type: native              # native or docker
+
+  tools:
+    cpp_compile:
+      action: compile
+      command: "..."
+    link_executable:
+      action: link
+      command: "..."
+```
+
+| Field | Description |
+|-------|-------------|
+| `name` | Toolchain identifier |
+| `description` | Human-readable description |
+| `language` | Primary language (c, cpp, go, rust) |
+| `target` | Target platform and architecture |
+| `host` | Host platform requirements |
+| `variables` | Toolchain-specific variables |
+| `execution` | Execution configuration (native or docker) |
+| `tools` | Map of tool definitions |
+
 ### Unified Tool Model
 
 All tools use the same format. The `action` field distinguishes behavior:
@@ -1036,8 +1181,88 @@ All tools use the same format. The `action` field distinguishes behavior:
 | `compile` | Source to object file | gcc, clang, msvc |
 | `link` | Objects to binary | ld, link.exe |
 | `transform` | File conversion | texture compressor, mesh converter |
+| `convert` | Asset conversion | texconv, imagemagick |
 | `generate` | Create files | protoc, code generators |
 | `build` | Single-step module build | Go, Rust/Cargo |
+
+### Tool Definition Fields
+
+```yaml
+tools:
+  cpp_compile:
+    action: compile
+    command: "g++ ${flags} ${defines} ${includes} -c ${input} -o ${output}"
+    input_extensions: [".cpp", ".cc", ".cxx"]
+    output_extension: ".o"
+    output_pattern: "${name}.o"
+    flags:
+      common: ["-Wall"]
+      debug: ["-g", "-O0"]
+      release: ["-O3"]
+    supports:
+      defines: true
+      define_flag: "-D"
+      includes: true
+      include_flag: "-I"
+      pic: true
+      pic_flag: "-fPIC"
+      std: true
+      dependencies: "-MMD -MP -MF ${dep_file}"
+```
+
+| Field | Description |
+|-------|-------------|
+| `action` | Tool action type (compile, link, transform, convert, generate, build) |
+| `command` | Command template with variable substitution |
+| `input_extensions` | File extensions this tool accepts |
+| `output_extension` | Extension for output files |
+| `output_pattern` | Pattern for output filename (supports `${name}`) |
+| `flags` | Configuration-specific flags (common, debug, release) |
+| `supports` | Capability flags and flag formats |
+| `command_params` | Data-driven parameter definitions (for `build` action) |
+| `manifest_files` | Files that trigger cache invalidation |
+
+### Tool Supports Fields
+
+The `supports` section declares tool capabilities and flag formats:
+
+**Compilation supports:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `defines` | bool | Supports preprocessor definitions |
+| `define_flag` | string | Flag prefix for defines (e.g., `-D`) |
+| `includes` | bool | Supports include directories |
+| `include_flag` | string | Flag prefix for includes (e.g., `-I`) |
+| `pic` | bool | Supports position-independent code |
+| `pic_flag` | string | Flag for PIC (e.g., `-fPIC`) |
+| `std` | bool | Supports language standard flag |
+| `dependencies` | string | Dependency tracking flags (e.g., `-MMD -MP -MF ${dep_file}`) |
+
+**Linking supports:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `output_type` | string | `executable`, `shared_library`, or `static_library` |
+| `lib_dirs` | bool | Supports library directories |
+| `lib_dir_flag` | string | Flag prefix for lib dirs (e.g., `-L`) |
+| `libs` | bool | Supports library linking |
+| `lib_flag` | string | Flag prefix for libs (e.g., `-l`) |
+| `frameworks` | bool | Supports macOS frameworks |
+| `framework_flag` | string | Flag for frameworks (e.g., `-framework`) |
+
+**Go/Rust supports:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `build_tags` | bool | Supports build tags |
+| `build_tags_flag` | string | Flag for build tags (e.g., `-tags`) |
+| `ldflags` | bool | Supports linker flags |
+| `ldflags_flag` | string | Flag for ldflags |
+| `features` | bool | Supports cargo features |
+| `features_flag` | string | Flag for features |
+| `buildmode` | bool | Supports Go buildmode |
+| `buildmode_flag` | string | Flag for buildmode |
 
 ### Variable Syntax
 
@@ -1129,6 +1354,63 @@ tools:
 ```
 
 When these files change, the build task is invalidated and re-executed.
+
+### Execution Configuration
+
+Toolchains specify how commands are executed via the `execution` section:
+
+**Native execution (default):**
+
+```yaml
+execution:
+  type: native
+```
+
+**Native execution with environment variables:**
+
+```yaml
+execution:
+  type: native
+  env:
+    GOOS: windows
+    GOARCH: amd64
+    CGO_ENABLED: "0"
+```
+
+**Docker execution:**
+
+```yaml
+execution:
+  type: docker
+  image: "gcc:13"
+  volumes:
+    - "${PWD}:/workspace"
+  working_dir: "/workspace"
+  user: "${UID}:${GID}"
+```
+
+#### Execution Configuration Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `native` or `docker` |
+| `env` | map | Environment variables to set (native only) |
+| `image` | string | Docker image name (docker only) |
+| `volumes` | list | Volume mounts (docker only) |
+| `working_dir` | string | Working directory in container (docker only) |
+| `user` | string | User/group to run as (docker only) |
+
+#### Docker Variable Expansion
+
+These variables are expanded in Docker configuration:
+
+| Variable | Description |
+|----------|-------------|
+| `${PWD}` | Current working directory on host |
+| `${UID}` | Host user ID |
+| `${GID}` | Host group ID |
+
+Using `${UID}:${GID}` ensures files created in the container have correct ownership on the host.
 
 ### Custom Toolchain Example
 
@@ -1238,6 +1520,42 @@ templates:
           lib_dirs: ["${output_dir}/lib", "${item.lib_dirs}"]
           libs: "${item.libs}"
 ```
+
+### Template Metadata
+
+The `metadata` section controls how buildy processes the target:
+
+#### Pre-Processing Options
+
+| Field | Description |
+|-------|-------------|
+| `resolve_packages` | Resolve package dependencies and add include_dirs/libs |
+| `resolve_sources` | Expand source glob patterns to file lists |
+| `resolve_include_dirs` | Process include directory paths |
+| `resolve_path` | Resolve `item.path` for Go/Rust targets |
+
+#### Post-Processing Options
+
+| Field | Description |
+|-------|-------------|
+| `register_target` | Register target for dependency resolution |
+| `scan_sources_pattern` | Pattern for scanning source files (e.g., `"*.go"`) |
+| `add_setup_dependency` | Add dependency on setup tasks (Go/Rust) |
+
+### Step Fields
+
+| Field | Description |
+|-------|-------------|
+| `name` | Step identifier (used for references like `${compile.outputs}`) |
+| `action` | Tool action to invoke (compile, link, build, transform, generate) |
+| `for_each` | Iterate over items (`source` expands to one task per source file) |
+| `output` | Output file path template |
+| `outputs` | List of output file paths (for multi-output steps) |
+| `inputs` | Input files (string or array) |
+| `depends_on` | Dependencies (string or array of task IDs) |
+| `output_type` | For link action: `executable`, `shared_library`, `static_library` |
+| `working_dir` | Working directory for step execution |
+| `tool_params` | Parameters passed to the tool |
 
 ### Multi-Step vs Single-Step Templates
 
@@ -1395,6 +1713,7 @@ build_system:
     build:
       command: "bazel build //... {args}"
       working_dir: "{source_dir}"
+      default_args: []
       required: true
     
     test:
@@ -1413,6 +1732,31 @@ build_system:
     lib_patterns:
       - "{source_dir}/bazel-bin"
 ```
+
+### Build System Fields
+
+| Field | Description |
+|-------|-------------|
+| `name` | Build system identifier |
+| `description` | Human-readable description |
+| `detection.marker_files` | Files that indicate this build system |
+| `detection.priority` | Detection priority (higher wins) |
+
+### Phase Fields
+
+| Field | Description |
+|-------|-------------|
+| `command` | Command template with variable substitution |
+| `working_dir` | Working directory (default: `{source_dir}`) |
+| `default_args` | Default arguments (merged with `build_args`) |
+| `required` | Whether this phase is required |
+
+### Output Fields
+
+| Field | Description |
+|-------|-------------|
+| `include_patterns` | Patterns for finding header directories |
+| `lib_patterns` | Patterns for finding library directories |
 
 ### Search Order
 
@@ -1594,9 +1938,7 @@ targets:
     - name: engine_core
       language: cpp
       sources: ["src/*.cpp"]
-      public_headers: ["include/*.h"]
-      include_dirs:
-        public: ["include"]
+      include_dirs: ["include"]
       depends_on:
         deps: ["zlib", "stb"]
 ```
@@ -1612,8 +1954,7 @@ targets:
     - name: engine_renderer
       language: cpp
       sources: ["src/*.cpp"]
-      include_dirs:
-        public: ["include"]
+      include_dirs: ["include"]
       depends_on:
         targets: ["engine_core"]  # Build order - engine_core must be built first
         deps: ["vulkan_sdk", "imgui"]
@@ -1631,8 +1972,7 @@ targets:
     - name: game
       language: cpp
       sources: ["src/*.cpp"]
-      include_dirs:
-        private: ["../core/include", "../renderer/include"]
+      include_dirs: ["../core/include", "../renderer/include"]
       
       # packages: External packages (adds include_dirs, lib_dirs, libs)
       packages:

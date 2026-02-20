@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+
+	"buildy/pkg/util"
 )
 
 // CommandParam defines how a command placeholder is resolved
@@ -157,7 +160,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 	}
 
 	// Apply quoting if needed
-	if param.QuoteIfSpaces && containsSpace(joined) {
+	if param.QuoteIfSpaces && strings.ContainsRune(joined, ' ') {
 		joined = "'" + joined + "'"
 	}
 
@@ -172,7 +175,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 
 // lookupSource looks up a value from the source path
 func (t *Tool) lookupSource(source string, toolParams, itemConfig map[string]any) (any, bool) {
-	parts := splitDot(source)
+	parts := strings.Split(source, ".")
 	if len(parts) == 0 {
 		return nil, false
 	}
@@ -182,12 +185,12 @@ func (t *Tool) lookupSource(source string, toolParams, itemConfig map[string]any
 		if len(parts) < 2 {
 			return nil, false
 		}
-		return lookupPath(toolParams, parts[1:])
+		return util.LookupPath(toolParams, parts[1:])
 	case "item":
 		if len(parts) < 2 {
 			return nil, false
 		}
-		return lookupPath(itemConfig, parts[1:])
+		return util.LookupPath(itemConfig, parts[1:])
 	case "tool":
 		if len(parts) >= 3 && parts[1] == "flags" {
 			flagKey := parts[2]
@@ -204,86 +207,13 @@ func (t *Tool) lookupSource(source string, toolParams, itemConfig map[string]any
 // Helper functions for parameter resolution
 
 func replaceConfigVar(s, config string) string {
-	result := s
-	for {
-		idx := findSubstring(result, "${config}")
-		if idx < 0 {
-			break
-		}
-		result = result[:idx] + config + result[idx+9:]
-	}
-	return result
+	return strings.ReplaceAll(s, "${config}", config)
 }
 
 func replaceValue(format, value string) string {
-	result := format
-	for {
-		idx := findSubstring(result, "${value}")
-		if idx < 0 {
-			break
-		}
-		result = result[:idx] + value + result[idx+8:]
-	}
-	return result
+	return strings.ReplaceAll(format, "${value}", value)
 }
 
-func findSubstring(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func containsSpace(s string) bool {
-	for _, c := range s {
-		if c == ' ' {
-			return true
-		}
-	}
-	return false
-}
-
-func splitDot(s string) []string {
-	var parts []string
-	current := ""
-	for _, c := range s {
-		if c == '.' {
-			if current != "" {
-				parts = append(parts, current)
-			}
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
-}
-
-func lookupPath(m map[string]any, path []string) (any, bool) {
-	if len(path) == 0 || m == nil {
-		return nil, false
-	}
-
-	current := any(m)
-	for _, key := range path {
-		if currentMap, ok := current.(map[string]any); ok {
-			if val, exists := currentMap[key]; exists {
-				current = val
-			} else {
-				return nil, false
-			}
-		} else {
-			return nil, false
-		}
-	}
-
-	return current, true
-}
 
 // NewTool creates a new Tool with defaults
 func NewTool(name, action, command string, inputExts []string, outputExt string) *Tool {

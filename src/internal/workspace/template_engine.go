@@ -702,83 +702,107 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		dependencies = append(dependencies, toStringSlice(resolvedDeps)...)
 	}
 
-	// Handle library dependencies for executables
-	libDirs := []string{}
-	libNames := []string{}
-	if outputType == "executable" {
-		dependsOnLibs := []string{}
-		// Handle nested format: depends_on.targets: [...]
-		if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
-			if targets, ok := depsMap["targets"].([]any); ok {
-				for _, d := range targets {
-					if str, ok := d.(string); ok {
-						dependsOnLibs = append(dependsOnLibs, str)
+	// Handle artifact dependencies (depends_on.artifacts)
+	// Artifacts are processed before targets, so their task IDs are available
+	if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
+		if artifacts, ok := depsMap["artifacts"].([]any); ok {
+			for _, a := range artifacts {
+				if artifactName, ok := a.(string); ok {
+					// Look up artifact task IDs from existing tasks
+					for _, task := range existingTasks {
+						// Artifact tasks are named like "generate_<name>_..." or "transform_<name>_..."
+						if strings.Contains(task.TaskID, artifactName) &&
+							(strings.HasPrefix(task.TaskID, "generate_") || strings.HasPrefix(task.TaskID, "transform_")) {
+							dependencies = append(dependencies, task.TaskID)
+							log.Printf("Added artifact dependency: %s -> %s", artifactName, task.TaskID)
+						}
 					}
 				}
 			}
-		} else if deps, ok := itemConfig["depends_on"].([]any); ok {
-			// Handle flat format: depends_on: [...]
-			for _, d := range deps {
+		}
+	}
+
+	// Handle target dependencies (depends_on.targets) for all target types
+	// This adds build order dependencies so that dependent targets build first
+	dependsOnTargets := []string{}
+	if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
+		if targets, ok := depsMap["targets"].([]any); ok {
+			for _, d := range targets {
 				if str, ok := d.(string); ok {
-					dependsOnLibs = append(dependsOnLibs, str)
+					dependsOnTargets = append(dependsOnTargets, str)
 				}
 			}
 		}
+	} else if deps, ok := itemConfig["depends_on"].([]any); ok {
+		// Handle flat format: depends_on: [...]
+		for _, d := range deps {
+			if str, ok := d.(string); ok {
+				dependsOnTargets = append(dependsOnTargets, str)
+			}
+		}
+	}
 
-		if len(dependsOnLibs) > 0 {
-			libDirs = append(libDirs, filepath.Join(outputDir, "lib"))
+	// Add build order dependencies for all target types
+	for _, dep := range dependsOnTargets {
+		dependencies = append(dependencies, dep)
+	}
 
-			// Build dependency graph for libraries to determine correct link order
-			libDeps := make(map[string][]string)
+	// Handle library linking for executables and shared libraries
+	// (static libraries don't link against other libs at archive time)
+	libDirs := []string{}
+	libNames := []string{}
+	if (outputType == "executable" || outputType == "shared_library") && len(dependsOnTargets) > 0 {
+		libDirs = append(libDirs, filepath.Join(outputDir, "lib"))
 
-			for _, dep := range dependsOnLibs {
-				// Extract the target name (handle scoped references)
-				libName := dep
-				if strings.Contains(dep, ":") {
-					parts := strings.Split(dep, ":")
-					libName = parts[len(parts)-1]
-				}
+		// Build dependency graph for libraries to determine correct link order
+		libDeps := make(map[string][]string)
 
-				// Find this library's dependencies from existing_tasks
-				libDependencies := []string{}
-				for _, task := range existingTasks {
-					if task.TaskType == "link" && strings.Contains(task.TaskID, libName) {
-						// This is the library's link task, check its dependencies
-						for _, taskDep := range task.Dependencies {
-							// If dependency is another library link task, extract its name
-							if strings.HasPrefix(taskDep, "link_") && taskDep != task.TaskID {
-								// Extract library name from task_id like "link_engine_core_005"
-								parts := strings.Split(taskDep, "_")
-								if len(parts) >= 3 {
-									depLibName := strings.Join(parts[1:len(parts)-1], "_")
-									// Check if this is one of our depends_on libs
-									for _, checkDep := range dependsOnLibs {
-										checkName := checkDep
-										if strings.Contains(checkDep, ":") {
-											checkParts := strings.Split(checkDep, ":")
-											checkName = checkParts[len(checkParts)-1]
-										}
-										if depLibName == checkName {
-											libDependencies = append(libDependencies, depLibName)
-											break
-										}
+		for _, dep := range dependsOnTargets {
+			// Extract the target name (handle scoped references)
+			libName := dep
+			if strings.Contains(dep, ":") {
+				parts := strings.Split(dep, ":")
+				libName = parts[len(parts)-1]
+			}
+
+			// Find this library's dependencies from existing_tasks
+			libDependencies := []string{}
+			for _, task := range existingTasks {
+				if task.TaskType == "link" && strings.Contains(task.TaskID, libName) {
+					// This is the library's link task, check its dependencies
+					for _, taskDep := range task.Dependencies {
+						// If dependency is another library link task, extract its name
+						if strings.HasPrefix(taskDep, "link_") && taskDep != task.TaskID {
+							// Extract library name from task_id like "link_engine_core_005"
+							parts := strings.Split(taskDep, "_")
+							if len(parts) >= 3 {
+								depLibName := strings.Join(parts[1:len(parts)-1], "_")
+								// Check if this is one of our depends_on libs
+								for _, checkDep := range dependsOnTargets {
+									checkName := checkDep
+									if strings.Contains(checkDep, ":") {
+										checkParts := strings.Split(checkDep, ":")
+										checkName = checkParts[len(checkParts)-1]
+									}
+									if depLibName == checkName {
+										libDependencies = append(libDependencies, depLibName)
+										break
 									}
 								}
 							}
 						}
-						break
 					}
+					break
 				}
-
-				libDeps[libName] = libDependencies
-				dependencies = append(dependencies, dep)
 			}
 
-			// Topological sort to get correct link order
-			libNames = bte.topologicalSortLibs(libDeps)
-
-			log.Printf("Library link order: %v", libNames)
+			libDeps[libName] = libDependencies
 		}
+
+		// Topological sort to get correct link order
+		libNames = bte.topologicalSortLibs(libDeps)
+
+		log.Printf("Library link order: %v", libNames)
 	}
 
 	// Get tool parameters

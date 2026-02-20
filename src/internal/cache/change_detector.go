@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"buildy/internal/workspace"
+	"buildy/pkg/util"
 )
 
 // ChangeSet represents the set of changes detected since last build
@@ -185,10 +186,10 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *worksp
 	// Direct dependencies: tasks that use modified files as inputs
 	for taskID, task := range taskGraph.Tasks {
 		for _, inputFile := range task.Inputs {
-			if contains(changes.ModifiedFiles, inputFile.Path) {
+			if util.SliceContains(changes.ModifiedFiles, inputFile.Path) {
 				affected[taskID] = true
 				log.Printf("Task %s affected by modified input %s", taskID, inputFile.Path)
-			} else if contains(changes.NewFiles, inputFile.Path) {
+			} else if util.SliceContains(changes.NewFiles, inputFile.Path) {
 				affected[taskID] = true
 				log.Printf("Task %s affected by new input %s", taskID, inputFile.Path)
 			}
@@ -350,12 +351,3 @@ func (cd *ChangeDetector) getAllSourceFiles(config map[string]interface{}) map[s
 	return files
 }
 
-// contains checks if a string slice contains a value
-func contains(slice []string, value string) bool {
-	for _, item := range slice {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}

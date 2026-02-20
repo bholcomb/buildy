@@ -208,6 +208,21 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
+	// If target depends on artifacts, add their outputs as virtual files for glob matching
+	tg.PathResolver.ClearVirtualFiles()
+	if depsMap, ok := targetConfig["depends_on"].(map[string]any); ok {
+		if artifacts, ok := depsMap["artifacts"].([]any); ok {
+			for _, a := range artifacts {
+				if artifactName, ok := a.(string); ok {
+					if outputs, exists := tg.artifactOutputs[artifactName]; exists {
+						tg.PathResolver.AddVirtualFiles(outputs)
+						log.Printf("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
+					}
+				}
+			}
+		}
+	}
+
 	if metadata.PreProcessing.ResolveSources {
 		sources, err := tg.PathResolver.ResolveSources(targetConfig)
 		if err != nil {
@@ -396,6 +411,24 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 
 	mergedConfig := tg.getMergedConfig(config)
 
+	// IMPORTANT: Generate artifact tasks BEFORE targets so targets can depend on them
+	// This allows targets to use depends_on.artifacts for code generation workflows
+	if artifacts, ok := config["artifacts"].(map[string]any); ok {
+		// Generate generate tasks first (e.g., protobuf, code generators)
+		generateTasks, err := tg.generateGenerateTasks(artifacts, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, generateTasks...)
+
+		// Generate transform tasks (e.g., texture conversion)
+		transformTasks, err := tg.generateTransformTasks(artifacts, mergedConfig, outputDir, tasks)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, transformTasks...)
+	}
+
 	// Define target sections with their default types
 	// Each section maps to a specific target type for clarity
 	targetSections := []struct {
@@ -435,23 +468,8 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 		}
 	}
 
-	// Generate artifact tasks
+	// Generate artifact copy tasks AFTER targets (they may depend on target outputs)
 	if artifacts, ok := config["artifacts"].(map[string]any); ok {
-		// Generate transform tasks
-		transformTasks, err := tg.generateTransformTasks(artifacts, mergedConfig, outputDir, tasks)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, transformTasks...)
-
-		// Generate generate tasks
-		generateTasks, err := tg.generateGenerateTasks(artifacts, mergedConfig, outputDir, tasks)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, generateTasks...)
-
-		// Generate copy tasks
 		copyTasks, err := tg.generateArtifactCopyTasks(artifacts, mergedConfig, outputDir, tasks)
 		if err != nil {
 			return nil, err

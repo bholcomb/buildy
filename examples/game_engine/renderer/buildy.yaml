@@ -11,14 +11,10 @@ targets:
       language: cpp
       sources:
         - "src/*.cpp"
-      public_headers:
-        - "include/*.h"
-        - "include/renderer/*.h"
       include_dirs:
-        public: ["include"]
-        private:
-          - "../core/include"
-          - "../platform/include"
+        - "include"
+        - "../core/include"
+        - "../platform/include"
       libs:
         - engine_core
         - engine_platform

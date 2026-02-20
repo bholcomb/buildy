@@ -22,16 +22,13 @@ targets:
     - name: mathcore
       language: cpp
       sources: ["libsrc/*.cpp"]
-      public_headers: ["include/*.h"]
-      include_dirs:
-        public: ["include"]
+      include_dirs: ["include"]
 
   executables:
     - name: calculator
       language: cpp
       sources: ["appsrc/main.cpp"]
-      include_dirs:
-        private: ["include"]
+      include_dirs: ["include"]
       libs:
         - mathcore
       depends_on:

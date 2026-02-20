@@ -20,6 +20,9 @@ type SourceEntry struct {
 type PathResolver struct {
 	ConfigFileDir string
 	WorkspaceRoot string
+	// VirtualFiles are files that don't exist yet but will be created by artifacts
+	// These are included in glob matching for targets that depend on artifacts
+	VirtualFiles []string
 }
 
 // NewPathResolver creates a new PathResolver
@@ -27,7 +30,19 @@ func NewPathResolver(configFileDir, workspaceRoot string) *PathResolver {
 	return &PathResolver{
 		ConfigFileDir: configFileDir,
 		WorkspaceRoot: workspaceRoot,
+		VirtualFiles:  []string{},
 	}
+}
+
+// AddVirtualFiles adds files that will be created by artifacts
+// These files don't exist yet but should be included in glob matching
+func (pr *PathResolver) AddVirtualFiles(files []string) {
+	pr.VirtualFiles = append(pr.VirtualFiles, files...)
+}
+
+// ClearVirtualFiles removes all virtual files
+func (pr *PathResolver) ClearVirtualFiles() {
+	pr.VirtualFiles = []string{}
 }
 
 // ParseSourceEntries parses source entries from config, handling both string and object forms
@@ -97,6 +112,7 @@ func (pr *PathResolver) ResolveSources(itemConfig map[string]any) ([]string, err
 
 // expandGlob expands a glob pattern to sorted file list
 // Returns an error if the pattern matches no files and optional is false
+// Also includes virtual files (from artifact outputs) that match the pattern
 func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, error) {
 	var searchPattern string
 	if pr.ConfigFileDir == "" {
@@ -113,6 +129,13 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 		return nil, fmt.Errorf("error expanding glob '%s': %w", pattern, err)
 	}
 
+	// Also match virtual files (artifact outputs) against the pattern
+	virtualMatches := pr.matchVirtualFiles(searchPattern)
+	if len(virtualMatches) > 0 {
+		log.Printf("Pattern '%s' matched %d virtual files from artifacts", pattern, len(virtualMatches))
+		results = append(results, virtualMatches...)
+	}
+
 	if len(results) == 0 {
 		if optional {
 			log.Printf("Optional glob pattern '%s' matched no files (skipped)", pattern)
@@ -125,20 +148,39 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 	// Convert absolute paths back to relative paths from current directory
 	cwd, _ := os.Getwd()
 	relativeResults := []string{}
+	seen := make(map[string]bool) // deduplicate
 	for _, result := range results {
 		relPath, err := filepath.Rel(cwd, result)
 		if err != nil {
 			// If it's not relative to cwd, use absolute path
 			absPath, _ := filepath.Abs(result)
-			relativeResults = append(relativeResults, absPath)
+			if !seen[absPath] {
+				relativeResults = append(relativeResults, absPath)
+				seen[absPath] = true
+			}
 		} else {
-			relativeResults = append(relativeResults, relPath)
+			if !seen[relPath] {
+				relativeResults = append(relativeResults, relPath)
+				seen[relPath] = true
+			}
 		}
 	}
 
 	sort.Strings(relativeResults)
 	log.Printf("Pattern '%s' matched %d files: %v", pattern, len(relativeResults), relativeResults)
 	return relativeResults, nil
+}
+
+// matchVirtualFiles returns virtual files that match the given glob pattern
+func (pr *PathResolver) matchVirtualFiles(pattern string) []string {
+	var matches []string
+	for _, vf := range pr.VirtualFiles {
+		matched, err := filepath.Match(pattern, vf)
+		if err == nil && matched {
+			matches = append(matches, vf)
+		}
+	}
+	return matches
 }
 
 // ResolveIncludeDirs resolves include directory paths relative to config file directory
@@ -152,11 +194,9 @@ func (pr *PathResolver) ResolveIncludeDirs(itemConfig map[string]any) ([]string,
 
 	// Helper to resolve a single path
 	resolvePath := func(inc string) string {
-		// Skip absolute paths (start with / or have a drive letter on Windows)
 		if filepath.IsAbs(inc) {
 			return inc
 		}
-		// Only resolve relative paths with the config file directory
 		if pr.ConfigFileDir != "" && pr.ConfigFileDir != "." {
 			absIncPath := filepath.Join(pr.ConfigFileDir, inc)
 			cwd, _ := os.Getwd()
@@ -169,41 +209,19 @@ func (pr *PathResolver) ResolveIncludeDirs(itemConfig map[string]any) ([]string,
 		return inc
 	}
 
-	// Helper to extract paths from a value
-	extractPaths := func(value any) []string {
-		result := []string{}
-		switch v := value.(type) {
-		case string:
-			result = append(result, resolvePath(v))
-		case []any:
-			for _, item := range v {
-				if str, ok := item.(string); ok {
-					result = append(result, resolvePath(str))
-				}
-			}
-		case []string:
-			for _, str := range v {
-				result = append(result, resolvePath(str))
-			}
-		}
-		return result
-	}
-
 	switch v := includeDirsRaw.(type) {
-	case map[string]any:
-		// New format with public/private subsections
-		if publicDirs, ok := v["public"]; ok {
-			includeDirs = append(includeDirs, extractPaths(publicDirs)...)
-		}
-		if privateDirs, ok := v["private"]; ok {
-			includeDirs = append(includeDirs, extractPaths(privateDirs)...)
-		}
+	case string:
+		includeDirs = append(includeDirs, resolvePath(v))
 	case []any:
-		// Legacy format: simple list
-		includeDirs = extractPaths(v)
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				includeDirs = append(includeDirs, resolvePath(str))
+			}
+		}
 	case []string:
-		// Legacy format: simple list
-		includeDirs = extractPaths(v)
+		for _, str := range v {
+			includeDirs = append(includeDirs, resolvePath(str))
+		}
 	}
 
 	return includeDirs, nil

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"buildy/internal/workspace"
+	"buildy/pkg/util"
 )
 
 // CacheEntry represents a cached build task result
@@ -219,7 +220,7 @@ func (bc *BuildCache) RestoreCachedResult(task *workspace.BuildTask) error {
 				}
 			}
 
-			if err := copyFile(cachedFile, outputPath); err != nil {
+			if err := util.CopyFile(cachedFile, outputPath); err != nil {
 				return fmt.Errorf("failed to copy cached file: %w", err)
 			}
 		}
@@ -264,7 +265,7 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 				return fmt.Errorf("failed to create cached output directory: %w", err)
 			}
 
-			if err := copyFile(outputPath, cachedFile); err != nil {
+			if err := util.CopyFile(outputPath, cachedFile); err != nil {
 				return fmt.Errorf("failed to cache file: %w", err)
 			}
 
@@ -475,29 +476,3 @@ func (bc *BuildCache) GetCacheStats() map[string]interface{} {
 	}
 }
 
-// copyFile copies a file from src to dst
-func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	if _, err := io.Copy(destFile, sourceFile); err != nil {
-		return err
-	}
-
-	// Copy file permissions
-	sourceInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	return os.Chmod(dst, sourceInfo.Mode())
-}

@@ -36,6 +36,8 @@ type Dependency struct {
 	Path        string // For path/fetch deps, the resolved path
 	Resolved    bool
 	Warning     string // Reproducibility warning for system deps
+	ConfigFile  string // For fetch deps: buildy config file to use instead of build_system
+	NeedsBuildy bool   // True if this fetch dep should be built via buildy config
 }
 
 // SystemDependencyConfig represents a system dependency from the config
@@ -70,6 +72,7 @@ type FetchDependencyConfig struct {
 	Ref         string          `yaml:"ref"`
 	Checksum    string          `yaml:"checksum"`
 	Dest        string          `yaml:"dest"`
+	Config      string          `yaml:"config"`       // buildy config file to use instead of build_system
 	BuildSystem string          `yaml:"build_system"` // auto, cmake, meson, make, none
 	BuildPhases []string        `yaml:"build_phases"` // phases to run: configure, build, test, install
 	BuildArgs   []string        `yaml:"build_args"`
@@ -227,12 +230,15 @@ func (dr *DependencyResolver) parseDependenciesSection(section map[string]any) (
 				if checksum, ok := fetchMap["checksum"].(string); ok {
 					dep.Checksum = checksum
 				}
-				if dest, ok := fetchMap["dest"].(string); ok {
-					dep.Dest = dest
-				}
-				if buildSystem, ok := fetchMap["build_system"].(string); ok {
-					dep.BuildSystem = buildSystem
-				}
+			if dest, ok := fetchMap["dest"].(string); ok {
+				dep.Dest = dest
+			}
+			if configFile, ok := fetchMap["config"].(string); ok {
+				dep.Config = configFile
+			}
+			if buildSystem, ok := fetchMap["build_system"].(string); ok {
+				dep.BuildSystem = buildSystem
+			}
 				if depType, ok := fetchMap["type"].(string); ok {
 					dep.Type = depType
 				}
@@ -460,8 +466,13 @@ func (dr *DependencyResolver) resolveFetchDeps(fetchDeps []FetchDependencyConfig
 			resolved.IncludeDirs = []string{dest}
 		}
 
-		// Build if necessary
-		if dep.BuildSystem != "" && dep.BuildSystem != "none" && dep.Type != "header_only" {
+		// If config is specified, this dep will be built via buildy (stored for later)
+		// Otherwise, use the build_system approach
+		if dep.Config != "" {
+			resolved.ConfigFile = dep.Config
+			resolved.NeedsBuildy = true
+			log.Printf("Fetch dependency '%s' will be built using buildy config: %s", dep.Name, dep.Config)
+		} else if dep.BuildSystem != "" && dep.BuildSystem != "none" && dep.Type != "header_only" {
 			if err := dr.buildFetchedDep(dep, dest, resolved); err != nil {
 				return fmt.Errorf("failed to build %s: %w", dep.Name, err)
 			}
@@ -561,6 +572,21 @@ func (dr *DependencyResolver) createExecutionEnv(config *ExecutionConfig) *util.
 // GetDependency returns a resolved dependency by name
 func (dr *DependencyResolver) GetDependency(name string) *Dependency {
 	return dr.resolved[name]
+}
+
+// GetBuildyDependencies returns fetch dependencies that need to be built via buildy config
+// Returns a map of dependency name -> (source path, config file path)
+func (dr *DependencyResolver) GetBuildyDependencies() map[string]struct{ SourcePath, ConfigFile string } {
+	result := make(map[string]struct{ SourcePath, ConfigFile string })
+	for name, dep := range dr.resolved {
+		if dep.NeedsBuildy && dep.ConfigFile != "" {
+			result[name] = struct{ SourcePath, ConfigFile string }{
+				SourcePath: dep.Path,
+				ConfigFile: dep.ConfigFile,
+			}
+		}
+	}
+	return result
 }
 
 // GetWarnings returns reproducibility warnings

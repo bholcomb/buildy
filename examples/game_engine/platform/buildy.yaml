@@ -11,9 +11,7 @@ targets:
       language: cpp
       sources:
         - "src/common/*.cpp"
-      include_dirs:
-        public: ["include"]
-        private: ["../core/include"]
+      include_dirs: ["include", "../core/include"]
       libs:
         - engine_core
       depends_on:
