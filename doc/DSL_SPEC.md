@@ -970,7 +970,18 @@ The `filename` field supports these variables:
 
 ## 10. Toolchain System
 
-Toolchains define how to compile, link, and transform files.
+Toolchains define how to compile, link, and transform files. They specify the actual commands and flags for a specific compiler/platform combination.
+
+### Templates vs Toolchains
+
+Buildy separates **what** to build from **how** to build:
+
+| Concept | Purpose | Example |
+|---------|---------|---------|
+| **Templates** | Define build workflow (steps, inputs, outputs) | "Compile each source, then link them" |
+| **Toolchains** | Define actual commands and flags | "Use `gcc -c` for compiling" |
+
+Templates are language-agnostic recipes. Toolchains are platform-specific implementations.
 
 ### Search Order
 
@@ -978,17 +989,43 @@ Toolchains define how to compile, link, and transform files.
 2. `~/.buildy/toolchains/*.yaml` - User-shared
 3. Built-in (embedded in binary)
 
+### Built-in Toolchains
+
+| Toolchain | Platform | Language | Description |
+|-----------|----------|----------|-------------|
+| `gcc-c-linux` | Linux | C | GCC C compiler |
+| `gcc-cpp-linux` | Linux | C++ | GCC C++ compiler |
+| `clang-c-linux` | Linux | C | Clang C compiler |
+| `clang-cpp-linux` | Linux | C++ | Clang C++ compiler |
+| `clang-c-macos` | macOS | C | Apple Clang C |
+| `clang-cpp-macos` | macOS | C++ | Apple Clang C++ |
+| `msvc-c-windows` | Windows | C | MSVC C compiler |
+| `msvc-cpp-windows` | Windows | C++ | MSVC C++ compiler |
+| `gcc-c-mingw` | Linux→Windows | C | MinGW cross-compiler |
+| `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
+| `go-linux` | Linux | Go | Go compiler |
+| `go-macos` | macOS | Go | Go compiler |
+| `go-windows` | Windows | Go | Go compiler |
+| `rust-linux` | Linux | Rust | Cargo/rustc |
+| `rust-macos` | macOS | Rust | Cargo/rustc |
+| `rust-macos-arm64` | macOS ARM | Rust | Cargo/rustc for Apple Silicon |
+| `rust-windows` | Windows | Rust | Cargo/rustc |
+| `rust-wasm` | Any | Rust | Rust to WebAssembly |
+| `emscripten-c` | Any | C | C to WebAssembly |
+| `emscripten-cpp` | Any | C++ | C++ to WebAssembly |
+| `glslc` | Any | GLSL | GLSL to SPIR-V shader compiler |
+
 ### Toolchain Selection
 
 ```yaml
 environment:
   toolchains:
-    default: gcc-linux
-    linux: clang-linux
-    windows: msvc-windows
+    default: gcc-cpp-linux
+    linux: clang-cpp-linux
+    windows: msvc-cpp-windows
 ```
 
-CLI override: `buildy --toolchain clang-linux`
+CLI override: `buildy --toolchain clang-cpp-linux`
 
 ### Unified Tool Model
 
@@ -1000,7 +1037,98 @@ All tools use the same format. The `action` field distinguishes behavior:
 | `link` | Objects to binary | ld, link.exe |
 | `transform` | File conversion | texture compressor, mesh converter |
 | `generate` | Create files | protoc, code generators |
-| `build` | Full module build | Go compiler |
+| `build` | Single-step module build | Go, Rust/Cargo |
+
+### Variable Syntax
+
+All variables in toolchain commands use the `${var}` syntax:
+
+```yaml
+command: "gcc -c ${input} -o ${output} ${flags} ${defines}"
+```
+
+### Data-Driven Command Parameters
+
+For tools with `action: build` (like Go and Rust), command parameters can be defined declaratively using the `command_params` section. This eliminates hardcoded language-specific logic.
+
+```yaml
+tools:
+  go_build:
+    action: build
+    command: "go build ${buildmode} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
+    
+    command_params:
+      buildmode:
+        sources: ["tool_params.buildmode", "item.buildmode"]
+        format: "-buildmode=${value}"
+        optional: true
+      build_tags:
+        sources: ["tool_params.build_tags", "item.build_tags"]
+        format: "-tags ${value}"
+        join: ","
+        optional: true
+      ldflags:
+        sources: ["tool_params.ldflags", "item.ldflags"]
+        format: "-ldflags \"${value}\""
+        join: " "
+        resolve_variables: true
+        optional: true
+      gcflags:
+        sources: ["tool_params.gcflags", "tool.flags.${config}"]
+        format: "${value}"
+        quote_if_spaces: true
+        optional: true
+```
+
+#### Command Parameter Fields
+
+| Field | Description |
+|-------|-------------|
+| `sources` | List of locations to search for the value (first match wins) |
+| `format` | Output format with `${value}` placeholder |
+| `join` | Separator for array values (default: space) |
+| `optional` | If true, empty values produce empty string (not an error) |
+| `match` | Only use value if it matches this string |
+| `quote_if_spaces` | Wrap value in quotes if it contains spaces |
+| `resolve_variables` | Resolve `${var}` references in the value |
+
+#### Source Paths
+
+Sources are dot-separated paths into the build context:
+
+| Path | Description |
+|------|-------------|
+| `tool_params.X` | Parameter passed via template's `tool_params` |
+| `item.X` | Field from the target configuration |
+| `tool.flags.${config}` | Tool flags for current configuration (debug/release) |
+
+### Manifest Files
+
+For cache invalidation, tools can declare which files should trigger rebuilds:
+
+```yaml
+tools:
+  go_build:
+    action: build
+    command: "go build -o ${output} ${input}"
+    
+    manifest_files:
+      - "go.mod"
+      - "go.sum"
+```
+
+```yaml
+tools:
+  cargo_build:
+    action: build
+    command: "cargo build ${release_flag} --target-dir ${output_dir}"
+    
+    manifest_files:
+      - "Cargo.toml"
+      - "Cargo.lock"
+```
+
+When these files change, the build task is invalidated and re-executed.
 
 ### Custom Toolchain Example
 
@@ -1024,10 +1152,10 @@ toolchain:
   tools:
     convert_mesh:
       action: transform
-      command: "mesh_tool convert {flags} -i {input} -o {output}"
+      command: "mesh_tool convert ${flags} -i ${input} -o ${output}"
       input_extensions: [".fbx", ".obj", ".gltf"]
       output_extension: ".mesh"
-      output_pattern: "{name}.mesh"
+      output_pattern: "${name}.mesh"
       flags:
         common: []
         debug: ["--validate"]
@@ -1041,14 +1169,140 @@ tools:
   compress:
     action: transform
     command:
-      linux: "texconv {flags} -o {output_dir} {input}"
-      windows: "texconv.exe {flags} -o {output_dir} {input}"
-      macos: "texturetool {flags} -o {output} {input}"
+      linux: "texconv ${flags} -o ${output_dir} ${input}"
+      windows: "texconv.exe ${flags} -o ${output_dir} ${input}"
+      macos: "texturetool ${flags} -o ${output} ${input}"
 ```
 
 ---
 
-## 11. Build Systems
+## 11. Build Templates
+
+Build templates define the workflow for building a type of target. They are language-agnostic recipes that specify what steps to perform (compile, link, etc.) and how inputs/outputs flow between them.
+
+### Template Selection
+
+Templates are automatically selected based on `language` and target type:
+
+| Language | Target Type | Template |
+|----------|-------------|----------|
+| cpp | executable | `cpp_executable` |
+| cpp | static_library | `cpp_static_library` |
+| cpp | shared_library | `cpp_shared_library` |
+| c | executable | `c_executable` |
+| c | static_library | `c_static_library` |
+| c | shared_library | `c_shared_library` |
+| go | executable | `go_executable` |
+| go | shared_library | `go_shared_library` |
+| rust | executable | `rust_executable` |
+| rust | static_library | `rust_static_library` |
+| rust | shared_library | `rust_shared_library` |
+
+### Template Structure
+
+Templates define metadata and build steps:
+
+```yaml
+templates:
+  cpp_executable:
+    description: "Compile C++ sources and link into executable"
+    metadata:
+      language: cpp
+      target_types: [executable]
+      toolchain_language: cpp
+      pre_processing:
+        resolve_packages: true
+        resolve_sources: true
+        resolve_include_dirs: true
+      post_processing:
+        register_target: true
+    
+    steps:
+      - name: compile
+        action: compile
+        for_each: source
+        output: "${output_dir}/obj/${module}/${source_stem}${tool.output_ext}"
+        inputs: ["${source}"]
+        tool_params:
+          defines: "${config.defines}"
+          include_dirs: "${item.include_dirs}"
+          std: "${config.cpp_standard}"
+      
+      - name: link
+        action: link
+        output_type: executable
+        output: "${output_dir}/bin/${tool.output_pattern}"
+        inputs: "${compile.outputs}"
+        depends_on: ["${compile.task_ids}"]
+        tool_params:
+          lib_dirs: ["${output_dir}/lib", "${item.lib_dirs}"]
+          libs: "${item.libs}"
+```
+
+### Multi-Step vs Single-Step Templates
+
+**Multi-step templates** (C/C++): Use `compile` + `link` actions with explicit steps:
+
+```yaml
+steps:
+  - name: compile
+    action: compile
+    for_each: source      # Expands to one task per source file
+    output: "${output_dir}/obj/${source_stem}.o"
+    
+  - name: link
+    action: link
+    inputs: "${compile.outputs}"   # References outputs from compile step
+    depends_on: ["${compile.task_ids}"]
+```
+
+**Single-step templates** (Go/Rust): Use `build` action where the tool handles everything:
+
+```yaml
+steps:
+  - name: build
+    action: build
+    output: "${output_dir}/bin/${tool.output_pattern}"
+    working_dir: "${item.path}"
+    tool_params:
+      features: "${item.features}"
+      build_tags: "${item.build_tags}"
+```
+
+### Template Variables
+
+Templates can reference variables from multiple sources:
+
+| Variable | Source |
+|----------|--------|
+| `${output_dir}` | Build output directory |
+| `${module}` | Current module name |
+| `${source}` | Current source file (in `for_each` loops) |
+| `${source_stem}` | Source filename without extension |
+| `${tool.output_ext}` | Tool's output extension (e.g., `.o`) |
+| `${tool.output_pattern}` | Tool's output pattern (e.g., `${name}`) |
+| `${item.X}` | Target configuration field |
+| `${config.X}` | Build configuration field |
+| `${compile.outputs}` | Outputs from previous step |
+| `${compile.task_ids}` | Task IDs from previous step |
+
+### Passing Parameters to Tools
+
+Templates pass parameters to toolchains via `tool_params`:
+
+```yaml
+tool_params:
+  defines: "${config.defines}"
+  include_dirs: "${item.include_dirs}"
+  features: "${item.features}"
+  ldflags: "${item.ldflags}"
+```
+
+For `action: build`, these parameters are resolved using the toolchain's `command_params` definitions.
+
+---
+
+## 12. Build Systems
 
 Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make projects). Buildy includes built-in definitions for common build systems and supports custom definitions.
 
@@ -1180,7 +1434,7 @@ Available in command templates:
 
 ---
 
-## 12. Lockfile
+## 13. Lockfile
 
 Optional lockfile for reproducible builds. Located at `buildy_config/dependencies.lock`.
 
@@ -1226,7 +1480,7 @@ system_warnings:
 
 ---
 
-## 13. Complete Example
+## 14. Complete Example
 
 ### Root: `buildy.yaml`
 
@@ -1398,7 +1652,7 @@ targets:
 
 ---
 
-## 14. CLI Reference
+## 15. CLI Reference
 
 ```bash
 # Basic build (platform/architecture auto-detected from host)
@@ -1470,7 +1724,7 @@ ln -s buildy_config/compile_commands.json compile_commands.json
 
 ---
 
-## 13. Build Flow
+## 16. Build Flow
 
 ```
 1. Parse root buildy.yaml
@@ -1490,7 +1744,7 @@ ln -s buildy_config/compile_commands.json compile_commands.json
 9. Warn once about system library reproducibility (at end)
 ```
 
-## 16. Build Reports
+## 17. Build Reports
 
 After each build, buildy generates a comprehensive build report with statistics and timing information.
 

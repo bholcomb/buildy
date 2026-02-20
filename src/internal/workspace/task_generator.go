@@ -33,6 +33,12 @@ type TaskGenerator struct {
 
 	// Track generated targets for cross-module dependency resolution
 	generatedTargets map[string]string // target name -> link task ID
+
+	// Artifact tracking (moved from global state for better encapsulation)
+	artifactOutputs    map[string][]string // artifact name -> output paths
+	artifactTaskIDs    map[string][]string // artifact name -> task IDs
+	outputToTaskID     map[string]string   // output file path -> task ID
+	stagingTasksByName map[string][]string // staging name -> task IDs
 }
 
 // NewTaskGenerator creates a new TaskGenerator
@@ -45,15 +51,19 @@ func NewTaskGenerator(
 	workspace *Workspace,
 ) *TaskGenerator {
 	return &TaskGenerator{
-		Platform:         platform,
-		Architecture:     architecture,
-		Configuration:    configuration,
-		ToolchainManager: toolchainManager,
-		TemplateEngine:   templateEngine,
-		PackageManager:   packageManager,
-		VarEnv:           varEnv,
-		Workspace:        workspace,
-		generatedTargets: make(map[string]string),
+		Platform:           platform,
+		Architecture:       architecture,
+		Configuration:      configuration,
+		ToolchainManager:   toolchainManager,
+		TemplateEngine:     templateEngine,
+		PackageManager:     packageManager,
+		VarEnv:             varEnv,
+		Workspace:          workspace,
+		generatedTargets:   make(map[string]string),
+		artifactOutputs:    make(map[string][]string),
+		artifactTaskIDs:    make(map[string][]string),
+		outputToTaskID:     make(map[string]string),
+		stagingTasksByName: make(map[string][]string),
 	}
 }
 
@@ -88,6 +98,39 @@ func (tg *TaskGenerator) resolveConfigMap(config map[string]any) map[string]any 
 		return resolvedMap
 	}
 	return config
+}
+
+// prependMkdir wraps a command with directory creation for the output file
+func (tg *TaskGenerator) prependMkdir(command, outputPath string) string {
+	outputDir := filepath.Dir(outputPath)
+	if tg.isWindows() {
+		return fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputDir, outputDir, command)
+	}
+	return fmt.Sprintf("mkdir -p %s && %s", outputDir, command)
+}
+
+// isWindows returns true if the target platform is Windows
+func (tg *TaskGenerator) isWindows() bool {
+	return strings.Contains(strings.ToLower(tg.Platform), "windows")
+}
+
+// createTaskVarEnv creates a child VarEnv with common task variables set
+func (tg *TaskGenerator) createTaskVarEnv(outputDir string) *util.VariableEnvironment {
+	childEnv := tg.VarEnv.CreateChild()
+	childEnv.SetVariable("output_dir", outputDir, "task-context")
+	childEnv.SetVariable("out_dir", outputDir, "task-context")
+	return childEnv
+}
+
+// finalizeTask sets common task fields and calculates cache key
+func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string, estimatedTime float64, resources ResourceRequirements) {
+	task.Platform = tg.Platform
+	task.Architecture = tg.Architecture
+	task.Configuration = tg.Configuration
+	task.Toolchain = toolchain
+	task.EstimatedTime = estimatedTime
+	task.ResourceRequirements = resources
+	task.CacheKey = task.CalculateCacheKey()
 }
 
 // generateTargetTasks is the unified task generation function that uses template metadata
@@ -287,6 +330,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 }
 
 // scanSourceFiles recursively scans a directory for files matching a glob pattern
+// Note: Manifest files (go.mod, Cargo.toml, etc.) are now handled via toolchain's
+// manifest_files field, not hardcoded here.
 func scanSourceFiles(rootDir string, pattern string) ([]string, error) {
 	var files []string
 
@@ -328,30 +373,6 @@ func scanSourceFiles(rootDir string, pattern string) ([]string, error) {
 
 	if err != nil {
 		return nil, err
-	}
-
-	// For Go, also include go.mod and go.sum if they exist
-	if pattern == "*.go" {
-		goMod := filepath.Join(rootDir, "go.mod")
-		if _, err := os.Stat(goMod); err == nil {
-			files = append(files, goMod)
-		}
-		goSum := filepath.Join(rootDir, "go.sum")
-		if _, err := os.Stat(goSum); err == nil {
-			files = append(files, goSum)
-		}
-	}
-
-	// For Rust, also include Cargo.toml and Cargo.lock if they exist
-	if pattern == "*.rs" {
-		cargoToml := filepath.Join(rootDir, "Cargo.toml")
-		if _, err := os.Stat(cargoToml); err == nil {
-			files = append(files, cargoToml)
-		}
-		cargoLock := filepath.Join(rootDir, "Cargo.lock")
-		if _, err := os.Stat(cargoLock); err == nil {
-			files = append(files, cargoLock)
-		}
 	}
 
 	return files, nil
@@ -571,30 +592,19 @@ func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
 	return nil
 }
 
-// artifactOutputs tracks artifact name -> output paths for staging
-var artifactOutputs = make(map[string][]string)
-
-// artifactTaskIDs tracks artifact name -> task IDs that produce the outputs
-// This is used to establish proper dependencies for staging tasks
-var artifactTaskIDs = make(map[string][]string)
-
-// outputToTaskID tracks output file path -> task ID that produces it
-// This allows looking up dependencies for any file path, not just named artifacts
-var outputToTaskID = make(map[string]string)
-
 // GetArtifactOutputs returns the outputs for a named artifact
-func GetArtifactOutputs(name string) []string {
-	return artifactOutputs[name]
+func (tg *TaskGenerator) GetArtifactOutputs(name string) []string {
+	return tg.artifactOutputs[name]
 }
 
 // GetArtifactTaskIDs returns the task IDs that produce outputs for a named artifact
-func GetArtifactTaskIDs(name string) []string {
-	return artifactTaskIDs[name]
+func (tg *TaskGenerator) GetArtifactTaskIDs(name string) []string {
+	return tg.artifactTaskIDs[name]
 }
 
 // GetTaskIDForOutput returns the task ID that produces a given output file path
-func GetTaskIDForOutput(outputPath string) string {
-	return outputToTaskID[outputPath]
+func (tg *TaskGenerator) GetTaskIDForOutput(outputPath string) string {
+	return tg.outputToTaskID[outputPath]
 }
 
 // generateTransformTasks generates transform tasks from artifacts.transform section
@@ -738,7 +748,6 @@ func (tg *TaskGenerator) generateTransformTasks(
 			}
 
 			// Build the command
-			outputFileDir := filepath.Dir(resolvedOutput)
 			command := tool.GetCommand(tg.Platform)
 
 			// Add command-specific variables to the iteration environment
@@ -776,12 +785,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 			command = iterVarEnv.ResolveString(command, nil, 10)
 
 			// Create mkdir prefix for output directory
-			var fullCommand string
-			if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-				fullCommand = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputFileDir, outputFileDir, command)
-			} else {
-				fullCommand = fmt.Sprintf("mkdir -p %s && %s", outputFileDir, command)
-			}
+			fullCommand := tg.prependMkdir(command, resolvedOutput)
 
 			// Create the task
 			taskID := tg.TaskIDGen.Next("transform", baseName)
@@ -793,26 +797,20 @@ func (tg *TaskGenerator) generateTransformTasks(
 				[]string{}, // No dependencies by default
 				fullCommand,
 			)
-			task.Platform = tg.Platform
-			task.Architecture = tg.Architecture
-			task.Configuration = tg.Configuration
-			task.Toolchain = toolName
-			task.EstimatedTime = 1.0
-			task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50}
-			task.CacheKey = task.CalculateCacheKey()
+			tg.finalizeTask(&task, toolName, 1.0, ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50})
 
 			tasks = append(tasks, &task)
 			artifactOutputPaths = append(artifactOutputPaths, resolvedOutput)
 			artifactTaskIDList = append(artifactTaskIDList, taskID)
 			// Register output path -> task ID mapping for dependency lookup
-			outputToTaskID[resolvedOutput] = taskID
+			tg.outputToTaskID[resolvedOutput] = taskID
 			log.Printf("Generated transform task: %s -> %s", inputFile, resolvedOutput)
 		}
 
 		// Register artifact outputs and task IDs for staging
 		if name != "" {
-			artifactOutputs[name] = artifactOutputPaths
-			artifactTaskIDs[name] = artifactTaskIDList
+			tg.artifactOutputs[name] = artifactOutputPaths
+			tg.artifactTaskIDs[name] = artifactTaskIDList
 			log.Printf("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
 		}
 	}
@@ -949,22 +947,17 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				[]string{}, // Generate tasks should run early
 				command,
 			)
-			task.Platform = tg.Platform
-			task.Architecture = tg.Architecture
-			task.Configuration = tg.Configuration
-			task.EstimatedTime = 0.1
-			task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1}
-			task.CacheKey = task.CalculateCacheKey()
+			tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1})
 
 			tasks = append(tasks, &task)
 
 			// Register artifact outputs and task IDs
 			if name != "" {
-				artifactOutputs[name] = []string{outputPath}
-				artifactTaskIDs[name] = []string{taskID}
+				tg.artifactOutputs[name] = []string{outputPath}
+				tg.artifactTaskIDs[name] = []string{taskID}
 			}
 			// Register output path -> task ID mapping for dependency lookup
-			outputToTaskID[outputPath] = taskID
+			tg.outputToTaskID[outputPath] = taskID
 
 			log.Printf("Generated template task: %s -> %s", templatePath, outputPath)
 
@@ -1109,12 +1102,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				// Create mkdir prefix
 				var fullCommand string
 				if len(resolvedOutputs) > 0 {
-					outputFileDir := filepath.Dir(resolvedOutputs[0])
-					if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-						fullCommand = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputFileDir, outputFileDir, command)
-					} else {
-						fullCommand = fmt.Sprintf("mkdir -p %s && %s", outputFileDir, command)
-					}
+					fullCommand = tg.prependMkdir(command, resolvedOutputs[0])
 				} else {
 					fullCommand = command
 				}
@@ -1128,28 +1116,22 @@ func (tg *TaskGenerator) generateGenerateTasks(
 					[]string{},
 					fullCommand,
 				)
-				task.Platform = tg.Platform
-				task.Architecture = tg.Architecture
-				task.Configuration = tg.Configuration
-				task.Toolchain = toolName
-				task.EstimatedTime = 0.5
-				task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10}
-				task.CacheKey = task.CalculateCacheKey()
+				tg.finalizeTask(&task, toolName, 0.5, ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10})
 
 				tasks = append(tasks, &task)
 				artifactOutputPaths = append(artifactOutputPaths, resolvedOutputs...)
 				artifactTaskIDList = append(artifactTaskIDList, taskID)
 				// Register output path -> task ID mapping for dependency lookup
 				for _, outputPath := range resolvedOutputs {
-					outputToTaskID[outputPath] = taskID
+					tg.outputToTaskID[outputPath] = taskID
 				}
 				log.Printf("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
 			}
 
 			// Register artifact outputs and task IDs
 			if name != "" {
-				artifactOutputs[name] = artifactOutputPaths
-				artifactTaskIDs[name] = artifactTaskIDList
+				tg.artifactOutputs[name] = artifactOutputPaths
+				tg.artifactTaskIDs[name] = artifactTaskIDList
 			}
 		}
 	}
@@ -1176,9 +1158,6 @@ func (tg *TaskGenerator) getProjectName(config map[string]any) string {
 	}
 	return "unknown"
 }
-
-// stagingTaskInfo tracks staging task IDs for install dependencies
-var stagingTasksByName = make(map[string][]string)
 
 // generateStagingTasks generates tasks to populate a staging area using hierarchical folder structure
 func (tg *TaskGenerator) generateStagingTasks(
@@ -1252,7 +1231,7 @@ func (tg *TaskGenerator) generateStagingTasks(
 	}
 
 	// Register staging tasks for install dependencies
-	stagingTasksByName[stagingName] = stagingTaskIDs
+	tg.stagingTasksByName[stagingName] = stagingTaskIDs
 	log.Printf("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
 
 	return tasks, nil
@@ -1368,8 +1347,8 @@ func (tg *TaskGenerator) processStagingContents(
 				}
 
 				// Get artifact outputs and their producing task IDs
-				outputs := artifactOutputs[artifactName]
-				taskIDs := artifactTaskIDs[artifactName]
+				outputs := tg.artifactOutputs[artifactName]
+				taskIDs := tg.artifactTaskIDs[artifactName]
 				if len(outputs) == 0 {
 					log.Printf("WARNING: artifact '%s' has no outputs for staging", artifactName)
 					continue
@@ -1438,7 +1417,7 @@ func (tg *TaskGenerator) processStagingContents(
 						destPath := filepath.Join(folderPath, filepath.Base(match))
 						// Check if this file is produced by a task and add dependency if so
 						var deps []string
-						if taskID := outputToTaskID[match]; taskID != "" {
+						if taskID := tg.outputToTaskID[match]; taskID != "" {
 							deps = []string{taskID}
 						}
 						task := tg.createSymlinkOrCopyTask(match, destPath, useSymlink, isWindows, deps)
@@ -1451,7 +1430,7 @@ func (tg *TaskGenerator) processStagingContents(
 					destPath := filepath.Join(folderPath, filepath.Base(sourcePattern))
 					// Check if this file is produced by a task and add dependency if so
 					var deps []string
-					if taskID := outputToTaskID[sourcePattern]; taskID != "" {
+					if taskID := tg.outputToTaskID[sourcePattern]; taskID != "" {
 						deps = []string{taskID}
 					}
 					task := tg.createSymlinkOrCopyTask(sourcePattern, destPath, useSymlink, isWindows, deps)
@@ -1743,7 +1722,7 @@ func (tg *TaskGenerator) generateInstallTasks(
 
 		// Dependencies: all staging tasks for the referenced staging area
 		var dependencies []string
-		if stagingTaskIDs, ok := stagingTasksByName[stagingName]; ok {
+		if stagingTaskIDs, ok := tg.stagingTasksByName[stagingName]; ok {
 			dependencies = stagingTaskIDs
 		}
 
@@ -1920,8 +1899,8 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 
 			// Register artifact outputs for staging
 			if artifactName != "" && len(artifactOutputPaths) > 0 {
-				artifactOutputs[artifactName] = artifactOutputPaths
-				artifactTaskIDs[artifactName] = artifactTaskIDList
+				tg.artifactOutputs[artifactName] = artifactOutputPaths
+				tg.artifactTaskIDs[artifactName] = artifactTaskIDList
 				log.Printf("Registered copy artifact '%s' with %d outputs", artifactName, len(artifactOutputPaths))
 			}
 
