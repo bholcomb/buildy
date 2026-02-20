@@ -19,14 +19,41 @@ toolchain:
   tools:
     cargo_build:
       action: build
-      command: "cargo build {release_flag} --target-dir {output_dir} {features} {bin_flag}"
+      command: "cargo build ${release_flag} ${lib_flag} --target-dir ${output_dir} ${features} ${bin_flag}"
       input_extensions: [".rs"]
       output_extension: ""
-      output_pattern: "{name}"
+      output_pattern: "${name}"
       flags:
         common: []
         debug: []
         release: ["--release"]
+      
+      # Data-driven command parameter definitions
+      command_params:
+        release_flag:
+          sources: ["tool.flags.${config}"]
+          match: "--release"
+          format: "${value}"
+          optional: true
+        lib_flag:
+          sources: ["tool_params.crate_type"]
+          format: "--lib"
+          optional: true
+        features:
+          sources: ["tool_params.features", "item.features"]
+          format: "--features ${value}"
+          join: ","
+          optional: true
+        bin_flag:
+          sources: ["tool_params.bin", "item.bin"]
+          format: "--bin ${value}"
+          optional: true
+      
+      # Files to track for cache invalidation
+      manifest_files:
+        - "Cargo.toml"
+        - "Cargo.lock"
+      
       supports:
         features: true
         features_flag: "--features"

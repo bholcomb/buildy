@@ -8,34 +8,34 @@ build_system:
   
   phases:
     configure:
-      command: "./configure --prefix={install_dir} {args}"
-      working_dir: "{source_dir}"
+      command: "./configure --prefix=${install_dir} ${args}"
+      working_dir: "${source_dir}"
       required: true
     
     build:
-      command: "make -j{jobs}"
-      working_dir: "{source_dir}"
+      command: "make -j${jobs}"
+      working_dir: "${source_dir}"
       required: true
     
     test:
       command: "make check"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     install:
       command: "make install"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     clean:
       command: "make clean"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
   
   output:
     include_patterns:
-      - "{install_dir}/include"
-      - "{source_dir}/include"
+      - "${install_dir}/include"
+      - "${source_dir}/include"
     lib_patterns:
-      - "{install_dir}/lib"
-      - "{source_dir}/.libs"
+      - "${install_dir}/lib"
+      - "${source_dir}/.libs"

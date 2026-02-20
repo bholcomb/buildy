@@ -207,6 +207,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.Configuration,
 		toolchainName,
 		existingTasks,
+		tg.VarEnv,
 	)
 	if err != nil {
 		return nil, err
@@ -742,6 +743,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 
 			// Add command-specific variables to the iteration environment
 			iterVarEnv.SetVariable("output", resolvedOutput, "transform-command")
+			iterVarEnv.SetVariable("input", inputFile, "transform-command")
 			
 			// Add toolchain variables to the environment
 			if toolchain != nil && toolchain.Variables != nil {
@@ -750,14 +752,6 @@ func (tg *TaskGenerator) generateTransformTasks(
 				}
 			}
 
-			// Resolve command using VarEnv (handles ${var} syntax)
-			command = iterVarEnv.ResolveString(command, nil, 10)
-			
-			// Also handle {var} syntax used in tool commands
-			command = strings.ReplaceAll(command, "{input}", inputFile)
-			command = strings.ReplaceAll(command, "{output}", resolvedOutput)
-			command = strings.ReplaceAll(command, "{output_dir}", outputFileDir)
-
 			// Add flags from tool configuration
 			flagsStr := ""
 			if flags, ok := tool.Flags[tg.Configuration]; ok {
@@ -765,24 +759,21 @@ func (tg *TaskGenerator) generateTransformTasks(
 			} else if flags, ok := tool.Flags["common"]; ok {
 				flagsStr = strings.Join(flags, " ")
 			}
-			command = strings.ReplaceAll(command, "{flags}", flagsStr)
+			iterVarEnv.SetVariable("flags", flagsStr, "transform-command")
 
 			// Add user-provided args
+			argsStr := ""
 			if len(args) > 0 {
-				argsStr := strings.Join(args, " ")
-				// If command has {args} placeholder, substitute it; otherwise append
-				if strings.Contains(command, "{args}") {
-					command = strings.ReplaceAll(command, "{args}", argsStr)
-				} else {
-					command = command + " " + argsStr
-				}
-			} else {
-				command = strings.ReplaceAll(command, "{args}", "")
+				argsStr = strings.Join(args, " ")
 			}
+			iterVarEnv.SetVariable("args", argsStr, "transform-command")
 
-			// Clean up any remaining empty placeholders
-			command = strings.ReplaceAll(command, "{defines}", "")
-			command = strings.ReplaceAll(command, "{includes}", "")
+			// Set empty placeholders for defines/includes (handled by CommandBuilder for compiled code)
+			iterVarEnv.SetVariable("defines", "", "transform-command")
+			iterVarEnv.SetVariable("includes", "", "transform-command")
+
+			// Resolve command using VarEnv (handles all ${var} syntax)
+			command = iterVarEnv.ResolveString(command, nil, 10)
 
 			// Create mkdir prefix for output directory
 			var fullCommand string
@@ -1088,31 +1079,32 @@ func (tg *TaskGenerator) generateGenerateTasks(
 					iterVarEnv.SetVariable("output", resolvedOutputs[0], "generate-iteration")
 				}
 
-				// Build command - resolve ${var} syntax through VarEnv
-				command := tool.GetCommand(tg.Platform)
-				command = iterVarEnv.ResolveString(command, nil, 10)
-
-				// Handle {var} syntax used in tool commands
-				command = strings.ReplaceAll(command, "{input}", inputFile)
+				// Add command-specific variables to the iteration environment
+				iterVarEnv.SetVariable("input", inputFile, "generate-command")
 				if len(resolvedOutputs) > 0 {
-					command = strings.ReplaceAll(command, "{output}", resolvedOutputs[0])
-					command = strings.ReplaceAll(command, "{output_dir}", filepath.Dir(resolvedOutputs[0]))
+					iterVarEnv.SetVariable("output", resolvedOutputs[0], "generate-command")
+					iterVarEnv.SetVariable("output_dir", filepath.Dir(resolvedOutputs[0]), "generate-command")
 				}
-				command = strings.ReplaceAll(command, "{gen_dir}", genDir)
+				iterVarEnv.SetVariable("gen_dir", genDir, "generate-command")
 
 				// Add args - resolve variables in args too
 				argsStr := strings.Join(args, " ")
 				argsStr = iterVarEnv.ResolveString(argsStr, nil, 10)
-				if strings.Contains(command, "{args}") {
-					command = strings.ReplaceAll(command, "{args}", argsStr)
-				} else if argsStr != "" {
+				iterVarEnv.SetVariable("args", argsStr, "generate-command")
+
+				// Set empty placeholders
+				iterVarEnv.SetVariable("flags", "", "generate-command")
+				iterVarEnv.SetVariable("defines", "", "generate-command")
+				iterVarEnv.SetVariable("includes", "", "generate-command")
+
+				// Build command - resolve all ${var} syntax through VarEnv
+				command := tool.GetCommand(tg.Platform)
+				command = iterVarEnv.ResolveString(command, nil, 10)
+				
+				// Handle args appending if no placeholder was present
+				if !strings.Contains(tool.GetCommand(tg.Platform), "${args}") && argsStr != "" {
 					command = command + " " + argsStr
 				}
-
-				// Clean up placeholders
-				command = strings.ReplaceAll(command, "{flags}", "")
-				command = strings.ReplaceAll(command, "{defines}", "")
-				command = strings.ReplaceAll(command, "{includes}", "")
 
 				// Create mkdir prefix
 				var fullCommand string

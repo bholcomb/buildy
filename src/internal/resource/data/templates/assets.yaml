@@ -9,8 +9,8 @@ templates:
       - name: convert
         action: convert
         for_each: source
-        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
-        inputs: ["{source}"]
+        output: "${item.output_dir}/${source_stem}${tool.output_ext}"
+        inputs: ["${source}"]
         tool_params:
-          extra_flags: "{item.flags}"
+          extra_flags: "${item.flags}"
 

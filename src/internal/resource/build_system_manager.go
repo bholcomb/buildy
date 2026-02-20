@@ -338,11 +338,11 @@ func (bsm *BuildSystemManager) substituteVariables(
 	argsStr := strings.Join(allArgs, " ")
 
 	result := template
-	result = strings.ReplaceAll(result, "{source_dir}", sourceDir)
-	result = strings.ReplaceAll(result, "{build_dir}", buildDir)
-	result = strings.ReplaceAll(result, "{install_dir}", installDir)
-	result = strings.ReplaceAll(result, "{jobs}", fmt.Sprintf("%d", jobs))
-	result = strings.ReplaceAll(result, "{args}", argsStr)
+	result = strings.ReplaceAll(result, "${source_dir}", sourceDir)
+	result = strings.ReplaceAll(result, "${build_dir}", buildDir)
+	result = strings.ReplaceAll(result, "${install_dir}", installDir)
+	result = strings.ReplaceAll(result, "${jobs}", fmt.Sprintf("%d", jobs))
+	result = strings.ReplaceAll(result, "${args}", argsStr)
 
 	return result
 }

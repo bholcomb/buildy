@@ -18,7 +18,7 @@ toolchain:
     # GLSL shader compilation
     compile:
       action: compile
-      command: "glslc {flags} {defines} {includes} {input} -o {output}"
+      command: "glslc ${flags} ${defines} ${includes} ${input} -o ${output}"
       input_extensions: [".vert", ".frag", ".comp", ".geom", ".tesc", ".tese", ".glsl"]
       output_extension: ".spv"
       flags:

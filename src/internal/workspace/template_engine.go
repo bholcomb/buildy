@@ -164,23 +164,7 @@ func (bte *BuildTemplateEngine) loadTemplateFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
-
-	var rawData map[string]any
-	if err := yaml.Unmarshal(data, &rawData); err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	if templates, ok := rawData["templates"].(map[string]any); ok {
-		// Merge templates into the engine's template map
-		for name, tmpl := range templates {
-			if _, exists := bte.templates[name]; exists {
-				log.Printf("WARNING: Template '%s' in %s overrides existing template", name, filepath.Base(filePath))
-			}
-			bte.templates[name] = tmpl
-		}
-	}
-
-	return nil
+	return bte.loadTemplateData(data, filePath)
 }
 
 // GetTemplate gets a template by name
@@ -338,6 +322,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
 	existingTasks []*BuildTask,
+	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
 	if existingTasks == nil {
 		existingTasks = []*BuildTask{}
@@ -355,7 +340,33 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	tasks := []*BuildTask{}
 	stepResults := make(map[string]map[string]any)
 
-	// Build context for template variable resolution
+	// Create a child VarEnv for this template expansion with item/config context
+	templateEnv := varEnv.CreateChild()
+	templateEnv.PushScope("template")
+	
+	// Add item config variables (accessible as ${item.name}, ${item.sources}, etc.)
+	for key, val := range itemConfig {
+		if strVal, ok := val.(string); ok {
+			templateEnv.SetVariable("item."+key, strVal, "item-config")
+		}
+	}
+	
+	// Add merged config variables (accessible as ${config.defines}, ${config.cpp_standard}, etc.)
+	for key, val := range mergedConfig {
+		if strVal, ok := val.(string); ok {
+			templateEnv.SetVariable("config."+key, strVal, "merged-config")
+		}
+	}
+	
+	// Module name for unique object paths
+	module := "workspace"
+	if m, ok := itemConfig["module"].(string); ok {
+		module = m
+	}
+	templateEnv.SetVariable("module", module, "template")
+	
+	// Keep legacy context map for step reference resolution (compile.outputs, etc.)
+	// This is structural, not variable resolution
 	context := map[string]any{
 		"item":          itemConfig,
 		"config":        mergedConfig,
@@ -363,13 +374,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		"platform":      platform,
 		"architecture":  architecture,
 		"configuration": configuration,
-	}
-
-	// Add module name for unique object paths (prevents collisions in multi-module builds)
-	if module, ok := itemConfig["module"].(string); ok {
-		context["module"] = module
-	} else {
-		context["module"] = "workspace"
+		"module":        module,
 	}
 
 	// Get steps
@@ -410,12 +415,14 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 				step, context, itemConfig, mergedConfig, outputDir,
 				setupTaskID, idGen, toolMatcher, commandBuilder,
 				platform, architecture, configuration, toolchain,
+				templateEnv,
 			)
 		} else if action == "build" {
 			// Generate single build task (single-step compile+link like Go)
 			stepTask, err = bte.expandBuildStep(
 				step, context, itemConfig, mergedConfig, outputDir,
 				idGen, toolMatcher, platform, architecture, configuration, toolchain,
+				templateEnv,
 			)
 		} else {
 			// Generate single link task
@@ -423,6 +430,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 				step, context, stepResults, itemConfig, mergedConfig,
 				outputDir, idGen, toolMatcher, commandBuilder,
 				platform, architecture, configuration, toolchain, existingTasks,
+				templateEnv,
 			)
 		}
 
@@ -472,6 +480,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
+	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
 
@@ -516,32 +525,32 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 				action, source, filepath.Ext(source))
 		}
 
-		// Build context for this iteration
+		// Create step context with tool info
 		sourceStem := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
-		iterContext := map[string]any{}
-		for k, v := range context {
-			iterContext[k] = v
-		}
-		iterContext["source"] = source
-		iterContext["source_stem"] = sourceStem
-		iterContext["tool"] = map[string]any{
-			"output_ext":     tool.OutputExtension,
-			"output_pattern": tool.OutputPattern,
-		}
+		sc := newStepContext(context, varEnv, "for_each", struct {
+			OutputExt     string
+			OutputPattern string
+		}{tool.OutputExtension, tool.OutputPattern})
+		
+		// Add source-specific variables
+		sc.VarEnv.SetVariable("source", source, "for_each")
+		sc.VarEnv.SetVariable("source_stem", sourceStem, "for_each")
+		sc.Context["source"] = source
+		sc.Context["source_stem"] = sourceStem
 
-		// Resolve output path
+		// Resolve output path using VarEnv
 		outputTemplate := ""
 		if out, ok := step["output"].(string); ok {
 			outputTemplate = out
 		}
-		output := bte.resolveTemplateString(outputTemplate, iterContext)
+		output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
 
 		// Get tool parameters
 		toolParams := map[string]any{}
 		if tp, ok := step["tool_params"].(map[string]any); ok {
 			toolParams = tp
 		}
-		resolvedParams := bte.resolveToolParams(toolParams, iterContext)
+		resolvedParams := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
 
 		// Convert params to expected format
 		defines, includeDirs, extraFlags, kwargs := convertResolvedParams(resolvedParams)
@@ -603,6 +612,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
 	existingTasks []*BuildTask,
+	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
 	action := "link"
 	if a, ok := step["action"].(string); ok {
@@ -625,31 +635,30 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 			"Check that your toolchain defines a link tool for this output type", action, outputType)
 	}
 
-	// Update context with tool info
-	stepContext := map[string]any{}
-	for k, v := range context {
-		stepContext[k] = v
-	}
-	for k, v := range stepResults {
-		stepContext[k] = v
-	}
-
+	// Get item name for output pattern
 	itemName := "output"
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
+	resolvedOutputPattern := strings.ReplaceAll(tool.OutputPattern, "${name}", itemName)
 
-	stepContext["tool"] = map[string]any{
-		"output_ext":     tool.OutputExtension,
-		"output_pattern": strings.ReplaceAll(tool.OutputPattern, "{name}", itemName),
+	// Create step context with tool info
+	sc := newStepContext(context, varEnv, "link_step", struct {
+		OutputExt     string
+		OutputPattern string
+	}{tool.OutputExtension, resolvedOutputPattern})
+	
+	// Add step results to context for reference resolution
+	for k, v := range stepResults {
+		sc.Context[k] = v
 	}
 
-	// Resolve output path
+	// Resolve output path using VarEnv
 	outputTemplate := ""
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := bte.resolveTemplateString(outputTemplate, stepContext)
+	output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
 
 	// Collect inputs from previous step
 	inputsRef := ""
@@ -659,21 +668,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	inputs := bte.resolveReference(inputsRef, stepResults)
 
 	// Convert inputs to string slice
-	inputStrs := []string{}
-	switch v := inputs.(type) {
-	case []string:
-		inputStrs = v
-	case []any:
-		for _, item := range v {
-			if str, ok := item.(string); ok {
-				inputStrs = append(inputStrs, str)
-			}
-		}
-	case string:
-		if v != "" {
-			inputStrs = []string{v}
-		}
-	}
+	inputStrs := toStringSlice(inputs)
 
 	// Filter inputs to only include files matching tool's input extensions
 	filteredInputs := []string{}
@@ -701,20 +696,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	dependencies := []string{}
 	for _, depRef := range dependsOnRef {
 		resolvedDeps := bte.resolveReference(depRef, stepResults)
-		switch v := resolvedDeps.(type) {
-		case []string:
-			dependencies = append(dependencies, v...)
-		case []any:
-			for _, item := range v {
-				if str, ok := item.(string); ok {
-					dependencies = append(dependencies, str)
-				}
-			}
-		case string:
-			if v != "" {
-				dependencies = append(dependencies, v)
-			}
-		}
+		dependencies = append(dependencies, toStringSlice(resolvedDeps)...)
 	}
 
 	// Handle library dependencies for executables
@@ -801,7 +783,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if tp, ok := step["tool_params"].(map[string]any); ok {
 		toolParams = tp
 	}
-	resolvedParams := bte.resolveToolParams(toolParams, stepContext)
+	resolvedParams := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
 
 	// Merge library linking info (prepend dependency libs, append item libs)
 	if len(libDirs) > 0 {
@@ -918,6 +900,7 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	platform, architecture, configuration, toolchain string,
+	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
 	// Find build tool
 	tool := toolMatcher.FindBuildTool()
@@ -931,28 +914,25 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
+	resolvedOutputPattern := strings.ReplaceAll(tool.OutputPattern, "${name}", itemName)
 
-	// Build step context
-	stepContext := map[string]any{}
-	for k, v := range context {
-		stepContext[k] = v
-	}
-	stepContext["tool"] = map[string]any{
-		"output_ext":     tool.OutputExtension,
-		"output_pattern": strings.ReplaceAll(tool.OutputPattern, "{name}", itemName),
-	}
+	// Create step context with tool info
+	sc := newStepContext(context, varEnv, "build_step", struct {
+		OutputExt     string
+		OutputPattern string
+	}{tool.OutputExtension, resolvedOutputPattern})
 
-	// Resolve output path from template
+	// Resolve output path from template using VarEnv
 	outputTemplate := ""
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := bte.resolveTemplateString(outputTemplate, stepContext)
+	output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
 
 	// Get working directory (module path)
 	workingDir := ""
 	if wd, ok := step["working_dir"].(string); ok {
-		workingDir = bte.resolveTemplateString(wd, stepContext)
+		workingDir = sc.VarEnv.ResolveString(wd, nil, 10)
 	}
 	if workingDir == "" {
 		if path, ok := itemConfig["path"].(string); ok {
@@ -963,137 +943,29 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	// Get tool parameters from template step
 	toolParams := map[string]any{}
 	if tp, ok := step["tool_params"].(map[string]any); ok {
-		toolParams = bte.resolveToolParams(tp, stepContext)
-	}
-
-	// Build flags from tool configuration and item config
-	flags := []string{}
-
-	// Add configuration-specific flags from tool
-	if configFlags, ok := tool.Flags[configuration]; ok {
-		flags = append(flags, configFlags...)
-	}
-	if commonFlags, ok := tool.Flags["common"]; ok {
-		flags = append(flags, commonFlags...)
+		toolParams = bte.resolveToolParams(tp, sc.Context, sc.VarEnv)
 	}
 
 	// Build the command using tool's command template
 	command := tool.Command
 
 	// Replace common template variables
-	command = strings.ReplaceAll(command, "{output}", output)
+	command = strings.ReplaceAll(command, "${output}", output)
 	if outDir, ok := mergedConfig["output_dir"].(string); ok {
-		command = strings.ReplaceAll(command, "{output_dir}", outDir)
+		command = strings.ReplaceAll(command, "${output_dir}", outDir)
 	}
-	command = strings.ReplaceAll(command, "{input}", ".")
+	command = strings.ReplaceAll(command, "${input}", ".")
 
-	// Handle release_flag (for Rust/Cargo) - use configuration flags
-	releaseFlag := ""
-	if configuration == "release" {
-		for _, flag := range flags {
-			if flag == "--release" {
-				releaseFlag = "--release"
-				break
-			}
+	// Resolve command parameters using data-driven approach
+	if len(tool.CommandParams) > 0 {
+		// Use the new data-driven parameter resolution
+		resolvedParams := tool.ResolveCommandParams(toolParams, itemConfig, configuration)
+		for paramName, paramValue := range resolvedParams {
+			command = strings.ReplaceAll(command, "${"+paramName+"}", paramValue)
 		}
 	}
-	command = strings.ReplaceAll(command, "{release_flag}", releaseFlag)
 
-	// Handle features (for Rust)
-	features := ""
-	if f, ok := toolParams["features"].(string); ok && f != "" && !strings.HasPrefix(f, "{") {
-		features = "--features " + f
-	} else if f, ok := itemConfig["features"].(string); ok && f != "" {
-		features = "--features " + f
-	} else if fList, ok := itemConfig["features"].([]any); ok && len(fList) > 0 {
-		featureStrs := []string{}
-		for _, feat := range fList {
-			if str, ok := feat.(string); ok {
-				featureStrs = append(featureStrs, str)
-			}
-		}
-		if len(featureStrs) > 0 {
-			features = "--features " + strings.Join(featureStrs, ",")
-		}
-	}
-	command = strings.ReplaceAll(command, "{features}", features)
-
-	// Handle bin_flag (for Rust - specific binary in workspace)
-	binFlag := ""
-	if b, ok := toolParams["bin"].(string); ok && b != "" && !strings.HasPrefix(b, "{") {
-		binFlag = "--bin " + b
-	} else if b, ok := itemConfig["bin"].(string); ok && b != "" {
-		binFlag = "--bin " + b
-	}
-	command = strings.ReplaceAll(command, "{bin_flag}", binFlag)
-
-	// Handle build_tags (for Go)
-	buildTags := ""
-	if tags, ok := toolParams["build_tags"].([]string); ok && len(tags) > 0 {
-		buildTags = "-tags " + strings.Join(tags, ",")
-	} else if tags, ok := itemConfig["build_tags"].([]any); ok && len(tags) > 0 {
-		tagStrs := []string{}
-		for _, t := range tags {
-			if str, ok := t.(string); ok {
-				tagStrs = append(tagStrs, str)
-			}
-		}
-		if len(tagStrs) > 0 {
-			buildTags = "-tags " + strings.Join(tagStrs, ",")
-		}
-	}
-	command = strings.ReplaceAll(command, "{build_tags}", buildTags)
-
-	// Handle ldflags (for Go)
-	// ldflags can contain shell command substitutions like $(date ...) and variables like ${config}
-	ldflags := ""
-	var lfStrs []string
-	if lf, ok := toolParams["ldflags"].([]string); ok && len(lf) > 0 {
-		lfStrs = lf
-	} else if lf, ok := itemConfig["ldflags"].([]any); ok && len(lf) > 0 {
-		for _, f := range lf {
-			if str, ok := f.(string); ok {
-				lfStrs = append(lfStrs, str)
-			}
-		}
-	}
-	if len(lfStrs) > 0 {
-		// Replace ${config} with actual configuration value
-		for i, lf := range lfStrs {
-			lfStrs[i] = strings.ReplaceAll(lf, "${config}", configuration)
-		}
-		// Use double quotes to allow shell command substitution ($(date ...), $(git ...))
-		ldflags = "-ldflags \"" + strings.Join(lfStrs, " ") + "\""
-	}
-	command = strings.ReplaceAll(command, "{ldflags}", ldflags)
-
-	// Handle gcflags (for Go - use tool's configuration flags if not specified)
-	gcflags := ""
-	if gf, ok := toolParams["gcflags"].(string); ok && gf != "" {
-		gcflags = gf
-	} else {
-		// Use configuration-specific flags from tool
-		for _, flag := range flags {
-			if strings.HasPrefix(flag, "-gcflags") {
-				// Quote the value if it contains spaces
-				// Convert -gcflags=all=-N -l to -gcflags='all=-N -l'
-				if strings.Contains(flag, " ") && strings.Contains(flag, "=") {
-					parts := strings.SplitN(flag, "=", 2)
-					if len(parts) == 2 {
-						gcflags = parts[0] + "='" + parts[1] + "'"
-					} else {
-						gcflags = flag
-					}
-				} else {
-					gcflags = flag
-				}
-				break
-			}
-		}
-	}
-	command = strings.ReplaceAll(command, "{gcflags}", gcflags)
-
-	// Clean up extra spaces
+	// Clean up extra spaces from empty optional parameters
 	command = strings.Join(strings.Fields(command), " ")
 
 	// Prepend cd if working directory is specified
@@ -1101,22 +973,12 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		command = fmt.Sprintf("cd %s && %s", workingDir, command)
 	}
 
-	// Collect inputs for cache invalidation based on tool type
+	// Collect inputs for cache invalidation from manifest_files
 	taskInputs := []TaskInput{}
-	if workingDir != "" {
-		// Go: go.mod and go.sum
-		if strings.Contains(tool.Name, "go") {
-			goModPath := filepath.Join(workingDir, "go.mod")
-			goSumPath := filepath.Join(workingDir, "go.sum")
-			taskInputs = append(taskInputs, NewTaskInput(goModPath))
-			taskInputs = append(taskInputs, NewTaskInput(goSumPath))
-		}
-		// Rust: Cargo.toml and Cargo.lock
-		if strings.Contains(tool.Name, "cargo") {
-			cargoTomlPath := filepath.Join(workingDir, "Cargo.toml")
-			cargoLockPath := filepath.Join(workingDir, "Cargo.lock")
-			taskInputs = append(taskInputs, NewTaskInput(cargoTomlPath))
-			taskInputs = append(taskInputs, NewTaskInput(cargoLockPath))
+	if workingDir != "" && len(tool.ManifestFiles) > 0 {
+		for _, manifestFile := range tool.ManifestFiles {
+			manifestPath := filepath.Join(workingDir, manifestFile)
+			taskInputs = append(taskInputs, NewTaskInput(manifestPath))
 		}
 	}
 

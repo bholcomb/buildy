@@ -17,7 +17,7 @@ toolchain:
     # Texture compression/conversion
     convert:
       action: convert
-      command: "compressonatorcli {input} {output} {flags}"
+      command: "compressonatorcli ${input} ${output} ${flags}"
       input_extensions: [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr", ".hdr"]
       output_extension: ".dds"
       flags:

@@ -18,7 +18,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "cl.exe {dep_flags} {flags} {defines} {includes} /c {input} /Fo{output}"
+      command: "cl.exe ${dep_flags} ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
@@ -31,12 +31,12 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
-        dependencies: "/sourceDependencies {dep_file}"
+        dependencies: "/sourceDependencies ${dep_file}"
     
     # C++ compilation
     cpp_compile:
       action: compile
-      command: "cl.exe {dep_flags} /std:{std} {flags} {defines} {includes} /c {input} /Fo{output}"
+      command: "cl.exe ${dep_flags} /std:${std} ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".obj"
       flags:
@@ -49,16 +49,16 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
-        dependencies: "/sourceDependencies {dep_file}"
+        dependencies: "/sourceDependencies ${dep_file}"
         std: true
     
     # Shared library linking (DLL)
     link_shared_library:
       action: link
-      command: "link.exe /DLL {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
+      command: "link.exe /DLL ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output}"
       input_extensions: [".obj"]
       output_extension: ".dll"
-      output_pattern: "{name}.dll"
+      output_pattern: "${name}.dll"
       flags:
         common: ["/nologo"]
         debug: ["/DEBUG"]
@@ -73,10 +73,10 @@ toolchain:
     # Static library archiving
     link_static_library:
       action: link
-      command: "lib.exe {flags} {objects} /OUT:{output}"
+      command: "lib.exe ${flags} ${objects} /OUT:${output}"
       input_extensions: [".obj"]
       output_extension: ".lib"
-      output_pattern: "{name}.lib"
+      output_pattern: "${name}.lib"
       flags:
         common: ["/nologo"]
         debug: []
@@ -89,10 +89,10 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "link.exe {flags} {objects} {lib_dirs} {libs} /OUT:{output}"
+      command: "link.exe ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output}"
       input_extensions: [".obj"]
       output_extension: ".exe"
-      output_pattern: "{name}.exe"
+      output_pattern: "${name}.exe"
       flags:
         common: ["/nologo"]
         debug: ["/DEBUG"]

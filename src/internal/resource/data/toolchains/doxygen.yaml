@@ -18,10 +18,10 @@ toolchain:
     # Generate documentation from a Doxyfile
     generate_docs:
       action: generate
-      command: "doxygen {input}"
+      command: "doxygen ${input}"
       input_extensions: [".doxyfile", ".doxy", "Doxyfile"]
       output_extension: ""
-      output_pattern: "{name}"
+      output_pattern: "${name}"
       flags:
         common: []
         debug: []
@@ -34,12 +34,12 @@ toolchain:
     generate_docs_dir:
       action: generate
       command:
-        linux: "( cat {input} ; echo 'OUTPUT_DIRECTORY={output_dir}' ) | doxygen -"
-        macos: "( cat {input} ; echo 'OUTPUT_DIRECTORY={output_dir}' ) | doxygen -"
-        windows: "type {input} & echo OUTPUT_DIRECTORY={output_dir} | doxygen -"
+        linux: "( cat ${input} ; echo 'OUTPUT_DIRECTORY=${output_dir}' ) | doxygen -"
+        macos: "( cat ${input} ; echo 'OUTPUT_DIRECTORY=${output_dir}' ) | doxygen -"
+        windows: "type ${input} & echo OUTPUT_DIRECTORY=${output_dir} | doxygen -"
       input_extensions: [".doxyfile", ".doxy", "Doxyfile"]
       output_extension: ""
-      output_pattern: "{name}"
+      output_pattern: "${name}"
       flags:
         common: []
         debug: []
@@ -51,10 +51,10 @@ toolchain:
     # Generate default Doxyfile configuration
     generate_doxyfile:
       action: generate
-      command: "doxygen -g {output}"
+      command: "doxygen -g ${output}"
       input_extensions: []
       output_extension: ".doxyfile"
-      output_pattern: "{name}.doxyfile"
+      output_pattern: "${name}.doxyfile"
       flags:
         common: []
         debug: []

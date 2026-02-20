@@ -9,10 +9,10 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "{item.output_dir}/{source_stem}{tool.output_ext}"
-        inputs: ["{source}"]
+        output: "${item.output_dir}/${source_stem}${tool.output_ext}"
+        inputs: ["${source}"]
         tool_params:
-          defines: "{item.defines}"
-          include_dirs: "{item.include_dirs}"
-          extra_flags: "{item.flags}"
+          defines: "${item.defines}"
+          include_dirs: "${item.include_dirs}"
+          extra_flags: "${item.flags}"
 

@@ -17,7 +17,7 @@ toolchain:
     # Image conversion
     convert:
       action: convert
-      command: "convert {input} {flags} {output}"
+      command: "convert ${input} ${flags} ${output}"
       input_extensions: [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"]
       output_extension: ".png"
       flags:

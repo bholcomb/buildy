@@ -18,7 +18,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "x86_64-w64-mingw32-gcc {dep_flags} -std={std} {flags} {defines} {includes} -c {input} -o {output}"
+      command: "x86_64-w64-mingw32-gcc ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -31,16 +31,16 @@ toolchain:
         includes: true
         include_flag: "-I"
         pic: false
-        dependencies: "-MMD -MP -MF {dep_file}"
+        dependencies: "-MMD -MP -MF ${dep_file}"
         std: true
     
     # Shared library linking (DLL on Windows)
     link_shared_library:
       action: link
-      command: "x86_64-w64-mingw32-gcc -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "x86_64-w64-mingw32-gcc -shared ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ".dll"
-      output_pattern: "{name}.dll"
+      output_pattern: "${name}.dll"
       flags:
         common: []
         debug: []
@@ -55,10 +55,10 @@ toolchain:
     # Static library archiving
     link_static_library:
       action: link
-      command: "x86_64-w64-mingw32-ar rcs {output} {objects}"
+      command: "x86_64-w64-mingw32-ar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib{name}.a"
+      output_pattern: "lib${name}.a"
       flags:
         common: []
         debug: []
@@ -71,10 +71,10 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "x86_64-w64-mingw32-gcc {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "x86_64-w64-mingw32-gcc ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ".exe"
-      output_pattern: "{name}.exe"
+      output_pattern: "${name}.exe"
       flags:
         common: []
         debug: []

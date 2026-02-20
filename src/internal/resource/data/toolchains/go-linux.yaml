@@ -19,14 +19,43 @@ toolchain:
   tools:
     go_build:
       action: build
-      command: "go build -o {output} {build_tags} {ldflags} {gcflags} {input}"
+      command: "go build ${buildmode} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
       input_extensions: [".go"]
       output_extension: ""
-      output_pattern: "{name}"
+      output_pattern: "${name}"
       flags:
         common: []
         debug: ["-gcflags=all=-N -l"]
         release: ["-ldflags=-s -w", "-trimpath"]
+      
+      # Data-driven command parameter definitions
+      command_params:
+        buildmode:
+          sources: ["tool_params.buildmode", "item.buildmode"]
+          format: "-buildmode=${value}"
+          optional: true
+        build_tags:
+          sources: ["tool_params.build_tags", "item.build_tags"]
+          format: "-tags ${value}"
+          join: ","
+          optional: true
+        ldflags:
+          sources: ["tool_params.ldflags", "item.ldflags"]
+          format: "-ldflags \"${value}\""
+          join: " "
+          resolve_variables: true
+          optional: true
+        gcflags:
+          sources: ["tool_params.gcflags", "tool.flags.${config}"]
+          format: "${value}"
+          quote_if_spaces: true
+          optional: true
+      
+      # Files to track for cache invalidation
+      manifest_files:
+        - "go.mod"
+        - "go.sum"
+      
       supports:
         build_tags: true
         build_tags_flag: "-tags"
@@ -36,3 +65,5 @@ toolchain:
         gcflags_flag: "-gcflags"
         trimpath: true
         trimpath_flag: "-trimpath"
+        buildmode: true
+        buildmode_flag: "-buildmode"
