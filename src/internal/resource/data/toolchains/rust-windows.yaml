@@ -21,14 +21,39 @@ toolchain:
   tools:
     cargo_build:
       action: build
-      command: "cargo build {release_flag} --target x86_64-pc-windows-gnu --target-dir {output_dir} {features} {bin_flag}"
+      command: "cargo build ${release_flag} ${lib_flag} --target x86_64-pc-windows-gnu --target-dir ${output_dir} ${features} ${bin_flag}"
       input_extensions: [".rs"]
       output_extension: ".exe"
-      output_pattern: "{name}.exe"
+      output_pattern: "${name}.exe"
       flags:
         common: []
         debug: []
         release: ["--release"]
+      
+      command_params:
+        release_flag:
+          sources: ["tool.flags.${config}"]
+          match: "--release"
+          format: "${value}"
+          optional: true
+        lib_flag:
+          sources: ["tool_params.crate_type"]
+          format: "--lib"
+          optional: true
+        features:
+          sources: ["tool_params.features", "item.features"]
+          format: "--features ${value}"
+          join: ","
+          optional: true
+        bin_flag:
+          sources: ["tool_params.bin", "item.bin"]
+          format: "--bin ${value}"
+          optional: true
+      
+      manifest_files:
+        - "Cargo.toml"
+        - "Cargo.lock"
+      
       supports:
         features: true
         features_flag: "--features"

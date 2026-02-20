@@ -19,14 +19,35 @@ toolchain:
   tools:
     cargo_build:
       action: build
-      command: "cargo build {release_flag} --target wasm32-unknown-unknown --target-dir {output_dir} {features}"
+      command: "cargo build ${release_flag} ${lib_flag} --target wasm32-unknown-unknown --target-dir ${output_dir} ${features}"
       input_extensions: [".rs"]
       output_extension: ".wasm"
-      output_pattern: "{name}.wasm"
+      output_pattern: "${name}.wasm"
       flags:
         common: []
         debug: []
         release: ["--release"]
+      
+      command_params:
+        release_flag:
+          sources: ["tool.flags.${config}"]
+          match: "--release"
+          format: "${value}"
+          optional: true
+        lib_flag:
+          sources: ["tool_params.crate_type"]
+          format: "--lib"
+          optional: true
+        features:
+          sources: ["tool_params.features", "item.features"]
+          format: "--features ${value}"
+          join: ","
+          optional: true
+      
+      manifest_files:
+        - "Cargo.toml"
+        - "Cargo.lock"
+      
       supports:
         features: true
         features_flag: "--features"

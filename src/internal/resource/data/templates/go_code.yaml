@@ -25,12 +25,12 @@ templates:
     steps:
       - name: build
         action: build
-        output: "{output_dir}/bin/{tool.output_pattern}"
-        inputs: ["{item.path}"]
-        working_dir: "{item.path}"
+        output: "${output_dir}/bin/${tool.output_pattern}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
         tool_params:
-          build_tags: "{item.build_tags}"
-          ldflags: "{item.ldflags}"
+          build_tags: "${item.build_tags}"
+          ldflags: "${item.ldflags}"
 
   # Go shared library: C-compatible shared library using buildmode=c-shared
   # Use this for C/C++ interop - exports functions with //export directives
@@ -52,10 +52,10 @@ templates:
     steps:
       - name: build
         action: build
-        output: "{output_dir}/lib/{tool.output_pattern}"
-        inputs: ["{item.path}"]
-        working_dir: "{item.path}"
+        output: "${output_dir}/lib/${tool.output_pattern}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
         tool_params:
-          build_tags: "{item.build_tags}"
-          ldflags: "{item.ldflags}"
+          build_tags: "${item.build_tags}"
+          ldflags: "${item.ldflags}"
           buildmode: "c-shared"

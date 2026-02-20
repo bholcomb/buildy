@@ -116,7 +116,7 @@ func (cb *CommandBuilder) BuildCommand(
 		}
 
 		templateVars["dep_file"] = depFile
-		templateVars["dep_flags"] = strings.ReplaceAll(depTemplate, "{dep_file}", depFile)
+		templateVars["dep_flags"] = strings.ReplaceAll(depTemplate, "${dep_file}", depFile)
 	} else {
 		templateVars["dep_flags"] = ""
 	}
@@ -131,7 +131,7 @@ func (cb *CommandBuilder) BuildCommand(
 	// Build command from template
 	command := tool.Command
 	for key, value := range templateVars {
-		placeholder := "{" + key + "}"
+		placeholder := "${" + key + "}"
 		command = strings.ReplaceAll(command, placeholder, value)
 	}
 
@@ -224,7 +224,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	// Build command
 	command := tool.Command
 	for key, value := range templateVars {
-		placeholder := "{" + key + "}"
+		placeholder := "${" + key + "}"
 		command = strings.ReplaceAll(command, placeholder, value)
 	}
 

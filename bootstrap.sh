@@ -41,5 +41,13 @@ else
     exit 1
 fi
 
+# Cross-compile for Windows x64
+echo "Cross-compiling for Windows x64..."
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+LDFLAGS="-X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -X main.BuildConfig=$CONFIG -s -w"
+(cd src && GOOS=windows GOARCH=amd64 go build -o ../bin/buildy.exe -ldflags "$LDFLAGS" .)
+echo "✓ Windows build complete: bin/buildy.exe"
+
 # Show version info
 ./bin/buildy --help 2>&1 | head -4

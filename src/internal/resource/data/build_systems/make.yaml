@@ -14,29 +14,29 @@ build_system:
       required: false
     
     build:
-      command: "make -j{jobs} {args}"
-      working_dir: "{source_dir}"
+      command: "make -j${jobs} ${args}"
+      working_dir: "${source_dir}"
       required: true
     
     test:
       command: "make test"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     install:
-      command: "make install PREFIX={install_dir}"
-      working_dir: "{source_dir}"
+      command: "make install PREFIX=${install_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     clean:
       command: "make clean"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
   
   output:
     include_patterns:
-      - "{source_dir}/include"
-      - "{source_dir}"
+      - "${source_dir}/include"
+      - "${source_dir}"
     lib_patterns:
-      - "{source_dir}"
-      - "{source_dir}/lib"
+      - "${source_dir}"
+      - "${source_dir}/lib"

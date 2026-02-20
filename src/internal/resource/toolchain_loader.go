@@ -242,7 +242,7 @@ func LoadToolchainConfigFromDict(configDict map[string]any) (*ToolchainConfig, e
 			tool := &Tool{
 				Name:            toolName,
 				Action:          "compile",
-				OutputPattern:   "{name}",
+				OutputPattern:   "${name}",
 				Flags:           make(map[string][]string),
 				Supports:        make(map[string]any),
 				InputExtensions: []string{},
@@ -329,9 +329,11 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 	tool := &Tool{
 		Name:            toolName,
 		Action:          "compile",
-		OutputPattern:   "{name}",
+		OutputPattern:   "${name}",
 		Flags:           make(map[string][]string),
 		Supports:        make(map[string]any),
+		CommandParams:   make(map[string]CommandParam),
+		ManifestFiles:   []string{},
 		InputExtensions: []string{},
 	}
 
@@ -399,5 +401,80 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 		tool.Supports = supportsData
 	}
 
+	// Parse command_params
+	if paramsData, ok := toolData["command_params"].(map[string]any); ok {
+		for paramName, paramDataRaw := range paramsData {
+			paramData, ok := paramDataRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			param := parseCommandParam(paramData)
+			tool.CommandParams[paramName] = param
+		}
+	}
+
+	// Parse manifest_files
+	if manifestData, ok := toolData["manifest_files"]; ok {
+		switch v := manifestData.(type) {
+		case string:
+			tool.ManifestFiles = []string{v}
+		case []any:
+			for _, f := range v {
+				if fStr, ok := f.(string); ok {
+					tool.ManifestFiles = append(tool.ManifestFiles, fStr)
+				}
+			}
+		}
+	}
+
 	return tool
+}
+
+// parseCommandParam parses a command parameter definition from YAML data
+func parseCommandParam(data map[string]any) CommandParam {
+	param := CommandParam{
+		Optional: true, // Default to optional
+		Join:     " ",  // Default join separator
+	}
+
+	// Parse sources
+	if sources, ok := data["sources"].([]any); ok {
+		for _, s := range sources {
+			if str, ok := s.(string); ok {
+				param.Sources = append(param.Sources, str)
+			}
+		}
+	}
+
+	// Parse format
+	if format, ok := data["format"].(string); ok {
+		param.Format = format
+	}
+
+	// Parse join
+	if join, ok := data["join"].(string); ok {
+		param.Join = join
+	}
+
+	// Parse quote_if_spaces
+	if quoteIfSpaces, ok := data["quote_if_spaces"].(bool); ok {
+		param.QuoteIfSpaces = quoteIfSpaces
+	}
+
+	// Parse resolve_variables
+	if resolveVars, ok := data["resolve_variables"].(bool); ok {
+		param.ResolveVariables = resolveVars
+	}
+
+	// Parse match
+	if match, ok := data["match"].(string); ok {
+		param.Match = match
+	}
+
+	// Parse optional (default is true)
+	if optional, ok := data["optional"].(bool); ok {
+		param.Optional = optional
+	}
+
+	return param
 }

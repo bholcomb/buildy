@@ -18,7 +18,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "clang {dep_flags} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "clang ${dep_flags} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -32,12 +32,12 @@ toolchain:
         include_flag: "-I"
         pic: true
         pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
+        dependencies: "-MMD -MP -MF ${dep_file}"
     
     # C++ compilation
     cpp_compile:
       action: compile
-      command: "clang++ {dep_flags} -std={std} {flags} {defines} {pic} {includes} -c {input} -o {output}"
+      command: "clang++ ${dep_flags} -std=${std} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
@@ -51,16 +51,16 @@ toolchain:
         include_flag: "-I"
         pic: true
         pic_flag: "-fPIC"
-        dependencies: "-MMD -MP -MF {dep_file}"
+        dependencies: "-MMD -MP -MF ${dep_file}"
         std: true
     
     # Shared library linking
     link_shared_library:
       action: link
-      command: "clang++ -shared {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang++ -shared ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ".so"
-      output_pattern: "lib{name}.so"
+      output_pattern: "lib${name}.so"
       flags:
         common: []
         debug: []
@@ -75,10 +75,10 @@ toolchain:
     # Static library archiving
     link_static_library:
       action: link
-      command: "ar rcs {output} {objects}"
+      command: "ar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib{name}.a"
+      output_pattern: "lib${name}.a"
       flags:
         common: []
         debug: []
@@ -91,10 +91,10 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "clang++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "clang++ ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ""
-      output_pattern: "{name}"
+      output_pattern: "${name}"
       flags:
         common: []
         debug: []

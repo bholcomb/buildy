@@ -10,30 +10,30 @@ build_system:
     configure:
       # Go modules don't have a separate configure step
       command: "go mod download"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     build:
-      command: "go build -o {build_dir}/ {args} ./..."
-      working_dir: "{source_dir}"
+      command: "go build -o ${build_dir}/ ${args} ./..."
+      working_dir: "${source_dir}"
       required: true
     
     test:
       command: "go test ./..."
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     install:
       command: "go install ./..."
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     clean:
       command: "go clean"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
   
   output:
     include_patterns: []
     lib_patterns:
-      - "{build_dir}"
+      - "${build_dir}"

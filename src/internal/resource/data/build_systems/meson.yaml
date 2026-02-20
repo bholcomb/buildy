@@ -8,30 +8,30 @@ build_system:
   
   phases:
     configure:
-      command: "meson setup {build_dir} {args}"
+      command: "meson setup ${build_dir} ${args}"
       default_args: ["--buildtype=release"]
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: true
     
     build:
-      command: "meson compile -C {build_dir} -j {jobs}"
+      command: "meson compile -C ${build_dir} -j ${jobs}"
       required: true
     
     test:
-      command: "meson test -C {build_dir}"
+      command: "meson test -C ${build_dir}"
       required: false
     
     install:
-      command: "meson install -C {build_dir} --destdir {install_dir}"
+      command: "meson install -C ${build_dir} --destdir ${install_dir}"
       required: false
     
     clean:
-      command: "meson compile -C {build_dir} --clean"
+      command: "meson compile -C ${build_dir} --clean"
       required: false
   
   output:
     include_patterns:
-      - "{source_dir}/include"
-      - "{source_dir}"
+      - "${source_dir}/include"
+      - "${source_dir}"
     lib_patterns:
-      - "{build_dir}"
+      - "${build_dir}"

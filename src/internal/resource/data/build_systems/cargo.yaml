@@ -13,27 +13,27 @@ build_system:
       required: false
     
     build:
-      command: "cargo build --release {args}"
-      working_dir: "{source_dir}"
+      command: "cargo build --release ${args}"
+      working_dir: "${source_dir}"
       required: true
     
     test:
       command: "cargo test --release"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     install:
-      command: "cargo install --path . --root {install_dir}"
-      working_dir: "{source_dir}"
+      command: "cargo install --path . --root ${install_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     clean:
       command: "cargo clean"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
   
   output:
     include_patterns:
-      - "{source_dir}/include"
+      - "${source_dir}/include"
     lib_patterns:
-      - "{source_dir}/target/release"
+      - "${source_dir}/target/release"

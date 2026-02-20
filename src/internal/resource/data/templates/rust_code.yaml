@@ -26,12 +26,12 @@ templates:
     steps:
       - name: build
         action: build
-        output: "{output_dir}/{config}/bin/{tool.output_pattern}"
-        inputs: ["{item.path}"]
-        working_dir: "{item.path}"
+        output: "${output_dir}/${config}/bin/${tool.output_pattern}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
         tool_params:
-          features: "{item.features}"
-          bin: "{item.bin}"
+          features: "${item.features}"
+          bin: "${item.bin}"
 
   # Rust static library: C-compatible static library (staticlib)
   # Use this for linking into C/C++ projects
@@ -53,11 +53,11 @@ templates:
     steps:
       - name: build
         action: build
-        output: "{output_dir}/{config}/lib/{tool.output_pattern}"
-        inputs: ["{item.path}"]
-        working_dir: "{item.path}"
+        output: "${output_dir}/${config}/lib/${tool.output_pattern}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
         tool_params:
-          features: "{item.features}"
+          features: "${item.features}"
           crate_type: "staticlib"
 
   # Rust shared library: C-compatible dynamic library (cdylib)
@@ -80,9 +80,9 @@ templates:
     steps:
       - name: build
         action: build
-        output: "{output_dir}/{config}/lib/{tool.output_pattern}"
-        inputs: ["{item.path}"]
-        working_dir: "{item.path}"
+        output: "${output_dir}/${config}/lib/${tool.output_pattern}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
         tool_params:
-          features: "{item.features}"
+          features: "${item.features}"
           crate_type: "cdylib"

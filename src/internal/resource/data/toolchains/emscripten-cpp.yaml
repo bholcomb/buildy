@@ -18,7 +18,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "emcc {dep_flags} {flags} {defines} {includes} -c {input} -o {output}"
+      command: "emcc ${dep_flags} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -31,12 +31,12 @@ toolchain:
         includes: true
         include_flag: "-I"
         pic: false
-        dependencies: "-MMD -MP -MF {dep_file}"
+        dependencies: "-MMD -MP -MF ${dep_file}"
     
     # C++ compilation
     cpp_compile:
       action: compile
-      command: "em++ {dep_flags} -std={std} {flags} {defines} {includes} -c {input} -o {output}"
+      command: "em++ ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
@@ -49,16 +49,16 @@ toolchain:
         includes: true
         include_flag: "-I"
         pic: false
-        dependencies: "-MMD -MP -MF {dep_file}"
+        dependencies: "-MMD -MP -MF ${dep_file}"
         std: true
     
     # Static library archiving (WebAssembly doesn't use shared libraries)
     link_static_library:
       action: link
-      command: "emar rcs {output} {objects}"
+      command: "emar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib{name}.a"
+      output_pattern: "lib${name}.a"
       flags:
         common: []
         debug: []
@@ -71,10 +71,10 @@ toolchain:
     # WebAssembly executable linking
     link_executable:
       action: link
-      command: "em++ {flags} {objects} {lib_dirs} {libs} -o {output}"
+      command: "em++ ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ".html"
-      output_pattern: "{name}.html"
+      output_pattern: "${name}.html"
       flags:
         common: []
         debug: ["-g"]

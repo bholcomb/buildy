@@ -17,7 +17,7 @@ toolchain:
     # Texture compression/conversion
     convert:
       action: convert
-      command: "texconv {flags} {input} -o {output_dir} -y"
+      command: "texconv ${flags} ${input} -o ${output_dir} -y"
       input_extensions: [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".dds", ".hdr", ".exr"]
       output_extension: ".dds"
       flags:

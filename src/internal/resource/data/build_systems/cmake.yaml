@@ -8,30 +8,30 @@ build_system:
   
   phases:
     configure:
-      command: "cmake -S {source_dir} -B {build_dir} {args}"
+      command: "cmake -S ${source_dir} -B ${build_dir} ${args}"
       default_args: ["-DCMAKE_BUILD_TYPE=Release"]
       required: true
     
     build:
-      command: "cmake --build {build_dir} --parallel {jobs}"
+      command: "cmake --build ${build_dir} --parallel ${jobs}"
       required: true
     
     test:
-      command: "ctest --test-dir {build_dir} --output-on-failure"
+      command: "ctest --test-dir ${build_dir} --output-on-failure"
       required: false
     
     install:
-      command: "cmake --install {build_dir} --prefix {install_dir}"
+      command: "cmake --install ${build_dir} --prefix ${install_dir}"
       required: false
     
     clean:
-      command: "cmake --build {build_dir} --target clean"
+      command: "cmake --build ${build_dir} --target clean"
       required: false
   
   output:
     include_patterns:
-      - "{source_dir}/include"
-      - "{build_dir}/include"
+      - "${source_dir}/include"
+      - "${build_dir}/include"
     lib_patterns:
-      - "{build_dir}"
-      - "{build_dir}/lib"
+      - "${build_dir}"
+      - "${build_dir}/lib"

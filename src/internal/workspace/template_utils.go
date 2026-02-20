@@ -1,10 +1,11 @@
 package workspace
 
 import (
-	"fmt"
 	"log"
 	"sort"
 	"strings"
+
+	"buildy/pkg/util"
 )
 
 // topologicalSortLibs topologically sorts libraries in reverse dependency order
@@ -63,65 +64,17 @@ func (bte *BuildTemplateEngine) topologicalSortLibs(libDeps map[string][]string)
 	return result
 }
 
-// resolveTemplateString resolves template variables in a string
-func (bte *BuildTemplateEngine) resolveTemplateString(template string, context map[string]any) string {
-	if template == "" {
-		return ""
-	}
-
-	// Check if the entire template is just a single reference
-	if strings.HasPrefix(template, "{") && strings.HasSuffix(template, "}") && strings.Count(template, "{") == 1 {
-		ref := strings.Trim(template, "{}")
-		parts := strings.Split(ref, ".")
-		obj := any(context)
-		for _, part := range parts {
-			if m, ok := obj.(map[string]any); ok {
-				obj = m[part]
-			} else {
-				break
-			}
-		}
-		if obj != nil {
-			if str, ok := obj.(string); ok {
-				return str
-			}
-			return fmt.Sprintf("%v", obj)
-		}
-	}
-
-	// Otherwise do string replacement
-	result := template
-	for key, value := range context {
-		if valueMap, ok := value.(map[string]any); ok {
-			for subkey, subvalue := range valueMap {
-				switch v := subvalue.(type) {
-				case string:
-					result = strings.ReplaceAll(result, fmt.Sprintf("{%s.%s}", key, subkey), v)
-				case int, int64, float64, bool:
-					result = strings.ReplaceAll(result, fmt.Sprintf("{%s.%s}", key, subkey), fmt.Sprintf("%v", v))
-				}
-			}
-		} else {
-			switch v := value.(type) {
-			case string:
-				result = strings.ReplaceAll(result, fmt.Sprintf("{%s}", key), v)
-			case int, int64, float64, bool:
-				result = strings.ReplaceAll(result, fmt.Sprintf("{%s}", key), fmt.Sprintf("%v", v))
-			}
-		}
-	}
-
-	return result
-}
-
 // resolveReference resolves a reference to previous step results
 func (bte *BuildTemplateEngine) resolveReference(ref string, stepResults map[string]map[string]any) any {
 	if ref == "" {
 		return ref
 	}
 
-	// Remove curly braces if present
-	ref = strings.Trim(ref, "{}")
+	// Remove ${...} wrapper if present
+	if strings.HasPrefix(ref, "${") && strings.HasSuffix(ref, "}") {
+		ref = strings.TrimPrefix(ref, "${")
+		ref = strings.TrimSuffix(ref, "}")
+	}
 
 	// Parse reference like "compile.outputs" or "compile.task_ids"
 	parts := strings.Split(ref, ".")
@@ -141,8 +94,32 @@ func (bte *BuildTemplateEngine) resolveReference(ref string, stepResults map[str
 	return []string{}
 }
 
-// resolveToolParams resolves tool parameters from template
-func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context map[string]any) map[string]any {
+// lookupContextPath traverses a nested map using a dotted path (e.g., "item.includes")
+// Returns the value and whether it was found
+func lookupContextPath(context map[string]any, path string) (any, bool) {
+	parts := strings.Split(path, ".")
+	if len(parts) < 2 {
+		return nil, false
+	}
+	
+	obj := any(context)
+	for _, part := range parts {
+		if m, ok := obj.(map[string]any); ok {
+			if val, exists := m[part]; exists {
+				obj = val
+			} else {
+				return nil, false
+			}
+		} else {
+			return nil, false
+		}
+	}
+	return obj, true
+}
+
+// resolveToolParams resolves tool parameters using VarEnv for variable resolution
+// and context map for structural references (like ${item.includes} arrays)
+func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context map[string]any, varEnv *util.VariableEnvironment) map[string]any {
 	resolved := map[string]any{
 		"defines":      []string{},
 		"include_dirs": []string{},
@@ -155,60 +132,53 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 	for key, value := range params {
 		switch v := value.(type) {
 		case string:
-			resolvedValue := bte.resolveTemplateString(v, context)
-			// Try to parse as list reference
-			if strings.HasPrefix(v, "{") && strings.HasSuffix(v, "}") {
-				ref := strings.Trim(v, "{}")
-				parts := strings.Split(ref, ".")
-				if len(parts) == 2 {
-					obj := any(context)
-					for _, part := range parts {
-						if m, ok := obj.(map[string]any); ok {
-							obj = m[part]
-						} else {
-							break
-						}
-					}
-					if list, ok := obj.([]any); ok {
+			// Check if this is a reference to a context value (like ${item.includes})
+			if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
+				ref := strings.TrimPrefix(v, "${")
+				ref = strings.TrimSuffix(ref, "}")
+				if obj, found := lookupContextPath(context, ref); found {
+					switch val := obj.(type) {
+					case []any:
 						strList := []string{}
-						for _, item := range list {
+						for _, item := range val {
 							if str, ok := item.(string); ok {
 								strList = append(strList, str)
 							}
 						}
 						resolved[key] = strList
-						continue
-					} else if strList, ok := obj.([]string); ok {
-						resolved[key] = strList
-						continue
+					case []string:
+						resolved[key] = val
+					case string:
+						resolved[key] = val
+					default:
+						resolved[key] = obj
 					}
+					continue
 				}
+				// Reference not found - optional field, use default
+				continue
 			}
-			resolved[key] = resolvedValue
+			// Use VarEnv for variable resolution
+			resolved[key] = varEnv.ResolveString(v, nil, 10)
 		case []any:
 			strList := []string{}
 			for _, item := range v {
 				if str, ok := item.(string); ok {
-					resolvedStr := bte.resolveTemplateString(str, context)
-					// Check if the resolved string is actually a reference to an array
-					if strings.HasPrefix(str, "{") && strings.HasSuffix(str, "}") {
-						ref := strings.Trim(str, "{}")
-						parts := strings.Split(ref, ".")
-						obj := any(context)
-						for _, part := range parts {
-							if m, ok := obj.(map[string]any); ok {
-								obj = m[part]
-							} else {
-								break
+					// Check if this is a reference to a context array
+					if strings.HasPrefix(str, "${") && strings.HasSuffix(str, "}") {
+						ref := strings.TrimPrefix(str, "${")
+						ref = strings.TrimSuffix(ref, "}")
+						if obj, found := lookupContextPath(context, ref); found {
+							if nestedList := bte.flattenStringList(obj); len(nestedList) > 0 {
+								strList = append(strList, nestedList...)
 							}
-						}
-						// If it's an array, flatten it
-						if nestedList := bte.flattenStringList(obj); len(nestedList) > 0 {
-							strList = append(strList, nestedList...)
 							continue
 						}
+						// Reference not found - optional field, skip
+						continue
 					}
-					strList = append(strList, resolvedStr)
+					// Use VarEnv for variable resolution
+					strList = append(strList, varEnv.ResolveString(str, nil, 10))
 				}
 			}
 			resolved[key] = strList
@@ -220,26 +190,63 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 	return resolved
 }
 
-// flattenStringList flattens a value into a string slice, handling nested arrays
-func (bte *BuildTemplateEngine) flattenStringList(value any) []string {
-	result := []string{}
+// toStringSlice converts various types to a string slice
+// Handles []string, []any, and string types
+func toStringSlice(value any) []string {
 	switch v := value.(type) {
 	case []string:
-		result = v
+		return v
 	case []any:
+		result := []string{}
 		for _, item := range v {
 			if str, ok := item.(string); ok {
 				result = append(result, str)
-			} else if nested := bte.flattenStringList(item); len(nested) > 0 {
+			} else if nested := toStringSlice(item); len(nested) > 0 {
 				result = append(result, nested...)
 			}
 		}
+		return result
 	case string:
 		if v != "" {
-			result = append(result, v)
+			return []string{v}
 		}
 	}
-	return result
+	return []string{}
+}
+
+// flattenStringList is the method version for backward compatibility
+func (bte *BuildTemplateEngine) flattenStringList(value any) []string {
+	return toStringSlice(value)
+}
+
+// stepContext holds the context and VarEnv for a step expansion
+type stepContext struct {
+	Context map[string]any
+	VarEnv  *util.VariableEnvironment
+}
+
+// newStepContext creates a step context from a base context with tool info
+func newStepContext(baseContext map[string]any, parentEnv *util.VariableEnvironment, scopeName string, tool struct {
+	OutputExt     string
+	OutputPattern string
+}) stepContext {
+	// Create child VarEnv
+	env := parentEnv.CreateChild()
+	env.PushScope(scopeName)
+	env.SetVariable("tool.output_ext", tool.OutputExt, scopeName)
+	env.SetVariable("tool.output_pattern", tool.OutputPattern, scopeName)
+
+	// Copy base context and add tool info
+	ctx := make(map[string]any, len(baseContext)+1)
+	for k, v := range baseContext {
+		ctx[k] = v
+	}
+	ctx["tool"] = map[string]any{
+		"output_ext":     tool.OutputExt,
+		"output_pattern": tool.OutputPattern,
+	}
+
+	return stepContext{Context: ctx, VarEnv: env}
 }
 
 // convertResolvedParams converts resolved params to the format expected by BuildCommand
