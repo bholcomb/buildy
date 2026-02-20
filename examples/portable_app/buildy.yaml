@@ -1,0 +1,71 @@
+project:
+  name: portable_app
+  version: "1.0.0"
+  description: "Example demonstrating fetch dependencies and Docker builds"
+
+variables:
+  APP_NAME: "PortableApp"
+
+dependencies:
+  file: buildy_config/dependencies.yaml
+
+environment:
+  toolchains:
+    default: docker-cpp-linux
+    windows: msvc-cpp-windows
+    macos: clang-cpp-macos
+
+  dependency_builds:
+    execution:
+      type: docker
+      image: "gcc:13"
+      volumes:
+        - "${PWD}:/workspace"
+      working_dir: "/workspace"
+      user: "${UID}:${GID}"
+    default_phases: [configure, build, install]
+
+  compile:
+    cpp_standard: "c++17"
+    warnings: ["-Wall", "-Wextra"]
+
+  configurations:
+    debug:
+      optimization: "-O0"
+      defines: ["DEBUG=1"]
+      flags: ["-g"]
+    release:
+      optimization: "-O2"
+      defines: ["NDEBUG=1"]
+
+targets:
+  executables:
+    - name: portable_app
+      language: cpp
+      sources: ["src/*.cpp"]
+      include_dirs: ["src"]
+      packages:
+        - sdl2
+        - nlohmann_json
+      defines:
+        - "APP_NAME=\"${APP_NAME}\""
+
+staging:
+  name: portable_app
+  destination: "${out_dir}/staging"
+  use_symlinks: true
+
+  contents:
+    - folder: "."
+      files: ["README.md"]
+
+    - folder: bin
+      targets:
+        - portable_app
+
+install:
+  - name: portable_app_release
+    staging: portable_app
+    destination: "${out_dir}/dist"
+    format: tar.gz
+    filename: "${project_name}-${project_version}-${platform}-${arch}"

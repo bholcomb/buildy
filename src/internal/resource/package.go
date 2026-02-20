@@ -163,17 +163,7 @@ func (pm *PackageManager) LoadPackage(name string, platform, architecture string
 
 	// Check for new format with top-level platform subsections (common, linux, windows, etc.)
 	// vs old format with per-field platform subsections
-	// New format is detected by presence of platform keys at the package root level
-	isNewFormat := false
-	platformKeys := []string{"common", "linux", "windows", "darwin", "macos", "android", "ios"}
-	for _, key := range platformKeys {
-		if _, exists := packageData[key]; exists {
-			isNewFormat = true
-			break
-		}
-	}
-
-	if isNewFormat {
+	if _, hasCommon := packageData["common"]; hasCommon {
 		// New format: top-level platform subsections
 		pm.resolveNewPackageFormat(pkg, packageData, platform, architecture, pkgVarEnv)
 	} else {

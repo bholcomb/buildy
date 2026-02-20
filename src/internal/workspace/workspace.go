@@ -641,6 +641,32 @@ func (ws *Workspace) countTotalTargets() int {
 	return total
 }
 
+// AddFetchDependencyModule adds a fetch dependency with a buildy config as a module
+// sourcePath is the fetched dependency directory, configFile is the buildy.yaml filename
+func (ws *Workspace) AddFetchDependencyModule(name, sourcePath, configFile string) error {
+	if configFile == "" {
+		configFile = "buildy.yaml"
+	}
+
+	fullConfigPath := filepath.Join(sourcePath, configFile)
+	if _, err := os.Stat(fullConfigPath); os.IsNotExist(err) {
+		return fmt.Errorf("fetch dependency config not found: %s", fullConfigPath)
+	}
+
+	// Use a special prefix for fetch dependency modules to avoid conflicts
+	moduleKey := "@fetch:" + name
+
+	moduleInfo, err := ws.loadModule(fullConfigPath, sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to load fetch dependency module %s: %w", name, err)
+	}
+
+	ws.Modules[moduleKey] = moduleInfo
+	log.Printf("Added fetch dependency as module: %s (%s, %d targets)", name, configFile, len(moduleInfo.Targets))
+
+	return nil
+}
+
 // GetModule gets a module by relative path
 func (ws *Workspace) GetModule(relativePath string) *ModuleInfo {
 	if !ws.discovered {

@@ -11,12 +11,7 @@ targets:
       language: cpp
       sources:
         - "src/*.cpp"
-      public_headers:
-        - "include/*.h"
-        - "include/audio/*.h"
-      include_dirs:
-        public: ["include"]
-        private: ["../core/include"]
+      include_dirs: ["include", "../core/include"]
       libs:
         - engine_core
       depends_on:
