@@ -254,8 +254,7 @@ targets:
     - name: platform_linux
       language: cpp
       sources: ["src/*.cpp"]
-      depends_on:
-        targets: ["platform_common"]
+      libs: ["platform_common"]  # Links and ensures build order
 ```
 
 ### Custom Config Filename
@@ -588,10 +587,6 @@ targets:
       # deps: External dependencies (add include_dirs, lib_dirs, libs, defines)
       deps: ["glfw3", "zlib"]
       
-      # depends_on: Build ordering
-      depends_on:
-        targets: []           # Other targets (build order)
-      
       compile:
         standard: "c++20"
         defines: ["ENGINE_EXPORTS"]
@@ -608,11 +603,8 @@ targets:
       sources: ["src/*.cpp"]
       include_dirs: ["include"]
       
-      # libs: Libraries this shared library links against
+      # libs: Libraries this shared library links against (also establishes build order)
       libs: ["engine_core"]
-      
-      depends_on:
-        targets: ["engine_core"]
 ```
 
 ### Source Patterns
@@ -657,6 +649,95 @@ targets:
 | `{pattern: "...", optional: true}` | **Optional** - empty matches are silently skipped |
 | `{pattern: "...", optional: false}` | Same as string form (default) |
 
+### Filtered Lists
+
+Many list fields support **filtering** based on four dimensions: **platform**, **architecture**, **configuration**, and **toolchain**. Filtering allows conditional inclusion of items without duplicating entire target definitions.
+
+**Filterable fields:** `sources`, `defines`, `libs`, `include_dirs`, `flags`
+
+**Syntax:**
+
+In a filterable list, items can be:
+- **Plain strings** - always included
+- **Filter maps** - included only when the filter matches the current build context
+
+```yaml
+sources:
+  - "src/common.c"        # Always included (plain string)
+  - linux:                # Map: included when platform=linux
+      - "src/linux.c"
+  - windows:              # Map: included when platform=windows
+      - "src/windows.c"
+```
+
+**Filter Dimensions:**
+
+| Dimension | Examples | Matches |
+|-----------|----------|---------|
+| Platform | `linux`, `windows`, `macos` | Build target OS |
+| Architecture | `x86_64`, `arm64`, `i686` | Target CPU architecture |
+| Configuration | `debug`, `release`, or custom | Build configuration name |
+| Toolchain | `gcc-cpp-linux`, `clang-cpp-macos` | Active toolchain name |
+
+**Full example with multiple filter dimensions:**
+
+```yaml
+targets:
+  static_libraries:
+    - name: mylib
+      language: c
+      
+      sources:
+        # Common sources (always included)
+        - "src/core.c"
+        - "src/util.c"
+        
+        # Platform-specific sources
+        - linux:
+            - "src/posix_io.c"
+            - "src/linux_time.c"
+        - windows:
+            - "src/win32_io.c"
+            - "src/win32_time.c"
+        - macos:
+            - "src/posix_io.c"
+            - "src/darwin_time.c"
+        
+        # Architecture-specific sources
+        - x86_64:
+            - "src/simd_x64.c"
+        - arm64:
+            - "src/simd_arm.c"
+
+      defines:
+        # Platform defines
+        - linux:
+            - "_POSIX_C_SOURCE=200809L"
+        - windows:
+            - "_CRT_SECURE_NO_WARNINGS"
+            - "UNICODE"
+        
+        # Configuration defines
+        - debug:
+            - "_DEBUG"
+            - "ENABLE_ASSERTS"
+        - release:
+            - "NDEBUG"
+      
+      flags:
+        - debug:
+            - "-g"
+            - "-O0"
+        - release:
+            - "-O2"
+```
+
+**Filter evaluation order:**
+
+Filters are evaluated in the order they appear in the YAML array. All matching filters contribute their items to the final list. The same filter key can appear multiple times.
+
+**Note:** Filters match exact strings. The platform filter matches the `--platform` argument (e.g., `linux`, `windows`, `macos`). Configuration matches `--config` (e.g., `debug`, `release`, or any user-defined value like `ProfileBuild`).
+
 ### Executables
 
 ```yaml
@@ -672,15 +753,11 @@ targets:
         - opengl
         - zlib
       
-      # libs: Internal libraries to link against
+      # libs: Internal libraries to link against (also establishes build order)
       # Order matters for static libraries (dependents before dependencies)
       libs:
         - engine_renderer    # List first if it depends on engine_core
         - engine_core        # List last (base library)
-      
-      # depends_on: Build ordering
-      depends_on:
-        targets: ["engine_core", "engine_renderer"]  # Build order
       
       runtime_deps: ["game_assets", "shaders"]  # Artifacts needed at runtime
 ```
@@ -720,15 +797,15 @@ These are **intentionally separate** concepts:
 | Field | Purpose | Example |
 |-------|---------|---------|
 | `deps` | External dependencies (provide include paths, lib paths, libs, defines) | `[glfw3, zlib]` |
-| `libs` | Internal project libraries to link against | `[engine_core, engine_renderer]` |
-| `depends_on.targets` | Build ordering - these targets must complete first | Libraries, tools |
+| `libs` | Internal project libraries to link against (implies build order) | `[engine_core, engine_renderer]` |
+| `depends_on.targets` | Build ordering only (no linking) - for code generators, tools, etc. | `[proto_gen, asset_compiler]` |
 | `depends_on.artifacts` | Build ordering + virtual files for globs | Code generators (protobuf, etc.) |
 
 **Why separate?**
 
 1. **deps are external**: They provide platform-specific settings (includes, libs, defines) from `buildy_config/dependencies.yaml`
-2. **libs are internal**: Project libraries you've built
-3. **depends_on is ordering**: Ensures targets/artifacts are built first (may or may not involve linking)
+2. **libs are internal**: Project libraries you've built - automatically establishes both **linking** and **build order**
+3. **depends_on.targets is ordering only**: For non-linking dependencies like code generators or tools that must run first
 4. **Explicit is better**: Each field has one clear purpose
 
 **Example: Using packages and libs together**
@@ -738,15 +815,12 @@ targets:
   executables:
     - name: my_game
       sources: ["src/*.cpp"]
-      packages:            # External (adds glfw's include_dirs, lib_dirs, libs)
+      deps:                # External (adds glfw's include_dirs, lib_dirs, libs)
         - glfw3
-      libs:                # Internal (your project's libraries)
+      libs:                # Internal (links AND ensures build order)
         - engine_renderer
         - engine_core
-      depends_on:
-        targets:           # Build order
-          - engine_core
-          - engine_renderer
+      # No depends_on.targets needed for libs - build order is automatic
 ```
 
 **Example: Depending on a code generator artifact**
@@ -1946,10 +2020,9 @@ targets:
       language: cpp
       sources: ["src/*.cpp"]
       include_dirs: ["include"]
-      depends_on:
-        targets: ["engine_core"]  # Build order - engine_core must be built first
-        deps: ["vulkan_sdk", "imgui"]
-      # Note: libs not needed for static library - consumers link transitively
+      deps: ["vulkan_sdk", "imgui"]
+      # Note: Static libraries don't link against other static libs at archive time.
+      # Consumers (executables) list all needed libs in their libs: section.
 ```
 
 ### Submodule: `game/buildy.yaml`
@@ -1969,16 +2042,11 @@ targets:
       deps:
         - glfw3
       
-      # libs: Internal libraries (order matters for static libs)
+      # libs: Internal libraries (links AND ensures build order)
+      # Order matters for static libs - dependents before dependencies
       libs:
         - engine_renderer  # Depends on engine_core, so list first
         - engine_core      # Base library, list last
-      
-      # depends_on: Build ordering
-      depends_on:
-        targets:
-          - engine_core
-          - engine_renderer
 ```
 
 ---

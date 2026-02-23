@@ -13,13 +13,12 @@ variables:
 
 workspace:
   modules:
-    common:
-      - core
-      - platform
-      - renderer
-      - audio
-      - shaders
-      - game
+    - src/core
+    - src/platform
+    - src/renderer
+    - src/audio
+    - assets/shaders
+    - src/game
 
 dependencies:
   file: buildy_config/dependencies.yaml
@@ -37,12 +36,8 @@ environment:
   configurations:
     debug:
       optimization: "-O0"
-      defines: ["DEBUG=1"]
-      flags: ["-g"]
     release:
       optimization: "-O3"
-      defines: ["NDEBUG=1"]
-      flags: ["-flto"]
 
 # Assemble the final product structure
 staging:
