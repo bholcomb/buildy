@@ -12,28 +12,28 @@ import (
 // ConfigParser orchestrates configuration parsing and task generation
 // It delegates to specialized components for parsing, path resolution, and task generation
 type ConfigParser struct {
-	Platform         string
-	Architecture     string
-	Configuration    string
-	CLIDefines       map[string]string
-	VarEnv           *util.VariableEnvironment
-	YAMLParser       *YAMLParser
-	PathResolver     *PathResolver
-	TaskGenerator    *TaskGenerator
-	ToolchainManager *resource.ToolchainManager
-	DefaultToolchain string
-	TemplateEngine   *BuildTemplateEngine
-	CurrentToolchain *resource.ToolchainConfig
-	ToolchainHash    string
-	ToolMatcher      *resource.ToolMatcher
-	CommandBuilder   *resource.CommandBuilder
-	ExecEnv          *util.ExecutionEnvironment
-	Workspace        *Workspace
-	TargetRegistry   *TargetRegistry
-	CurrentModule    string
-	PackageManager   *resource.PackageManager
-	TaskIDGen        *TaskIDGenerator
-	ConfigFileDir    string
+	Platform           string
+	Architecture       string
+	Configuration      string
+	CLIDefines         map[string]string
+	VarEnv             *util.VariableEnvironment
+	YAMLParser         *YAMLParser
+	PathResolver       *PathResolver
+	TaskGenerator      *TaskGenerator
+	ToolchainManager   *resource.ToolchainManager
+	DefaultToolchain   string
+	TemplateEngine     *BuildTemplateEngine
+	CurrentToolchain   *resource.ToolchainConfig
+	ToolchainHash      string
+	ToolMatcher        *resource.ToolMatcher
+	CommandBuilder     *resource.CommandBuilder
+	ExecEnv            *util.ExecutionEnvironment
+	Workspace          *Workspace
+	TargetRegistry     *TargetRegistry
+	CurrentModule      string
+	DependencyResolver *resource.DependencyResolver
+	TaskIDGen          *TaskIDGenerator
+	ConfigFileDir      string
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -44,24 +44,24 @@ func NewConfigParser(
 	defaultToolchain string,
 	templateEngine *BuildTemplateEngine,
 	workspace *Workspace,
-	packageManager *resource.PackageManager,
+	dependencyResolver *resource.DependencyResolver,
 	parentVarEnv *util.VariableEnvironment,
 ) *ConfigParser {
 	varEnv := util.NewVariableEnvironment(parentVarEnv)
 
 	return &ConfigParser{
-		Platform:         platform,
-		Architecture:     architecture,
-		Configuration:    configuration,
-		CLIDefines:       cliDefines,
-		VarEnv:           varEnv,
-		YAMLParser:       NewYAMLParser(),
-		ToolchainManager: toolchainManager,
-		DefaultToolchain: defaultToolchain,
-		TemplateEngine:   templateEngine,
-		Workspace:        workspace,
-		PackageManager:   packageManager,
-		TaskIDGen:        NewTaskIDGenerator("workspace"),
+		Platform:           platform,
+		Architecture:       architecture,
+		Configuration:      configuration,
+		CLIDefines:         cliDefines,
+		VarEnv:             varEnv,
+		YAMLParser:         NewYAMLParser(),
+		ToolchainManager:   toolchainManager,
+		DefaultToolchain:   defaultToolchain,
+		TemplateEngine:     templateEngine,
+		Workspace:          workspace,
+		DependencyResolver: dependencyResolver,
+		TaskIDGen:          NewTaskIDGenerator("workspace"),
 	}
 }
 
@@ -231,7 +231,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 			cp.DefaultToolchain,
 			cp.TemplateEngine,
 			cp.Workspace,
-			cp.PackageManager,
+			cp.DependencyResolver,
 			workspaceVarEnv,
 		)
 
@@ -326,7 +326,7 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) 
 		cp.Configuration,
 		cp.ToolchainManager,
 		cp.TemplateEngine,
-		cp.PackageManager,
+		cp.DependencyResolver,
 		cp.VarEnv,
 		cp.Workspace,
 	)
@@ -462,7 +462,7 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 		cp.Configuration,
 		cp.ToolchainManager,
 		cp.TemplateEngine,
-		cp.PackageManager,
+		cp.DependencyResolver,
 		cp.VarEnv,
 		cp.Workspace,
 	)

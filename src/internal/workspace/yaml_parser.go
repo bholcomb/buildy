@@ -41,7 +41,7 @@ var knownVariablesKeys = map[string]bool{
 }
 
 var knownWorkspaceKeys = map[string]bool{
-	"modules": true, "discover": true, "exclude": true, "package_paths": true, "packages": true,
+	"modules": true, "discover": true, "exclude": true,
 }
 
 var knownEnvironmentKeys = map[string]bool{
@@ -54,13 +54,13 @@ var knownTargetKeys = map[string]bool{
 
 var knownLibraryKeys = map[string]bool{
 	"name": true, "type": true, "language": true, "sources": true,
-	"include_dirs": true, "packages": true, "libs": true, "depends_on": true,
+	"include_dirs": true, "deps": true, "libs": true, "depends_on": true,
 	"compile": true, "toolchain": true, "defines": true, "flags": true,
 }
 
 var knownExecutableKeys = map[string]bool{
 	"name": true, "language": true, "sources": true, "include_dirs": true,
-	"packages": true, "libs": true, "depends_on": true, "runtime_deps": true,
+	"deps": true, "libs": true, "depends_on": true, "runtime_deps": true,
 	"compile": true, "toolchain": true, "defines": true, "flags": true,
 	// Go-specific keys (when language: go)
 	"path": true, "output": true, "build_tags": true, "ldflags": true,
@@ -76,8 +76,16 @@ var knownArtifactsKeys = map[string]bool{
 	"copy": true, "transform": true, "generate": true, "install": true,
 }
 
-var knownDependenciesKeys = map[string]bool{
-	"file": true, "system": true, "paths": true, "fetch": true, "packages": true, "package_paths": true,
+// knownDependencySectionKeys are keys allowed within a dependency's platform section
+var knownDependencySectionKeys = map[string]bool{
+	"description": true, "version": true,
+	"git": true, "url": true, "ref": true, "checksum": true, "extract": true,
+	"pkg_config": true, "root": true,
+	"include_dirs": true, "lib_dirs": true, "libs": true, "frameworks": true, "defines": true,
+	"build": true, "execution": true,
+	// Platform sections
+	"common": true, "linux": true, "windows": true, "macos": true, "darwin": true,
+	"android": true, "ios": true,
 }
 
 // YAMLParser handles raw YAML parsing and validation
@@ -489,17 +497,43 @@ func (yp *YAMLParser) validateInstall(install []any) []string {
 }
 
 // validateDependencies validates the dependencies section
+// In the new format, each top-level key is a dependency name, so we validate the sections within
 func (yp *YAMLParser) validateDependencies(deps map[string]any) []string {
 	errors := []string{}
 
-	for key := range deps {
-		if !knownDependenciesKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'dependencies.%s'. Did you mean one of: %s?",
-				key, yp.suggestKey(key, knownDependenciesKeys)))
+	for depName, depData := range deps {
+		depMap, ok := depData.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		for key := range depMap {
+			if !knownDependencySectionKeys[key] {
+				// Check if it's a platform-arch combo (e.g., linux-x86_64)
+				if !isPlatformArchKey(key) {
+					errors = append(errors, fmt.Sprintf("Unknown key '%s.%s'. Did you mean one of: %s?",
+						depName, key, yp.suggestKey(key, knownDependencySectionKeys)))
+				}
+			}
 		}
 	}
 
 	return errors
+}
+
+// isPlatformArchKey checks if a key is a platform-architecture combination
+func isPlatformArchKey(key string) bool {
+	platforms := []string{"linux", "windows", "macos", "darwin", "android", "ios"}
+	archs := []string{"x86_64", "arm64", "x86", "arm", "aarch64"}
+
+	for _, p := range platforms {
+		for _, a := range archs {
+			if key == p+"-"+a {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateLegacyTargetSection validates legacy library/executable sections

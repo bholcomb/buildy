@@ -69,13 +69,13 @@ func (ve *VariableEnvironment) SetVariable(name, value, source string) {
 		}
 	}
 	
-	// Override existing variable (higher priority)
-	if oldVal, exists := ve.variables[name]; exists {
-		log.Printf("Variable '%s' overridden: '%s' (%s) -> '%s' (%s)", 
-			name, oldVal.Value, oldVal.Source, value, source)
-	} else {
-		log.Printf("Variable set: %s = %s (%s)", name, value, source)
-	}
+	// Verbose logging disabled - uncomment for debugging variable resolution
+	// if oldVal, exists := ve.variables[name]; exists {
+	// 	log.Printf("Variable '%s' overridden: '%s' (%s) -> '%s' (%s)", 
+	//		name, oldVal.Value, oldVal.Source, value, source)
+	// } else {
+	// 	log.Printf("Variable set: %s = %s (%s)", name, value, source)
+	// }
 	
 	ve.variables[name] = VariableValue{Value: value, Source: source}
 }

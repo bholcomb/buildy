@@ -10,7 +10,7 @@ templates:
       target_types: [shared_library]
       toolchain_language: cpp
       pre_processing:
-        resolve_packages: true
+        resolve_deps: true
         resolve_sources: true
         resolve_include_dirs: true
         resolve_path: false
@@ -50,7 +50,7 @@ templates:
       target_types: [static_library]
       toolchain_language: cpp
       pre_processing:
-        resolve_packages: true
+        resolve_deps: true
         resolve_sources: true
         resolve_include_dirs: true
         resolve_path: false
@@ -89,7 +89,7 @@ templates:
       target_types: [executable]
       toolchain_language: cpp
       pre_processing:
-        resolve_packages: true
+        resolve_deps: true
         resolve_sources: true
         resolve_include_dirs: true
         resolve_path: false

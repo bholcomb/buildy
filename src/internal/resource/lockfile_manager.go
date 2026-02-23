@@ -70,7 +70,7 @@ func (lm *LockfileManager) Load() (*Lockfile, error) {
 }
 
 // Generate generates a new lockfile from resolved dependencies
-func (lm *LockfileManager) Generate(deps map[string]*Dependency, fetchManager *FetchManager, warnings []string) (*Lockfile, error) {
+func (lm *LockfileManager) Generate(deps map[string]*ResolvedDependency, fetchManager *FetchManager, warnings []string) (*Lockfile, error) {
 	lockfile := &Lockfile{
 		Version:        1,
 		Generated:      time.Now().UTC().Format(time.RFC3339),
@@ -130,7 +130,7 @@ func (lm *LockfileManager) Save(lockfile *Lockfile) error {
 }
 
 // Validate validates that current dependencies match the lockfile
-func (lm *LockfileManager) Validate(deps map[string]*Dependency, fetchManager *FetchManager) error {
+func (lm *LockfileManager) Validate(deps map[string]*ResolvedDependency, fetchManager *FetchManager) error {
 	lockfile, err := lm.Load()
 	if err != nil {
 		return err
@@ -164,7 +164,7 @@ func (lm *LockfileManager) Validate(deps map[string]*Dependency, fetchManager *F
 }
 
 // Update updates the lockfile with current dependency state
-func (lm *LockfileManager) Update(deps map[string]*Dependency, fetchManager *FetchManager, warnings []string) error {
+func (lm *LockfileManager) Update(deps map[string]*ResolvedDependency, fetchManager *FetchManager, warnings []string) error {
 	lockfile, err := lm.Generate(deps, fetchManager, warnings)
 	if err != nil {
 		return err

@@ -14,7 +14,7 @@ templates:
       target_types: [executable]
       toolchain_language: go
       pre_processing:
-        resolve_packages: false
+        resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
@@ -41,7 +41,7 @@ templates:
       target_types: [shared_library]
       toolchain_language: go
       pre_processing:
-        resolve_packages: false
+        resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true

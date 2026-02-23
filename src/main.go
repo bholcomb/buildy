@@ -134,10 +134,6 @@ func main() {
 	var additionalDataDirs []string
 	flag.StringArrayVar(&additionalDataDirs, "add-data-dir", []string{}, "Additional data directory (looks for templates/ and toolchains/ subdirectories)")
 
-	// Custom flag for package directories
-	var packageDirs []string
-	flag.StringArrayVar(&packageDirs, "package-dir", []string{}, "Additional package directory (can be used multiple times)")
-
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n", Version)
 		fmt.Fprintf(os.Stderr, "  Build:   %s (%s)\n", BuildConfig, BuildTime)
@@ -390,36 +386,24 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize package manager
-	var workspacePackagePaths []string
-	if ws.Config != nil {
-		workspacePackagePaths = ws.Config.PackagePaths
-	}
-	allPackageDirs := append(workspacePackagePaths, packageDirs...)
-	packageManager := resource.NewPackageManager(ws.RootDir, allPackageDirs, rootVarEnv)
-
-	// Resolve fetch dependencies if defined in workspace config
+	// Initialize dependency resolver and load dependencies
 	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
-	depResolver := resource.NewDependencyResolver(*platform, *architecture, workspaceCacheDir, rootVarEnv)
-	if ws.Config != nil && ws.Config.RawConfig != nil {
-		depsConfig, err := depResolver.LoadDependencies(ws.Config.RawConfig, ws.RootDir)
-		if err != nil {
-			log.Fatalf("Failed to load dependencies: %v", err)
-		}
-		if depsConfig != nil {
-			if _, err := depResolver.ResolveAll(depsConfig); err != nil {
-				log.Fatalf("Failed to resolve dependencies: %v", err)
-			}
-			// Print any dependency warnings
-			for _, warning := range depResolver.GetWarnings() {
-				log.Printf("WARNING: %s", warning)
-			}
-			// Add buildy-config fetch dependencies as workspace modules
-			for name, depInfo := range depResolver.GetBuildyDependencies() {
-				if err := ws.AddFetchDependencyModule(name, depInfo.SourcePath, depInfo.ConfigFile); err != nil {
-					log.Fatalf("Failed to add fetch dependency module %s: %v", name, err)
-				}
-			}
+	depResolver := resource.NewDependencyResolver(*platform, *architecture, *toolchain, workspaceCacheDir, ws.RootDir, rootVarEnv)
+
+	// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
+	if err := depResolver.LoadDependencies(ws.RootDir); err != nil {
+		log.Fatalf("Failed to load dependencies: %v", err)
+	}
+
+	// Resolve all dependencies
+	if err := depResolver.ResolveAll(); err != nil {
+		log.Fatalf("Failed to resolve dependencies: %v", err)
+	}
+
+	// Add buildy-config fetch dependencies as workspace modules
+	for name, depInfo := range depResolver.GetBuildyDependencies() {
+		if err := ws.AddFetchDependencyModule(name, depInfo.SourcePath, depInfo.ConfigFile); err != nil {
+			log.Fatalf("Failed to add fetch dependency module %s: %v", name, err)
 		}
 	}
 
@@ -433,7 +417,7 @@ func main() {
 		selectedToolchain,
 		templateEngine,
 		ws,
-		packageManager,
+		depResolver,
 		nil, // No parent var env
 	)
 

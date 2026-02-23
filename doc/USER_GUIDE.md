@@ -268,13 +268,13 @@ targets:
         targets: ["mycore", "myrenderer"]
 ```
 
-**External packages:**
+**External dependencies:**
 
 ```yaml
 targets:
   executables:
     - name: myapp
-      packages:
+      deps:
         - glfw3
         - opengl
 ```
@@ -333,140 +333,143 @@ dependencies:
       libs: ["vulkan"]
 ```
 
-### Packages
+### Dependencies
 
-Packages are YAML files that define platform-specific library settings:
+Dependencies are defined in `buildy_config/dependencies.yaml` with platform-specific settings:
 
 ```yaml
-# buildy_config/packages/glfw3.yaml
-package:
-  name: glfw3
+# buildy_config/dependencies.yaml
+glfw3:
   description: "GLFW window library"
+  version: "3.4"
 
   common:
     defines: ["GLFW_ENABLED"]
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
 
   linux:
-    include_dirs: ["/usr/include/GLFW"]
-    lib_dirs: ["/usr/lib/x86_64-linux-gnu"]
-    libs: ["glfw"]
+    pkg_config: glfw3
 
   windows:
-    include_dirs: ["${THIRD_PARTY}/GLFW/include"]
-    lib_dirs: ["${THIRD_PARTY}/GLFW/lib"]
+    root: "${THIRD_PARTY}/GLFW"
     libs: ["glfw3"]
 
   macos:
-    include_dirs: ["/opt/homebrew/include"]
-    lib_dirs: ["/opt/homebrew/lib"]
+    root: "/opt/homebrew"
     libs: ["glfw"]
     frameworks: ["Cocoa", "IOKit", "CoreVideo"]
 ```
 
-Use packages in targets:
+Use dependencies in targets:
 
 ```yaml
 targets:
   executables:
     - name: myapp
-      packages: ["glfw3"]
+      deps: ["glfw3"]
 ```
 
-### Fetching External Code
+### Fetched Dependencies
 
-Download and build external dependencies. Fetched dependencies are stored locally in `.buildy_cache/deps/<name>/` within your project - they are **not** installed system-wide.
+Dependencies can be fetched from Git repositories or URLs. They are stored locally in `.buildy_cache/deps/<name>/` within your project - **not** installed system-wide.
 
-For dependencies that need to be built, the output goes to:
+For dependencies that need to be built:
 - **Source**: `.buildy_cache/deps/<name>/`
 - **Build**: `.buildy_cache/deps/<name>/_build/`
-- **Install**: `.buildy_cache/deps/<name>/_install/` (headers and libraries)
+- **Install**: `.buildy_cache/deps/<name>/_install/`
 
-**Git repositories:**
-
-```yaml
-dependencies:
-  fetch:
-    - name: imgui
-      git: "https://github.com/ocornut/imgui.git"
-      ref: "v1.90.1"
-      build_system: cmake
-      build_phases: [configure, build]
-      build_args: ["-DIMGUI_DEMO=OFF"]
-```
-
-**URL downloads:**
-
-```yaml
-dependencies:
-  fetch:
-    - name: stb
-      url: "https://github.com/nothings/stb/archive/master.tar.gz"
-      checksum: "sha256:..."
-      type: header_only
-      include_dirs: ["${dest}"]
-```
-
-**Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, `auto` (auto-detect)
-
-**Build phases:** `configure`, `build`, `test`, `install`, `clean`
-
-### Building Fetch Dependencies with Buildy Config
-
-Instead of using `build_system`, you can build fetched dependencies using a buildy config file. This is useful when:
-- The dependency already has a `buildy.yaml`
-- You provide a custom buildy config for the dependency
-- You want consistent build handling across your project and dependencies
-
-```yaml
-dependencies:
-  fetch:
-    - name: imgui
-      git: "https://github.com/ocornut/imgui.git"
-      ref: "v1.90.1"
-      config: imgui_build.yaml   # Buildy config file in the dependency's root
-```
-
-When `config` is specified:
-1. The dependency is fetched as usual
-2. Instead of using cmake/meson/etc, buildy processes the config file
-3. The dependency becomes a module in your workspace
-4. Its targets are available for `depends_on.targets` in your own targets
-
-```yaml
-# Your target can now depend on targets from the fetched dependency
-targets:
-  executables:
-    - name: my_app
-      sources: ["src/*.cpp"]
-      depends_on:
-        targets: [imgui]   # Target defined in imgui_build.yaml
-```
-
-### External Dependencies File
-
-For cleaner configuration, put dependencies in a separate file:
-
-```yaml
-# buildy.yaml
-dependencies:
-  file: buildy_config/dependencies.yaml
-```
+**Git repository:**
 
 ```yaml
 # buildy_config/dependencies.yaml
-system:
+imgui:
+  description: "Dear ImGui"
+  version: "1.90.1"
   common:
-    - name: zlib
-      pkg_config: zlib
+    git: "https://github.com/ocornut/imgui.git"
+    ref: "v1.90.1"
+    build:
+      system: cmake
+      args: ["-DIMGUI_DEMO=OFF"]
+    include_dirs: ["${dep_dir}/_install/include"]
+    lib_dirs: ["${dep_dir}/_install/lib"]
+    libs: ["imgui"]
+```
 
-fetch:
-  - name: sdl2
+**URL download (header-only):**
+
+```yaml
+stb:
+  description: "STB single-header libraries"
+  common:
+    url: "https://github.com/nothings/stb/archive/master.tar.gz"
+    checksum: "sha256:..."
+    include_dirs: ["${dep_dir}"]
+```
+
+**Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `buildy`, `none`
+
+### Building with Buildy Config
+
+Instead of external build systems, you can build fetched dependencies using a buildy config:
+
+```yaml
+some_lib:
+  common:
+    git: "https://github.com/example/some_lib.git"
+    ref: "v1.0.0"
+    build:
+      system: buildy
+      override: some_lib.buildy.yaml  # Custom buildy config
+```
+
+When `build.system: buildy` is specified:
+1. The dependency is fetched as usual
+2. Buildy processes the config file instead of cmake/meson/etc
+3. The dependency becomes a module in your workspace
+4. Its targets are available for `depends_on.targets` in your own targets
+
+### Dependencies File Organization
+
+Dependencies are defined in `buildy_config/dependencies.yaml`. For larger projects, you can organize them into separate files under `buildy_config/dependencies/`:
+
+```
+buildy_config/
+  dependencies.yaml         # Simple projects
+  dependencies/             # Or organized by category
+    graphics.yaml
+    audio.yaml
+    networking.yaml
+```
+
+**Example dependencies.yaml:**
+
+```yaml
+# System dependencies
+zlib:
+  description: "zlib compression library"
+  linux:
+    pkg_config: zlib
+  macos:
+    pkg_config: zlib
+  windows:
+    root: "${THIRD_PARTY}/zlib"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["zlibstatic"]
+
+# Fetched dependency
+sdl2:
+  description: "Simple DirectMedia Layer"
+  common:
     git: "https://github.com/libsdl-org/SDL.git"
     ref: "release-2.28.5"
-    build_system: cmake
-
-packages:
-  - glfw3
+    build:
+      system: cmake
+    include_dirs: ["${dep_dir}/_install/include"]
+    lib_dirs: ["${dep_dir}/_install/lib"]
+    libs: ["SDL2"]
 ```
 
 ### Lockfiles
