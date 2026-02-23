@@ -44,7 +44,7 @@ targets:
       language: cpp
       sources: ["src/*.cpp"]
       include_dirs: ["src"]
-      packages:
+      deps:
         - sdl2
         - nlohmann_json
       defines:

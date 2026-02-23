@@ -24,15 +24,13 @@ type ModuleInfo struct {
 
 // WorkspaceConfig represents workspace configuration from root buildy.yaml
 type WorkspaceConfig struct {
-	RootDir          string                       `json:"root"`
-	DiscoverPatterns []string                     `json:"discover_patterns"`  // Legacy: for backward compat
-	ExcludePatterns  []string                     `json:"exclude_patterns"`   // Legacy: for backward compat
-	ExplicitModules  map[string][]ModuleEntry     `json:"explicit_modules"`   // New: platform -> module entries
-	Variables        map[string]any               `json:"variables"`
-	PackagePaths     []string                     `json:"package_paths"`
-	Packages         map[string]map[string]string `json:"packages"` // package_name -> {version, custom_vars}
-	DependenciesFile string                       `json:"dependencies_file"`  // Path to external dependencies file
-	RawConfig        map[string]any               `json:"-"`
+	RootDir          string                   `json:"root"`
+	DiscoverPatterns []string                 `json:"discover_patterns"` // Legacy: for backward compat
+	ExcludePatterns  []string                 `json:"exclude_patterns"`  // Legacy: for backward compat
+	ExplicitModules  map[string][]ModuleEntry `json:"explicit_modules"`  // New: platform -> module entries
+	Variables        map[string]any           `json:"variables"`
+	DependenciesFile string                   `json:"dependencies_file"` // Path to external dependencies file
+	RawConfig        map[string]any           `json:"-"`
 }
 
 // ModuleEntry represents a module in the workspace.modules section
@@ -209,37 +207,6 @@ func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
 		variables = vars
 	}
 
-	// Get package paths
-	packagePaths := []string{}
-	if paths, ok := workspaceSection["package_paths"]; ok {
-		switch v := paths.(type) {
-		case string:
-			packagePaths = []string{v}
-		case []any:
-			for _, item := range v {
-				if str, ok := item.(string); ok {
-					packagePaths = append(packagePaths, str)
-				}
-			}
-		}
-	}
-
-	// Get package configurations
-	packages := make(map[string]map[string]string)
-	if pkgs, ok := workspaceSection["packages"].(map[string]any); ok {
-		for pkgName, pkgData := range pkgs {
-			pkgVars := make(map[string]string)
-			if pkgMap, ok := pkgData.(map[string]any); ok {
-				for key, value := range pkgMap {
-					if strVal, ok := value.(string); ok {
-						pkgVars[key] = strVal
-					}
-				}
-			}
-			packages[pkgName] = pkgVars
-		}
-	}
-
 	// Get dependencies file path
 	dependenciesFile := ""
 	if deps, ok := rawConfig["dependencies"].(map[string]any); ok {
@@ -254,8 +221,6 @@ func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
 		ExcludePatterns:  excludePatterns,
 		ExplicitModules:  explicitModules,
 		Variables:        variables,
-		PackagePaths:     packagePaths,
-		Packages:         packages,
 		DependenciesFile: dependenciesFile,
 		RawConfig:        rawConfig,
 	}
@@ -741,14 +706,14 @@ func (ws *Workspace) CalculateConfigFilesHash() (string, error) {
 		filesToHash = append(filesToHash, depsFile)
 	}
 
-	// Add all package files
-	packagesDir := filepath.Join(ws.RootDir, "buildy", "packages")
-	if info, err := os.Stat(packagesDir); err == nil && info.IsDir() {
-		entries, err := os.ReadDir(packagesDir)
+	// Add all dependency files from dependencies/ directory
+	depsDir := filepath.Join(ws.RootDir, "buildy_config", "dependencies")
+	if info, err := os.Stat(depsDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(depsDir)
 		if err == nil {
 			for _, entry := range entries {
 				if !entry.IsDir() && (filepath.Ext(entry.Name()) == ".yaml" || filepath.Ext(entry.Name()) == ".yml") {
-					filesToHash = append(filesToHash, filepath.Join(packagesDir, entry.Name()))
+					filesToHash = append(filesToHash, filepath.Join(depsDir, entry.Name()))
 				}
 			}
 		}

@@ -70,7 +70,8 @@ func (ee *ExecutionEnvironment) executeNative(command, cwd string, timeout int) 
 	// Execute command using platform-appropriate shell
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
+		// Use /S to strip quotes and parse command string literally
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/S", "/C", command)
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}

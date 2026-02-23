@@ -13,23 +13,23 @@ import (
 
 // TaskGenerator generates build tasks from configuration
 type TaskGenerator struct {
-	Platform         string
-	Architecture     string
-	Configuration    string
-	ToolchainManager *resource.ToolchainManager
-	TemplateEngine   *BuildTemplateEngine
-	CurrentToolchain *resource.ToolchainConfig
-	ToolchainHash    string
-	ToolMatcher      *resource.ToolMatcher
-	CommandBuilder   *resource.CommandBuilder
-	ExecEnv          *util.ExecutionEnvironment
-	PackageManager   *resource.PackageManager
-	VarEnv           *util.VariableEnvironment
-	PathResolver     *PathResolver
-	TaskIDGen        *TaskIDGenerator
-	TargetRegistry   *TargetRegistry
-	CurrentModule    string
-	Workspace        *Workspace
+	Platform           string
+	Architecture       string
+	Configuration      string
+	ToolchainManager   *resource.ToolchainManager
+	TemplateEngine     *BuildTemplateEngine
+	CurrentToolchain   *resource.ToolchainConfig
+	ToolchainHash      string
+	ToolMatcher        *resource.ToolMatcher
+	CommandBuilder     *resource.CommandBuilder
+	ExecEnv            *util.ExecutionEnvironment
+	DependencyResolver *resource.DependencyResolver
+	VarEnv             *util.VariableEnvironment
+	PathResolver       *PathResolver
+	TaskIDGen          *TaskIDGenerator
+	TargetRegistry     *TargetRegistry
+	CurrentModule      string
+	Workspace          *Workspace
 
 	// Track generated targets for cross-module dependency resolution
 	generatedTargets map[string]string // target name -> link task ID
@@ -46,7 +46,7 @@ func NewTaskGenerator(
 	platform, architecture, configuration string,
 	toolchainManager *resource.ToolchainManager,
 	templateEngine *BuildTemplateEngine,
-	packageManager *resource.PackageManager,
+	dependencyResolver *resource.DependencyResolver,
 	varEnv *util.VariableEnvironment,
 	workspace *Workspace,
 ) *TaskGenerator {
@@ -56,7 +56,7 @@ func NewTaskGenerator(
 		Configuration:      configuration,
 		ToolchainManager:   toolchainManager,
 		TemplateEngine:     templateEngine,
-		PackageManager:     packageManager,
+		DependencyResolver: dependencyResolver,
 		VarEnv:             varEnv,
 		Workspace:          workspace,
 		generatedTargets:   make(map[string]string),
@@ -100,13 +100,12 @@ func (tg *TaskGenerator) resolveConfigMap(config map[string]any) map[string]any 
 	return config
 }
 
-// prependMkdir wraps a command with directory creation for the output file
+// prependMkdir is no longer needed - the executor creates output directories
+// before running each task via os.MkdirAll. This function now just returns
+// the command unchanged for backward compatibility.
 func (tg *TaskGenerator) prependMkdir(command, outputPath string) string {
-	outputDir := filepath.Dir(outputPath)
-	if tg.isWindows() {
-		return fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && %s", outputDir, outputDir, command)
-	}
-	return fmt.Sprintf("mkdir -p %s && %s", outputDir, command)
+	// Directory creation is handled by the executor before task execution
+	return command
 }
 
 // isWindows returns true if the target platform is Windows
@@ -202,8 +201,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	// Apply pre-processing based on metadata
-	if metadata.PreProcessing.ResolvePackages {
-		if err := tg.resolvePackages(targetConfig); err != nil {
+	if metadata.PreProcessing.ResolveDeps {
+		if err := tg.resolveDeps(targetConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -499,17 +498,19 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 }
 
 // createSetupTask creates directory setup task
+// Directory creation is handled by the executor before each task runs,
+// so this task just needs to declare the directories as outputs.
 func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
 	libDir := filepath.Join(outputDir, "lib")
 	binDir := filepath.Join(outputDir, "bin")
 	objDir := filepath.Join(outputDir, "obj")
 
+	// Use a no-op command - the executor's MkdirAll handles actual directory creation
 	var command string
 	if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-		command = fmt.Sprintf("cmd /c mkdir %s 2>nul & mkdir %s 2>nul & mkdir %s 2>nul",
-			libDir, binDir, objDir)
+		command = "cmd /c echo Setup complete"
 	} else {
-		command = fmt.Sprintf("mkdir -p %s %s %s", libDir, binDir, objDir)
+		command = "true"
 	}
 
 	taskID := tg.TaskIDGen.Next("setup", "dirs")
@@ -537,74 +538,57 @@ func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
 	return task
 }
 
-// resolvePackages resolves package dependencies and merges their settings into the target config
-func (tg *TaskGenerator) resolvePackages(targetConfig map[string]any) error {
-	if tg.PackageManager == nil {
+// resolveDeps resolves dependencies and merges their settings into the target config
+func (tg *TaskGenerator) resolveDeps(targetConfig map[string]any) error {
+	if tg.DependencyResolver == nil {
 		return nil
 	}
 
-	var packageNames []string
+	var depNames []string
 
-	// Preferred format: packages at target level
-	if packages, ok := targetConfig["packages"]; ok {
-		packageNames = append(packageNames, ExtractStringList(packages)...)
+	// deps: field at target level
+	if deps, ok := targetConfig["deps"]; ok {
+		depNames = append(depNames, ExtractStringList(deps)...)
 	}
 
-	// Legacy format: depends_on.packages
-	if dependsOn, ok := targetConfig["depends_on"].(map[string]any); ok {
-		if packages, ok := dependsOn["packages"]; ok {
-			packageNames = append(packageNames, ExtractStringList(packages)...)
-		}
-	}
-
-	if len(packageNames) == 0 {
+	if len(depNames) == 0 {
 		return nil
 	}
 
-	var workspacePackages map[string]map[string]string
-	if tg.Workspace != nil && tg.Workspace.Config != nil {
-		workspacePackages = tg.Workspace.Config.Packages
-	}
-
-	mergedPackage, err := tg.PackageManager.ResolvePackages(
-		packageNames,
-		tg.Platform,
-		tg.Architecture,
-		workspacePackages,
-	)
+	mergedDep, err := tg.DependencyResolver.ResolveDependencies(depNames)
 	if err != nil {
-		return fmt.Errorf("failed to resolve packages: %w", err)
+		return fmt.Errorf("failed to resolve dependencies: %w", err)
 	}
 
-	// Merge package settings into target config
-	if len(mergedPackage.IncludeDirs) > 0 {
+	// Merge dependency settings into target config
+	if len(mergedDep.IncludeDirs) > 0 {
 		existing := extractIncludeDirs(targetConfig["include_dirs"])
-		targetConfig["include_dirs"] = append(mergedPackage.IncludeDirs, existing...)
+		targetConfig["include_dirs"] = append(mergedDep.IncludeDirs, existing...)
 	}
 
-	if len(mergedPackage.LibDirs) > 0 {
+	if len(mergedDep.LibDirs) > 0 {
 		existing := ExtractStringList(targetConfig["lib_dirs"])
-		targetConfig["lib_dirs"] = append(mergedPackage.LibDirs, existing...)
+		targetConfig["lib_dirs"] = append(mergedDep.LibDirs, existing...)
 	}
 
-	if len(mergedPackage.Libs) > 0 {
+	if len(mergedDep.Libs) > 0 {
 		existing := ExtractStringList(targetConfig["libs"])
-		targetConfig["libs"] = append(mergedPackage.Libs, existing...)
+		targetConfig["libs"] = append(mergedDep.Libs, existing...)
 	}
 
-	if len(mergedPackage.Frameworks) > 0 {
+	if len(mergedDep.Frameworks) > 0 {
 		existing := ExtractStringList(targetConfig["frameworks"])
-		targetConfig["frameworks"] = append(mergedPackage.Frameworks, existing...)
+		targetConfig["frameworks"] = append(mergedDep.Frameworks, existing...)
 	}
 
-	if len(mergedPackage.Defines) > 0 {
+	if len(mergedDep.Defines) > 0 {
 		existing := ExtractStringList(targetConfig["defines"])
-		targetConfig["defines"] = append(mergedPackage.Defines, existing...)
+		targetConfig["defines"] = append(mergedDep.Defines, existing...)
 	}
 
-	if len(mergedPackage.Sources) > 0 {
+	if len(mergedDep.Sources) > 0 {
 		existing := ExtractStringList(targetConfig["sources"])
-		targetConfig["sources"] = append(mergedPackage.Sources, existing...)
+		targetConfig["sources"] = append(mergedDep.Sources, existing...)
 	}
 
 	return nil
@@ -764,6 +748,9 @@ func (tg *TaskGenerator) generateTransformTasks(
 			if !filepath.IsAbs(resolvedOutput) && moduleDir != "" {
 				resolvedOutput = filepath.Join(moduleDir, resolvedOutput)
 			}
+			// Normalize path separators for the current OS
+			resolvedOutput = filepath.Clean(resolvedOutput)
+			inputFile = filepath.Clean(inputFile)
 
 			// Build the command
 			command := tool.GetCommand(tg.Platform)
@@ -1432,6 +1419,8 @@ func (tg *TaskGenerator) processStagingContents(
 					}
 
 					for _, match := range matches {
+						// Normalize path separators
+						match = filepath.Clean(match)
 						destPath := filepath.Join(folderPath, filepath.Base(match))
 						// Check if this file is produced by a task and add dependency if so
 						var deps []string
@@ -1444,7 +1433,8 @@ func (tg *TaskGenerator) processStagingContents(
 						}
 					}
 				} else {
-					// Single file
+					// Single file - normalize path separators
+					sourcePattern = filepath.Clean(sourcePattern)
 					destPath := filepath.Join(folderPath, filepath.Base(sourcePattern))
 					// Check if this file is produced by a task and add dependency if so
 					var deps []string
@@ -1561,7 +1551,9 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(
 	isWindows bool,
 	dependencies []string,
 ) *BuildTask {
-	destDir := filepath.Dir(dest)
+	// Normalize path separators for the current OS
+	source = filepath.Clean(source)
+	dest = filepath.Clean(dest)
 
 	var command string
 	taskType := "copy"
@@ -1569,14 +1561,14 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(
 	if useSymlink && !isWindows {
 		taskType = "symlink"
 		// ln -sf: -s for symbolic link, -f to force overwrite
-		command = fmt.Sprintf("mkdir -p %s && ln -sf %s %s", destDir, source, dest)
+		// Directory creation is handled by the executor before task execution
+		command = fmt.Sprintf("ln -sf %s %s", source, dest)
 	} else {
-		// Copy command
+		// Copy command - directory creation is handled by the executor
 		if isWindows {
-			command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && copy /Y \"%s\" \"%s\"",
-				destDir, destDir, source, dest)
+			command = fmt.Sprintf("copy /Y \"%s\" \"%s\"", source, dest)
 		} else {
-			command = fmt.Sprintf("mkdir -p %s && cp %s %s", destDir, source, dest)
+			command = fmt.Sprintf("cp %s %s", source, dest)
 		}
 	}
 
@@ -1881,15 +1873,16 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 
 				// Create a copy task for each file
 				for _, srcFile := range files {
+					// Normalize path separators
+					srcFile = filepath.Clean(srcFile)
 					destFile := filepath.Join(dest, filepath.Base(srcFile))
 
+					// Directory creation is handled by the executor before task execution
 					var command string
-					destDir := filepath.Dir(destFile)
 					if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-						command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && copy /Y \"%s\" \"%s\"",
-							destDir, destDir, srcFile, destFile)
+						command = fmt.Sprintf("copy /Y \"%s\" \"%s\"", srcFile, destFile)
 					} else {
-						command = fmt.Sprintf("mkdir -p %s && cp %s %s", destDir, srcFile, destFile)
+						command = fmt.Sprintf("cp %s %s", srcFile, destFile)
 					}
 
 					taskID := tg.TaskIDGen.Next("copy", filepath.Base(srcFile))
@@ -1982,6 +1975,9 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		if !filepath.IsAbs(dest) && moduleDir != "" {
 			dest = filepath.Join(moduleDir, dest)
 		}
+		// Normalize path separators
+		source = filepath.Clean(source)
+		dest = filepath.Clean(dest)
 
 		// Resolve additional explicit dependencies
 		if deps, ok := copyItem["depends_on"].([]any); ok {
@@ -2010,14 +2006,12 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			dest = filepath.Join(dest, filepath.Base(source))
 		}
 
-		// Create the copy command
+		// Create the copy command - directory creation is handled by the executor
 		var command string
-		destDir := filepath.Dir(dest)
 		if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-			command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && copy /Y \"%s\" \"%s\"",
-				destDir, destDir, source, dest)
+			command = fmt.Sprintf("copy /Y \"%s\" \"%s\"", source, dest)
 		} else {
-			command = fmt.Sprintf("mkdir -p %s && cp %s %s", destDir, source, dest)
+			command = fmt.Sprintf("cp %s %s", source, dest)
 		}
 
 		// Create the copy task

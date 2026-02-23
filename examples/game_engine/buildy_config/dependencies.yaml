@@ -1,22 +1,57 @@
 # External dependencies for game_engine project
+# New unified format: each top-level key is a dependency name
 
-system:
+zlib:
+  description: "zlib compression library"
   common:
-    - name: zlib
-      pkg_config: zlib
-  linux:
-    - name: pthread
-      libs: ["pthread"]
-    - name: dl
-      libs: ["dl"]
-  windows:
-    - name: winsock
-      libs: ["ws2_32"]
-  macos:
-    - name: cocoa
-      frameworks: ["Cocoa", "IOKit"]
+    pkg_config: zlib
 
-# Packages: resolved from buildy/packages/*.yaml (project), ~/.buildy/packages/ (user), or built-in
-# Targets reference these via their packages: field
-packages:
-  - glfw3
+pthread:
+  description: "POSIX threads"
+  linux:
+    libs: ["pthread"]
+
+dl:
+  description: "Dynamic linking library"
+  linux:
+    libs: ["dl"]
+
+winsock:
+  description: "Windows sockets"
+  windows:
+    libs: ["ws2_32"]
+
+cocoa:
+  description: "macOS Cocoa frameworks"
+  macos:
+    frameworks: ["Cocoa", "IOKit"]
+
+glfw3:
+  description: "GLFW - OpenGL window and input library"
+  
+  common:
+    defines: ["GLFW_ENABLED"]
+  
+  linux:
+    include_dirs: ["/usr/include/GLFW"]
+    lib_dirs: ["/usr/lib/x86_64-linux-gnu"]
+    libs: ["glfw"]
+    defines: ["GLFW_EXPOSE_NATIVE_X11"]
+    
+  linux-arm64:
+    lib_dirs: ["/usr/lib/aarch64-linux-gnu"]
+  
+  windows:
+    root: "${THIRD_PARTY_ROOT}/GLFW3"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["glfw3"]
+    defines: ["GLFW_EXPOSE_NATIVE_WIN32"]
+  
+  macos:
+    root: "/opt/homebrew"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["glfw"]
+    frameworks: ["Cocoa", "IOKit", "CoreVideo", "OpenGL"]
+    defines: ["GLFW_EXPOSE_NATIVE_COCOA"]

@@ -19,7 +19,7 @@ type TemplateMetadata struct {
 	Language      string   // Language this template is for (e.g., "cpp", "c", "go", "rust")
 	TargetTypes   []string // Target types this template can build (e.g., ["executable", "shared_library"])
 	PreProcessing struct {
-		ResolvePackages    bool // Call resolvePackages() for package dependencies
+		ResolveDeps        bool // Call resolveDeps() for external dependencies
 		ResolveSources     bool // Call PathResolver.ResolveSources() for source file globbing
 		ResolveIncludeDirs bool // Call PathResolver.ResolveIncludeDirs() for include paths
 		ResolvePath        bool // Call PathResolver.ResolveRelativePath() on "path" field
@@ -251,8 +251,8 @@ func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *Temp
 
 	// Parse pre_processing
 	if preProc, ok := metadataRaw["pre_processing"].(map[string]any); ok {
-		if v, ok := preProc["resolve_packages"].(bool); ok {
-			metadata.PreProcessing.ResolvePackages = v
+		if v, ok := preProc["resolve_deps"].(bool); ok {
+			metadata.PreProcessing.ResolveDeps = v
 		}
 		if v, ok := preProc["resolve_sources"].(bool); ok {
 			metadata.PreProcessing.ResolveSources = v

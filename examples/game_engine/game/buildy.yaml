@@ -17,8 +17,8 @@ targets:
         - "../renderer/include"
         - "../audio/include"
       
-      # packages: External packages (provide include_dirs, lib_dirs, libs, defines)
-      packages:
+      # deps: External dependencies (provide include_dirs, lib_dirs, libs, defines)
+      deps:
         - glfw3
       
       # libs: Internal libraries to link against

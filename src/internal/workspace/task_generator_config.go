@@ -200,7 +200,7 @@ func (tg *TaskGenerator) mergeTargetConfig(base, override map[string]any) map[st
 				result[k] = v
 			}
 
-		case "include_dirs", "libs", "packages", "depends_on":
+		case "include_dirs", "libs", "deps", "depends_on":
 			// These could be merged or replaced - for now, replace if present
 			result[k] = v
 

@@ -317,246 +317,217 @@ fetch:
     ref: "v1.90.1"
 ```
 
-### Inline Dependencies
+### Example Dependencies File
 
-Alternatively, define directly in `buildy.yaml`:
+Here's a complete example showing different dependency types:
 
 ```yaml
-dependencies:
-  system:
-    common:
-      - name: zlib
-        pkg_config: zlib
-    linux:
-      - name: pthread
-        libs: ["pthread"]
-      - name: dl
-        libs: ["dl"]
-    windows:
-      - name: winsock
-        libs: ["ws2_32", "wsock32"]
-    macos:
-      - name: cocoa
-        frameworks: ["Cocoa", "IOKit"]
+# buildy_config/dependencies.yaml
 
-  paths:
-    - name: glfw
-      path: "${THIRD_PARTY_ROOT}/glfw/${platform}"
-      include_dirs: ["${path}/include"]
-      lib_dirs: ["${path}/lib"]
-      libs: ["glfw3"]
+# System dependency with pkg-config (Linux/macOS)
+zlib:
+  description: "zlib compression library"
+  linux:
+    pkg_config: zlib
+  macos:
+    pkg_config: zlib
+  windows:
+    root: "${THIRD_PARTY_ROOT}/zlib"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["zlibstatic"]
 
-  fetch:
-    - name: imgui
-      git: "https://github.com/ocornut/imgui.git"
-      ref: "v1.90.1"
-      build_system: auto      # auto | cmake | meson | make | cargo | go_mod | none
-      build_phases: [configure, build]  # Phases to run (default: configure, build)
-      build_args: ["-DIMGUI_DEMO=OFF"]  # Extra args passed to build system
-      
-    - name: stb
-      url: "https://github.com/nothings/stb/archive/master.tar.gz"
-      checksum: "sha256:..."
-      type: header_only
-      include_dirs: ["${dest}"]
-      
-    - name: some_lib
-      git: "https://github.com/example/some_lib.git"
-      build_system: cmake
-      execution:              # Per-dependency execution override
-        type: docker
-        image: "gcc:13"
+# Platform-specific system libraries
+pthread:
+  linux:
+    libs: ["pthread"]
 
-  packages:                   # Future: package manager support
-    - name: fmt
-      version: "10.1.0"
-      manager: conan          # conan | vcpkg
+winsock:
+  windows:
+    libs: ["ws2_32", "wsock32"]
+
+cocoa:
+  macos:
+    frameworks: ["Cocoa", "IOKit"]
+
+# Pre-built library with root path
+glfw:
+  description: "GLFW window library"
+  version: "3.4"
+  common:
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+  linux:
+    pkg_config: glfw3
+  windows:
+    root: "${THIRD_PARTY_ROOT}/glfw/${version}"
+    libs: ["glfw3"]
+  macos:
+    root: "/opt/homebrew"
+    libs: ["glfw"]
+    frameworks: ["Cocoa", "IOKit", "CoreVideo"]
+
+# Fetched dependency with cmake build
+imgui:
+  description: "Dear ImGui"
+  version: "1.90.1"
+  common:
+    git: "https://github.com/ocornut/imgui.git"
+    ref: "v1.90.1"
+    build:
+      system: cmake
+      args: ["-DIMGUI_DEMO=OFF"]
+    include_dirs: ["${dep_dir}/_install/include"]
+    lib_dirs: ["${dep_dir}/_install/lib"]
+    libs: ["imgui"]
+
+# Header-only library
+stb:
+  description: "STB single-header libraries"
+  common:
+    url: "https://github.com/nothings/stb/archive/master.tar.gz"
+    checksum: "sha256:..."
+    include_dirs: ["${dep_dir}"]
+
+# Fetched dependency built with custom buildy config
+some_lib:
+  common:
+    git: "https://github.com/example/some_lib.git"
+    build:
+      system: buildy
+      override: some_lib.buildy.yaml
+    execution:
+      type: docker
+      image: "gcc:13"
 ```
 
 ### Dependency Types
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `system` | System libraries via pkg-config or explicit paths | zlib, pthread |
-| `paths` | User-provided paths with variable expansion | Vulkan SDK |
-| `fetch` | Downloaded from git or URL | imgui, stb |
-| `packages` | Package files with platform-specific settings | glfw3, opengl |
+Dependency types are **inferred** from the fields present in the configuration:
 
-### Fetch Dependency Reference
+| Inferred Type | Fields Present | Description |
+|---------------|----------------|-------------|
+| `fetch` | `git:` or `url:` | Downloaded from Git repository or URL |
+| `system` | `pkg_config:` or `root:` | System libraries via pkg-config or explicit paths |
+| `system` | Only `include_dirs:`, `libs:`, etc. | Explicit path-based dependencies |
 
-Fetched dependencies are stored locally within the project:
+### Dependency Configuration Reference
+
+Dependencies are defined in `buildy_config/dependencies.yaml` or organized into separate files in `buildy_config/dependencies/`. Each top-level key is a dependency name.
+
+**Fetched dependencies** are stored locally:
 - **Source**: `.buildy_cache/deps/<name>/`
 - **Build**: `.buildy_cache/deps/<name>/_build/`
 - **Install**: `.buildy_cache/deps/<name>/_install/`
 
-Dependencies are **not** installed system-wide. The `${dest}` variable refers to the source directory.
+The `${dep_dir}` variable refers to the fetched source directory.
 
-Complete schema for fetch dependencies:
-
-```yaml
-fetch:
-  - name: mylib                     # Required: identifier
-    git: "https://..."              # Git repository URL (or use url:)
-    url: "https://..."              # Archive URL (or use git:)
-    ref: "v1.0.0"                   # Git ref: tag, branch, or commit
-    checksum: "sha256:..."          # SHA256 checksum for URL downloads
-    dest: "${cache_dir}/custom"     # Custom destination directory
-    type: source                    # source | header_only
-    config: "buildy.yaml"           # Use buildy config instead of build_system
-    build_system: cmake             # auto | cmake | meson | make | autoconf | cargo | go_mod | none
-    build_phases: [configure, build]  # Phases to run
-    build_args: ["-DFOO=ON"]        # Extra arguments for build system
-    include_dirs: ["${dest}/include"]  # Override include directories
-    execution:                      # Per-dependency Docker config
-      type: docker
-      image: "gcc:13"
-      volumes: ["${PWD}:/workspace"]
-      working_dir: "/workspace"
-      user: "${UID}:${GID}"
-```
-
-| Field | Description | Default |
-|-------|-------------|---------|
-| `name` | Dependency identifier (required) | - |
-| `git` | Git repository URL | - |
-| `url` | Archive URL (.tar.gz, .zip, .tar, .tar.xz) | - |
-| `ref` | Git ref (tag, branch, commit) | Default branch |
-| `checksum` | SHA256 checksum for URL downloads | - |
-| `dest` | Custom destination directory | `${cache_dir}/deps/${name}` |
-| `type` | `source` (build it) or `header_only` | `source` |
-| `config` | Build with buildy config file instead of `build_system` | - |
-| `build_system` | Build system to use (ignored if `config` set) | `auto` |
-| `build_phases` | Phases to execute | `[configure, build]` |
-| `build_args` | Extra build arguments | `[]` |
-| `include_dirs` | Custom include directories | Auto-detected |
-| `execution` | Per-dependency execution config | Global default |
-
-**Building with Buildy Config:**
-
-When a fetched dependency already has a `buildy.yaml` or you provide a custom one, use `config` instead of `build_system`:
-
-```yaml
-fetch:
-  - name: imgui
-    git: "https://github.com/ocornut/imgui.git"
-    ref: "v1.90.1"
-    config: imgui_build.yaml   # Custom buildy config in the repo root
-```
-
-This approach is useful when:
-- The fetched dependency already has its own `buildy.yaml`
-- You provide a custom buildy config file for the dependency
-- You want buildy to build the dependency the same way it builds your project modules
-
-The dependency is registered as a module and its targets become available for `depends_on.targets` in your own targets.
-
-**Header-only libraries:**
-
-```yaml
-- name: stb
-  url: "https://github.com/nothings/stb/archive/master.tar.gz"
-  type: header_only
-  include_dirs: ["${dest}"]
-```
-
-Setting `type: header_only` skips the build step and defaults `include_dirs` to `${dest}`.
-
-### Packages
-
-Packages are standalone YAML files that define platform-specific include paths, library paths, library names, defines, and frameworks. They're ideal for complex dependencies that vary significantly across platforms.
-
-**Declaring packages in dependencies:**
+**Complete dependency schema:**
 
 ```yaml
 # buildy_config/dependencies.yaml
-system:
-  - name: zlib
-    pkg_config: zlib
-
-# Packages: reference package files by name
-packages:
-  - glfw3      # Resolves to buildy_config/packages/glfw3.yaml
-  - opengl     # Resolves to buildy_config/packages/opengl.yaml
+glfw:
+  description: "GLFW - OpenGL/Vulkan window library"
+  version: "3.4"
+  
+  common:
+    defines: ["GLFW_INCLUDE_VULKAN"]
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+  
+  linux:
+    pkg_config: glfw3
+    defines: ["GLFW_EXPOSE_NATIVE_X11"]
+  
+  windows:
+    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
+    build:
+      system: buildy
+      override: glfw.buildy.yaml
+    include_dirs: ["${dep_dir}/_install/include"]
+    lib_dirs: ["${dep_dir}/_install/lib"]
+    libs: ["glfw3"]
+    defines: ["GLFW_EXPOSE_NATIVE_WIN32"]
+  
+  macos:
+    root: "/opt/homebrew"
+    libs: ["glfw"]
+    frameworks: ["Cocoa", "IOKit", "CoreVideo"]
 ```
 
-**Using packages in targets:**
+**Field Reference:**
+
+| Field | Description | Notes |
+|-------|-------------|-------|
+| `description` | Human-readable description | Optional |
+| `version` | Version string | Available as `${version}` |
+| `git` | Git repository URL | Infers `fetch` type |
+| `url` | Archive URL (.tar.gz, .zip, etc.) | Infers `fetch` type |
+| `ref` | Git ref (tag, branch, commit) | For `git:` dependencies |
+| `checksum` | SHA256 checksum for URL downloads | Recommended for `url:` |
+| `pkg_config` | pkg-config package name | Infers `system` type |
+| `root` | Base path for pre-built library | Available as `${root}` |
+| `include_dirs` | Include directories | Can use `${root}`, `${dep_dir}` |
+| `lib_dirs` | Library directories | Can use `${root}`, `${dep_dir}` |
+| `libs` | Libraries to link | e.g., `["glfw3", "pthread"]` |
+| `frameworks` | macOS frameworks | e.g., `["Cocoa", "IOKit"]` |
+| `defines` | Preprocessor definitions | e.g., `["DEBUG=1"]` |
+| `build` | Build configuration (see below) | For fetch dependencies |
+| `execution` | Docker execution config | For fetch dependencies |
+
+**Build Section:**
+
+```yaml
+build:
+  system: cmake         # cmake, meson, make, autoconf, buildy, none
+  override: custom.yaml # Custom build file (for buildy system)
+  args:                 # Arguments passed to build system
+    - "-DFOO=ON"
+    - "-DBAR=OFF"
+```
+
+**Platform Sections:**
+
+Dependencies support platform-specific configuration via sections. Sections are merged in order: `common` → `platform` → `platform-arch`
+
+- `common` - All platforms
+- `linux`, `windows`, `macos` - Platform-specific
+- `linux-x86_64`, `linux-arm64`, etc. - Platform-architecture combinations
+
+**Built-in Variables for Dependencies:**
+
+| Variable | Description |
+|----------|-------------|
+| `${name}` | Dependency name |
+| `${version}` | Dependency version |
+| `${platform}` | Current platform (linux, windows, macos) |
+| `${arch}` | Current architecture (x86_64, arm64) |
+| `${toolchain}` | Current toolchain name |
+| `${root}` | Value of `root:` field (for system deps) |
+| `${dep_dir}` | Fetched source directory (for fetch deps) |
+
+Environment variables are referenced with uppercase names: `${VULKAN_SDK}`, `${THIRD_PARTY_ROOT}`
+
+**Using Dependencies in Targets:**
 
 ```yaml
 targets:
   executables:
     - name: my_game
       sources: ["src/*.cpp"]
-      packages:           # External packages (adds include_dirs, lib_dirs, libs, defines)
-        - glfw3
-        - opengl
-      libs:               # Internal project libraries
+      deps:              # External dependencies
+        - glfw
+        - vulkan
+      libs:              # Internal project libraries
         - engine_core
 ```
 
-**Package search order:**
+**Error Handling:**
 
-1. `./buildy_config/packages/*.yaml` - Project-specific
-2. `~/.buildy/packages/*.yaml` - User-shared
-3. System locations (`/usr/share/buildy/packages/`, etc.)
-4. Built-in (embedded in binary)
-
-**Custom search paths (optional):**
-
-```yaml
-# buildy_config/dependencies.yaml
-package_paths:                    # Additional search paths (checked first)
-  - "${THIRD_PARTY_ROOT}/packages"
-  - "/opt/company/buildy/packages"
-
-packages:
-  - glfw3
-  - proprietary_lib              # Found in company path
-```
-
-**Package file format:**
-
-```yaml
-# buildy_config/packages/glfw3.yaml
-package:
-  name: glfw3
-  description: "GLFW - OpenGL window and input library"
-  
-  common:
-    defines: ["GLFW_ENABLED"]
-  
-  linux:
-    include_dirs: ["/usr/include/GLFW"]
-    lib_dirs: ["/usr/lib/x86_64-linux-gnu"]
-    libs: ["glfw"]
-    defines: ["GLFW_EXPOSE_NATIVE_X11"]
-    
-  linux-arm64:                # Platform-arch override
-    lib_dirs: ["/usr/lib/aarch64-linux-gnu"]
-  
-  windows:
-    include_dirs: ["${THIRD_PARTY_ROOT}/GLFW3/include"]
-    lib_dirs: ["${THIRD_PARTY_ROOT}/GLFW3/lib"]
-    libs: ["glfw3"]
-    defines: ["GLFW_EXPOSE_NATIVE_WIN32"]
-  
-  macos:
-    include_dirs: ["/opt/homebrew/include"]
-    lib_dirs: ["/opt/homebrew/lib"]
-    libs: ["glfw"]
-    frameworks: ["Cocoa", "IOKit", "CoreVideo"]
-```
-
-**Inheritance order:** `common` → `platform` → `platform-arch`
-
-**What packages provide:**
-
-| Field | Description |
-|-------|-------------|
-| `include_dirs` | Added to compiler include path (`-I`) |
-| `lib_dirs` | Added to linker library path (`-L`) |
-| `libs` | Libraries to link (`-l`) |
-| `defines` | Preprocessor definitions (`-D`) |
-| `frameworks` | macOS frameworks (`-framework`) |
+Buildy follows an "error immediately" philosophy for dependencies:
+- If `pkg_config:` is specified but pkg-config is unavailable, buildy errors
+- If `root:` path doesn't exist, buildy errors
+- No warnings or fallbacks - explicit configuration is required
 
 ---
 
@@ -614,12 +585,11 @@ targets:
       sources: ["src/*.cpp"]
       include_dirs: ["include", "src"]
       
-      # packages: External packages (add include_dirs, lib_dirs, libs, defines)
-      packages: ["glfw3"]
+      # deps: External dependencies (add include_dirs, lib_dirs, libs, defines)
+      deps: ["glfw3", "zlib"]
       
       # depends_on: Build ordering
       depends_on:
-        deps: ["zlib"]        # From dependencies section
         targets: []           # Other targets (build order)
       
       compile:
@@ -696,10 +666,11 @@ targets:
       language: cpp           # Required: c | cpp | rust | go
       sources: ["src/*.cpp"]
       
-      # packages: External packages (add include_dirs, lib_dirs, libs, defines)
-      packages:
+      # deps: External dependencies (add include_dirs, lib_dirs, libs, defines)
+      deps:
         - glfw3
         - opengl
+        - zlib
       
       # libs: Internal libraries to link against
       # Order matters for static libraries (dependents before dependencies)
@@ -710,7 +681,6 @@ targets:
       # depends_on: Build ordering
       depends_on:
         targets: ["engine_core", "engine_renderer"]  # Build order
-        deps: ["zlib"]                               # From dependencies section
       
       runtime_deps: ["game_assets", "shaders"]  # Artifacts needed at runtime
 ```
@@ -743,21 +713,20 @@ targets:
       bin: "myapp"            # Binary name if multiple binaries in crate
 ```
 
-### packages vs libs vs depends_on
+### deps vs libs vs depends_on
 
 These are **intentionally separate** concepts:
 
 | Field | Purpose | Example |
 |-------|---------|---------|
-| `packages` | External packages (provide include paths, libs, defines) | `[glfw3, opengl]` |
+| `deps` | External dependencies (provide include paths, lib paths, libs, defines) | `[glfw3, zlib]` |
 | `libs` | Internal project libraries to link against | `[engine_core, engine_renderer]` |
 | `depends_on.targets` | Build ordering - these targets must complete first | Libraries, tools |
 | `depends_on.artifacts` | Build ordering + virtual files for globs | Code generators (protobuf, etc.) |
-| `depends_on.deps` | External dependencies (from `dependencies:` section) | System libs, fetched sources |
 
 **Why separate?**
 
-1. **Packages are external**: They provide platform-specific settings (includes, libs, defines)
+1. **deps are external**: They provide platform-specific settings (includes, libs, defines) from `buildy_config/dependencies.yaml`
 2. **libs are internal**: Project libraries you've built
 3. **depends_on is ordering**: Ensures targets/artifacts are built first (may or may not involve linking)
 4. **Explicit is better**: Each field has one clear purpose
@@ -1493,7 +1462,7 @@ templates:
       target_types: [executable]
       toolchain_language: cpp
       pre_processing:
-        resolve_packages: true
+        resolve_deps: true
         resolve_sources: true
         resolve_include_dirs: true
       post_processing:
@@ -1891,40 +1860,63 @@ artifacts:
 ### Dependencies: `buildy_config/dependencies.yaml`
 
 ```yaml
-system:
+zlib:
+  description: "zlib compression library"
   common:
-    - name: zlib
-      pkg_config: zlib
-  linux:
-    - name: pthread
-      libs: ["pthread"]
-    - name: dl
-      libs: ["dl"]
-  windows:
-    - name: winsock
-      libs: ["ws2_32"]
+    pkg_config: zlib
 
-paths:
-  - name: vulkan_sdk
-    path: "${VULKAN_SDK}"
-    include_dirs: ["${path}/include"]
-    lib_dirs: ["${path}/lib"]
+pthread:
+  description: "POSIX threads"
+  linux:
+    libs: ["pthread"]
+
+dl:
+  description: "Dynamic linking library"
+  linux:
+    libs: ["dl"]
+
+winsock:
+  description: "Windows sockets"
+  windows:
+    libs: ["ws2_32"]
+
+vulkan_sdk:
+  description: "Vulkan SDK"
+  common:
+    root: "${VULKAN_SDK}"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
     libs: ["vulkan"]
 
-fetch:
-  - name: imgui
+imgui:
+  description: "Dear ImGui"
+  common:
     git: "https://github.com/ocornut/imgui.git"
     ref: "v1.90.1"
-    type: source
-    
-  - name: stb
+    include_dirs: ["${dep_dir}"]
+
+stb:
+  description: "STB single-header libraries"
+  common:
     git: "https://github.com/nothings/stb.git"
     ref: "master"
-    type: header_only
+    include_dirs: ["${dep_dir}"]
 
-# Packages: resolved from buildy_config/packages/*.yaml
-packages:
-  - glfw3
+glfw3:
+  description: "GLFW window library"
+  linux:
+    pkg_config: glfw3
+  windows:
+    root: "${THIRD_PARTY_ROOT}/GLFW3"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["glfw3"]
+  macos:
+    root: "/opt/homebrew"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["glfw"]
+    frameworks: ["Cocoa", "IOKit", "CoreVideo"]
 ```
 
 ### Submodule: `core/buildy.yaml`
@@ -1939,8 +1931,7 @@ targets:
       language: cpp
       sources: ["src/*.cpp"]
       include_dirs: ["include"]
-      depends_on:
-        deps: ["zlib", "stb"]
+      deps: ["zlib", "stb"]
 ```
 
 ### Submodule: `renderer/buildy.yaml`
@@ -1974,8 +1965,8 @@ targets:
       sources: ["src/*.cpp"]
       include_dirs: ["../core/include", "../renderer/include"]
       
-      # packages: External packages (adds include_dirs, lib_dirs, libs)
-      packages:
+      # deps: External dependencies (adds include_dirs, lib_dirs, libs)
+      deps:
         - glfw3
       
       # libs: Internal libraries (order matters for static libs)
