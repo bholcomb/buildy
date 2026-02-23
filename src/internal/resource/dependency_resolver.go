@@ -2,7 +2,6 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +109,7 @@ type DependencyResolver struct {
 func NewDependencyResolver(platform, architecture, toolchain, cacheDir, workspaceRoot string, varEnv *util.VariableEnvironment) *DependencyResolver {
 	bsm, err := NewBuildSystemManager()
 	if err != nil {
-		log.Printf("WARNING: Failed to create BuildSystemManager: %v", err)
+		util.LogWarning("Failed to create BuildSystemManager: %v", err)
 	}
 
 	return &DependencyResolver{
@@ -221,6 +220,42 @@ func (dr *DependencyResolver) parseDependencyConfig(name string, data map[string
 		}
 	}
 
+	// Check if we have any platform sections
+	hasPlatformSections := false
+	for key := range data {
+		if allSectionNames[key] {
+			hasPlatformSections = true
+			break
+		}
+	}
+
+	// If we have platform sections, extract non-platform fields into a "common" section
+	// This allows top-level fields like "defines" to be shared across platforms
+	if hasPlatformSections {
+		topLevelData := make(map[string]any)
+		hasTopLevelFields := false
+		for key, value := range data {
+			// Skip metadata
+			if key == "description" || key == "version" {
+				continue
+			}
+			// Skip platform sections (they have map values and are in allSectionNames)
+			if allSectionNames[key] {
+				continue
+			}
+			// Everything else is a top-level dependency field
+			topLevelData[key] = value
+			hasTopLevelFields = true
+		}
+		if hasTopLevelFields {
+			section, err := dr.parseDependencySection(topLevelData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse top-level fields: %w", err)
+			}
+			config.Sections["common"] = section
+		}
+	}
+
 	// Parse each platform section
 	for key, value := range data {
 		// Skip metadata fields
@@ -230,9 +265,8 @@ func (dr *DependencyResolver) parseDependencyConfig(name string, data map[string
 
 		// Check if this is a platform section
 		if !allSectionNames[key] {
-			// Unknown key - could be a simple dependency without platform sections
-			// Try to parse as a flat dependency (all fields at top level)
-			if len(config.Sections) == 0 {
+			// If no platform sections, treat entire data as a "common" section
+			if !hasPlatformSections && len(config.Sections) == 0 {
 				section, err := dr.parseDependencySection(data)
 				if err != nil {
 					return nil, err
@@ -352,6 +386,7 @@ func (dr *DependencyResolver) resolveDependency(name string, config *DependencyC
 	depVarEnv.SetVariable("platform", dr.platform, "dependency")
 	depVarEnv.SetVariable("arch", dr.architecture, "dependency")
 	depVarEnv.SetVariable("toolchain", dr.toolchain, "dependency")
+	depVarEnv.SetVariable("workspace_root", dr.workspaceRoot, "dependency")
 
 	// Infer dependency type from fields
 	depType, err := dr.inferDependencyType(merged)
@@ -456,10 +491,11 @@ func (dr *DependencyResolver) mergePlatformSections(config *DependencyConfig) De
 // inferDependencyType determines the dependency type from its fields
 func (dr *DependencyResolver) inferDependencyType(section DependencySection) (DependencyType, error) {
 	hasFetch := section.Git != "" || section.URL != ""
-	hasSystem := section.PkgConfig != "" || section.Root != "" || len(section.IncludeDirs) > 0 || len(section.Libs) > 0
+	hasSystemSource := section.PkgConfig != "" || section.Root != ""
 
-	if hasFetch && hasSystem {
-		return "", fmt.Errorf("conflicting fields: cannot have both fetch (git/url) and system (pkg_config/root/paths) fields")
+	// Fetch takes priority - include_dirs/libs are allowed with fetch to specify build output locations
+	if hasFetch && hasSystemSource {
+		return "", fmt.Errorf("conflicting fields: cannot have both fetch (git/url) and system source (pkg_config/root) fields")
 	}
 
 	if hasFetch {
@@ -567,7 +603,7 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 				resolved.ConfigFile = filepath.Join(dest, "buildy.yaml")
 			}
 			resolved.NeedsBuildy = true
-			log.Printf("Fetch dependency '%s' will be built using buildy config: %s", name, resolved.ConfigFile)
+			util.LogInfo("Fetch dependency '%s' will be built using buildy config: %s", name, resolved.ConfigFile)
 		} else if section.Build.System != "" && section.Build.System != "none" {
 			// Build using external build system
 			if err := dr.buildFetchedDep(name, section, dest, resolved); err != nil {
@@ -612,10 +648,10 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 	if buildSystemName == "auto" || buildSystemName == "" {
 		bsConfig = dr.buildSystemManager.Detect(dest)
 		if bsConfig == nil {
-			log.Printf("WARNING: Could not detect build system for %s, skipping build", name)
+			util.LogWarning("Could not detect build system for %s, skipping build", name)
 			return nil
 		}
-		log.Printf("Auto-detected build system: %s for %s", bsConfig.Name, name)
+		util.LogInfo("Auto-detected build system: %s for %s", bsConfig.Name, name)
 	} else {
 		bsConfig = dr.buildSystemManager.GetBuildSystem(buildSystemName)
 		if bsConfig == nil {
@@ -639,7 +675,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 	phases := []string{"configure", "build"}
 
 	// Execute the build
-	log.Printf("Building %s with %s (phases: %v)", name, bsConfig.Name, phases)
+	util.LogInfo("Building %s with %s (phases: %v)", name, bsConfig.Name, phases)
 	if err := dr.buildSystemManager.Execute(bsConfig, dest, buildDir, installDir, execEnv, phases, section.Build.Args); err != nil {
 		return fmt.Errorf("build failed for %s: %w", name, err)
 	}
@@ -649,7 +685,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 	resolved.IncludeDirs = append(resolved.IncludeDirs, includeDirs...)
 	resolved.LibDirs = append(resolved.LibDirs, libDirs...)
 
-	log.Printf("Build completed for %s", name)
+	util.LogInfo("Build completed for %s", name)
 	return nil
 }
 
@@ -699,7 +735,7 @@ func (dr *DependencyResolver) resolveVariables(text string, varEnv *util.Variabl
 
 	if len(errors) > 0 {
 		// Error on unresolved variables
-		log.Fatalf("Variable resolution failed: %v in '%s'", errors, text)
+		util.LogFatal("Variable resolution failed: %v in '%s'", errors, text)
 	}
 
 	return resolved

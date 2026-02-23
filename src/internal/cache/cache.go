@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +64,7 @@ func NewBuildCache(cacheDir string) (*BuildCache, error) {
 
 	// Load cache index
 	if err := cache.loadCacheIndex(); err != nil {
-		log.Printf("Warning: failed to load cache index: %v", err)
+		util.LogInfo("Warning: failed to load cache index: %v", err)
 	}
 
 	return cache, nil
@@ -226,7 +225,7 @@ func (bc *BuildCache) RestoreCachedResult(task *workspace.BuildTask) error {
 		}
 	}
 
-	log.Printf("✓ %s - cache hit, restored outputs", task.TaskID)
+	util.LogProgress("✓ %s - cache hit, restored outputs", task.TaskID)
 	return nil
 }
 
@@ -291,7 +290,7 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 					headerHashes[headerPath] = hash
 				}
 			} else {
-				log.Printf("Header dependency not found: %s", headerPath)
+				util.LogInfo("Header dependency not found: %s", headerPath)
 			}
 		}
 	}
@@ -361,7 +360,7 @@ func (bc *BuildCache) parseDependencyFile(depFile string) []string {
 func (bc *BuildCache) parseMakefileDeps(depFile string) []string {
 	data, err := os.ReadFile(depFile)
 	if err != nil {
-		log.Printf("Warning: failed to read dependency file %s: %v", depFile, err)
+		util.LogInfo("Warning: failed to read dependency file %s: %v", depFile, err)
 		return nil
 	}
 
@@ -397,7 +396,7 @@ func (bc *BuildCache) parseMakefileDeps(depFile string) []string {
 		}
 	}
 
-	log.Printf("Parsed %d header dependencies from %s (Makefile format)", len(headers), depFile)
+	util.LogInfo("Parsed %d header dependencies from %s (Makefile format)", len(headers), depFile)
 	return headers
 }
 
@@ -405,7 +404,7 @@ func (bc *BuildCache) parseMakefileDeps(depFile string) []string {
 func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 	data, err := os.ReadFile(depFile)
 	if err != nil {
-		log.Printf("Warning: failed to read dependency file %s: %v", depFile, err)
+		util.LogInfo("Warning: failed to read dependency file %s: %v", depFile, err)
 		return nil
 	}
 
@@ -418,7 +417,7 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 	}
 
 	if err := json.Unmarshal(data, &jsonData); err != nil {
-		log.Printf("Warning: failed to parse JSON dependency file %s: %v", depFile, err)
+		util.LogInfo("Warning: failed to parse JSON dependency file %s: %v", depFile, err)
 		return nil
 	}
 
@@ -449,7 +448,7 @@ func (bc *BuildCache) parseMSVCJSONDeps(depFile string) []string {
 		}
 	}
 
-	log.Printf("Parsed %d header dependencies from %s (MSVC JSON format)", len(headers), depFile)
+	util.LogInfo("Parsed %d header dependencies from %s (MSVC JSON format)", len(headers), depFile)
 	return headers
 }
 

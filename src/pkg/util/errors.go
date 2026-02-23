@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"log"
 	"sync"
 )
 
@@ -61,7 +60,7 @@ func (bec *BuildErrorCollector) AddError(source, message string) {
 		Source:  source,
 	}
 	bec.errors = append(bec.errors, err)
-	log.Printf("ERROR [%s]: %s", source, message)
+	LogError("[%s]: %s", source, message)
 }
 
 // AddWarning adds a warning to the collector (treated as error in strict mode)
@@ -75,8 +74,7 @@ func (bec *BuildErrorCollector) AddWarning(source, message string) {
 		Source:  source,
 	}
 	bec.errors = append(bec.errors, err)
-	// Log as error since warnings are treated as errors
-	log.Printf("ERROR [%s]: %s (was: warning)", source, message)
+	LogError("[%s]: %s (was: warning)", source, message)
 }
 
 // HasErrors returns true if there are any errors (including warnings in strict mode)
@@ -133,20 +131,20 @@ func (bec *BuildErrorCollector) PrintSummary() {
 		return
 	}
 	
-	log.Printf("\n=== Build Errors ===")
+	LogError("\n=== Build Errors ===")
 	warningCount := 0
 	for _, err := range bec.errors {
 		if err.Level == ErrorLevelWarning {
 			warningCount++
 		}
-		log.Printf("  %s", err.Error())
+		LogError("  %s", err.Error())
 	}
 	
 	if warningCount > 0 {
-		log.Printf("\nNote: %d issue(s) were warnings that are now treated as errors.", warningCount)
-		log.Printf("All warnings are treated as errors to ensure build reliability.")
+		LogError("\nNote: %d issue(s) were warnings that are now treated as errors.", warningCount)
+		LogError("All warnings are treated as errors to ensure build reliability.")
 	}
-	log.Printf("Total errors: %d", len(bec.errors))
+	LogError("Total errors: %d", len(bec.errors))
 }
 
 // CombinedError returns a single error combining all collected errors

@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,14 +56,14 @@ func (cd *ChangeDetector) IsCachedResultValid(task *workspace.BuildTask) bool {
 	cacheEntry, exists := cd.cache.cacheIndex[task.CacheKey]
 	cd.cache.mutex.RUnlock()
 	if !exists {
-		log.Printf("Cache miss for %s: no cache entry found", task.TaskID)
+		util.LogInfo("Cache miss for %s: no cache entry found", task.TaskID)
 		return false
 	}
 
 	// Ensure all outputs still exist and match expected hashes
 	for outputPath, expectedHash := range cacheEntry.Outputs {
 		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-			log.Printf("Cache miss for %s: output %s not found", task.TaskID, outputPath)
+			util.LogInfo("Cache miss for %s: output %s not found", task.TaskID, outputPath)
 			return false
 		}
 
@@ -74,7 +73,7 @@ func (cd *ChangeDetector) IsCachedResultValid(task *workspace.BuildTask) bool {
 
 		actualHash, err := cd.cache.calculateFileHash(outputPath)
 		if err != nil || actualHash != expectedHash {
-			log.Printf("Cache miss for %s: output %s hash changed", task.TaskID, outputPath)
+			util.LogInfo("Cache miss for %s: output %s hash changed", task.TaskID, outputPath)
 			return false
 		}
 	}
@@ -84,25 +83,25 @@ func (cd *ChangeDetector) IsCachedResultValid(task *workspace.BuildTask) bool {
 	// rebuild to capture header dependencies (Option C)
 	if task.TaskType == "compile" {
 		if len(cacheEntry.HeaderHashes) == 0 && len(cacheEntry.HeaderDependencies) == 0 {
-			log.Printf("Cache miss for %s: no header dependencies recorded (first build)", task.TaskID)
+			util.LogInfo("Cache miss for %s: no header dependencies recorded (first build)", task.TaskID)
 			return false
 		}
 
 		// Validate header dependencies
 		for headerPath, expectedHash := range cacheEntry.HeaderHashes {
 			if _, err := os.Stat(headerPath); os.IsNotExist(err) {
-				log.Printf("Cache miss for %s: header %s deleted", task.TaskID, headerPath)
+				util.LogInfo("Cache miss for %s: header %s deleted", task.TaskID, headerPath)
 				return false
 			}
 
 			actualHash, err := cd.cache.calculateFileHash(headerPath)
 			if err != nil || actualHash != expectedHash {
-				log.Printf("Cache miss for %s: header %s modified", task.TaskID, headerPath)
+				util.LogInfo("Cache miss for %s: header %s modified", task.TaskID, headerPath)
 				return false
 			}
 		}
 
-		log.Printf("Cache hit for %s: %d headers unchanged", task.TaskID, len(cacheEntry.HeaderHashes))
+		util.LogInfo("Cache hit for %s: %d headers unchanged", task.TaskID, len(cacheEntry.HeaderHashes))
 	}
 
 	return true
@@ -123,7 +122,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	}
 
 	if configHash != cd.buildState.ConfigHash {
-		log.Println("Configuration changed")
+		util.LogInfo("Configuration changed")
 		changes.ConfigChanged = true
 		return changes, nil // Full rebuild needed
 	}
@@ -131,7 +130,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	// Check toolchain hash
 	// Compare hashes - any difference triggers rebuild
 	if currentToolchainHash != cd.buildState.ToolchainHash {
-		log.Println("Toolchain changed")
+		util.LogInfo("Toolchain changed")
 		// Only trigger rebuild if at least one side has a toolchain hash
 		if currentToolchainHash != "" || cd.buildState.ToolchainHash != "" {
 			changes.ToolchainChanged = true
@@ -143,7 +142,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	for filePath, oldMtime := range cd.buildState.FileMtimes {
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
 			changes.DeletedFiles = append(changes.DeletedFiles, filePath)
-			log.Printf("Deleted: %s", filePath)
+			util.LogInfo("Deleted: %s", filePath)
 			continue
 		}
 
@@ -155,7 +154,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 		currentMtime := float64(info.ModTime().Unix())
 		if currentMtime > oldMtime {
 			changes.ModifiedFiles = append(changes.ModifiedFiles, filePath)
-			log.Printf("Modified: %s", filePath)
+			util.LogInfo("Modified: %s", filePath)
 		}
 	}
 
@@ -173,7 +172,7 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	}
 
 	if len(changes.NewFiles) > 0 {
-		log.Printf("New files: %d", len(changes.NewFiles))
+		util.LogInfo("New files: %d", len(changes.NewFiles))
 	}
 
 	return changes, nil
@@ -188,10 +187,10 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *worksp
 		for _, inputFile := range task.Inputs {
 			if util.SliceContains(changes.ModifiedFiles, inputFile.Path) {
 				affected[taskID] = true
-				log.Printf("Task %s affected by modified input %s", taskID, inputFile.Path)
+				util.LogInfo("Task %s affected by modified input %s", taskID, inputFile.Path)
 			} else if util.SliceContains(changes.NewFiles, inputFile.Path) {
 				affected[taskID] = true
-				log.Printf("Task %s affected by new input %s", taskID, inputFile.Path)
+				util.LogInfo("Task %s affected by new input %s", taskID, inputFile.Path)
 			}
 		}
 	}
@@ -204,7 +203,7 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *worksp
 				affected[taskID] = true
 			}
 			if len(headerTasks) > 0 {
-				log.Printf("Header %s affects %d tasks", modifiedFile, len(headerTasks))
+				util.LogInfo("Header %s affects %d tasks", modifiedFile, len(headerTasks))
 			}
 		}
 	}
@@ -221,7 +220,7 @@ func (cd *ChangeDetector) GetAffectedTasks(changes *ChangeSet, taskGraph *worksp
 			affected[depTaskID] = true
 		}
 		if len(dependentTasks) > 0 {
-			log.Printf("Task %s has %d dependent tasks", taskID, len(dependentTasks))
+			util.LogInfo("Task %s has %d dependent tasks", taskID, len(dependentTasks))
 		}
 	}
 

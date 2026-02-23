@@ -2,10 +2,11 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
+
+	"buildy/pkg/util"
 
 	"gopkg.in/yaml.v3"
 )
@@ -125,7 +126,7 @@ func (lm *LockfileManager) Save(lockfile *Lockfile) error {
 		return fmt.Errorf("failed to write lockfile: %w", err)
 	}
 
-	log.Printf("Generated lockfile: %s", lm.lockfilePath)
+	util.LogInfo("Generated lockfile: %s", lm.lockfilePath)
 	return nil
 }
 
@@ -139,7 +140,7 @@ func (lm *LockfileManager) Validate(deps map[string]*ResolvedDependency, fetchMa
 	for name, lockedEntry := range lockfile.Dependencies {
 		dep, ok := deps[name]
 		if !ok {
-			log.Printf("WARNING: Locked dependency '%s' not found in current config", name)
+			util.LogWarning("Locked dependency '%s' not found in current config", name)
 			continue
 		}
 
@@ -159,7 +160,7 @@ func (lm *LockfileManager) Validate(deps map[string]*ResolvedDependency, fetchMa
 		}
 	}
 
-	log.Printf("Lockfile validation passed")
+	util.LogInfo("Lockfile validation passed")
 	return nil
 }
 

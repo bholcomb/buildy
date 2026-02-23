@@ -1,0 +1,21 @@
+project:
+  name: engine_audio
+  description: "Audio engine - sounds, music, 3D audio, effects"
+
+variables:
+  MODULE_NAME: "engine_audio"
+
+targets:
+  shared_libraries:
+    - name: engine_audio
+      language: cpp
+      sources:
+        - "src/*.cpp"
+      include_dirs: ["include", "../core/include"]
+      libs:
+        - engine_core
+      defines:
+        - "ENGINE_AUDIO_EXPORTS"
+        # Debug audio features
+        - debug:
+            - "ENGINE_AUDIO_DEBUG=1"

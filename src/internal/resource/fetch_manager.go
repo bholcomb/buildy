@@ -8,12 +8,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"buildy/pkg/util"
 )
 
 // FetchManager handles downloading and caching of external dependencies
@@ -30,7 +31,7 @@ func NewFetchManager(cacheDir string) *FetchManager {
 
 // FetchGit clones or updates a git repository
 func (fm *FetchManager) FetchGit(url, ref, dest string) error {
-	log.Printf("Fetching git: %s @ %s -> %s", url, ref, dest)
+	util.LogInfo("Fetching git: %s @ %s -> %s", url, ref, dest)
 
 	// Check if destination already exists
 	if _, err := os.Stat(dest); err == nil {
@@ -73,13 +74,13 @@ func (fm *FetchManager) FetchGit(url, ref, dest string) error {
 		}
 	}
 
-	log.Printf("Successfully cloned %s", url)
+	util.LogInfo("Successfully cloned %s", url)
 	return nil
 }
 
 // updateGitRepo updates an existing git repository
 func (fm *FetchManager) updateGitRepo(dest, ref string) error {
-	log.Printf("Updating git repo: %s", dest)
+	util.LogInfo("Updating git repo: %s", dest)
 
 	// Fetch latest
 	fetchCmd := exec.Command("git", "fetch", "--tags", "origin")
@@ -113,11 +114,11 @@ func (fm *FetchManager) GetGitCommit(dest string) (string, error) {
 
 // FetchURL downloads and extracts an archive from a URL
 func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
-	log.Printf("Fetching URL: %s -> %s", url, dest)
+	util.LogInfo("Fetching URL: %s -> %s", url, dest)
 
 	// Check if destination already exists
 	if _, err := os.Stat(dest); err == nil {
-		log.Printf("Destination already exists, skipping download: %s", dest)
+		util.LogInfo("Destination already exists, skipping download: %s", dest)
 		return nil
 	}
 
@@ -161,13 +162,13 @@ func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 		return fmt.Errorf("extraction failed: %w", err)
 	}
 
-	log.Printf("Successfully fetched and extracted %s", url)
+	util.LogInfo("Successfully fetched and extracted %s", url)
 	return nil
 }
 
 // downloadFile downloads a file from a URL
 func (fm *FetchManager) downloadFile(url, dest string) error {
-	log.Printf("Downloading: %s", url)
+	util.LogInfo("Downloading: %s", url)
 
 	resp, err := http.Get(url)
 	if err != nil {

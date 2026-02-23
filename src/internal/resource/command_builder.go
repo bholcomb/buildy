@@ -2,7 +2,6 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"buildy/pkg/util"
@@ -141,12 +140,13 @@ func (cb *CommandBuilder) BuildCommand(
 }
 
 // BuildLinkCommand builds a link command using the tool template
+// Returns the command string and an optional import library path (for Windows DLLs)
 func (cb *CommandBuilder) BuildLinkCommand(
 	tool *Tool,
 	objects []string,
 	output string,
 	libDirs, libs, frameworks []string,
-) (string, error) {
+) (string, string, error) {
 	if libDirs == nil {
 		libDirs = []string{}
 	}
@@ -184,17 +184,21 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		if lf, ok := tool.Supports["lib_flag"].(string); ok {
 			libFlag = lf
 		}
+		libSuffix := ""
+		if ls, ok := tool.Supports["lib_suffix"].(string); ok {
+			libSuffix = ls
+		}
 
-		if libFlag != "" {
-			libStrs := []string{}
-			for _, lib := range libs {
+		libStrs := []string{}
+		for _, lib := range libs {
+			// Skip adding suffix if library already has an extension
+			if libSuffix != "" && !strings.Contains(lib, ".") {
+				libStrs = append(libStrs, libFlag+lib+libSuffix)
+			} else {
 				libStrs = append(libStrs, libFlag+lib)
 			}
-			templateVars["libs"] = strings.Join(libStrs, " ")
-		} else {
-			// No prefix (e.g., MSVC style)
-			templateVars["libs"] = strings.Join(libs, " ")
 		}
+		templateVars["libs"] = strings.Join(libStrs, " ")
 	} else {
 		templateVars["libs"] = ""
 	}
@@ -214,6 +218,22 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		templateVars["frameworks"] = ""
 	}
 
+	// Add import library path for DLLs (MSVC)
+	// The DLL goes in bin/, but the import library should go in lib/
+	implib := ""
+	if supportsImplib, ok := tool.Supports["implib"].(bool); ok && supportsImplib {
+		if strings.HasSuffix(output, ".dll") {
+			// Replace /bin/ with /lib/ in the path, or just change extension if no bin/
+			if strings.Contains(output, "/bin/") {
+				implib = strings.Replace(output, "/bin/", "/lib/", 1)
+				implib = strings.TrimSuffix(implib, ".dll") + ".lib"
+			} else {
+				implib = strings.TrimSuffix(output, ".dll") + ".lib"
+			}
+		}
+		templateVars["implib"] = implib
+	}
+
 	// Get flags for current configuration
 	commonFlags := tool.Flags["common"]
 	configFlags := tool.Flags[cb.configType]
@@ -230,7 +250,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 
 	command = strings.TrimSpace(command)
 
-	return command, nil
+	return command, implib, nil
 }
 
 // CreateExecutionEnvironmentFromToolchain creates an execution environment from toolchain config
@@ -243,7 +263,7 @@ func CreateExecutionEnvironmentFromToolchain(toolchain *ToolchainConfig) *util.E
 	case "docker":
 		return util.NewDockerExecution(toolchain.ExecutionConfig)
 	default:
-		log.Printf("WARNING: Unknown execution type '%s', falling back to native", execType)
+		util.LogWarning("Unknown execution type '%s', falling back to native", execType)
 		return util.NewNativeExecution()
 	}
 }

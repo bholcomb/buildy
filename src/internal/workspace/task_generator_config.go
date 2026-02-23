@@ -1,6 +1,6 @@
 package workspace
 
-import "log"
+import "buildy/pkg/util"
 
 // getMergedConfig extracts and merges configuration hierarchy
 func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
@@ -46,11 +46,25 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
 		}
 	}
 
+	// Get the configuration for the current build configuration (debug/release)
+	configSettings := configurations[tg.Configuration]
+
+	// Extract platform-specific settings from within the configuration
+	var configPlatformSettings any
+	if configMap, ok := configSettings.(map[string]any); ok {
+		// Check for platform subsection within the configuration
+		// e.g., configurations.debug.linux: { defines: [...] }
+		if platformSettings, ok := configMap[tg.Platform]; ok {
+			configPlatformSettings = platformSettings
+		}
+	}
+
 	merged := tg.mergeConfigs(
 		globalConfig,
 		platforms[tg.Platform],
 		architectures[tg.Architecture],
-		configurations[tg.Configuration],
+		configSettings,
+		configPlatformSettings, // Platform-specific settings within the configuration
 	)
 
 	// Resolve variables in the merged config
@@ -144,7 +158,7 @@ func (tg *TaskGenerator) applyPlatformTargetOverrides(config map[string]any, bas
 		merged := tg.mergeTargetConfig(base, override)
 		result = append(result, merged)
 
-		log.Printf("Applied platform '%s' overrides to target '%s'", tg.Platform, name)
+		util.LogInfo("Applied platform '%s' overrides to target '%s'", tg.Platform, name)
 	}
 
 	return result

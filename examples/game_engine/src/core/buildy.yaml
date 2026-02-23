@@ -1,0 +1,20 @@
+project:
+  name: engine_core
+  description: "Core engine library - types, math, memory, logging"
+
+variables:
+  MODULE_NAME: "engine_core"
+
+targets:
+  shared_libraries:
+    - name: engine_core
+      language: cpp
+      sources:
+        - "src/*.cpp"
+      include_dirs: ["include"]
+      defines:
+        - "ENGINE_CORE_EXPORTS"
+        # Configuration-specific logging
+        - debug:
+            - "ENGINE_ENABLE_LOGGING=1"
+            - "ENGINE_ENABLE_ASSERTS=1"

@@ -2,9 +2,9 @@ package workspace
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -30,6 +30,7 @@ type TemplateMetadata struct {
 		AddSetupDependency bool   // Add setup task as dependency
 	}
 	ToolchainLanguage string // Language to use for toolchain selection (if different from Language)
+	LibraryOutputDir  string // Subdirectory under output_dir where libraries are placed (e.g., "bin", "lib")
 }
 
 // BuildTemplateEngine expands universal build templates into concrete tasks
@@ -54,7 +55,7 @@ func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, 
 
 	// First load embedded templates (built-in)
 	if err := engine.loadEmbeddedTemplates(); err != nil {
-		log.Printf("WARNING: Failed to load embedded templates: %v", err)
+		util.LogWarning("Failed to load embedded templates: %v", err)
 	}
 
 	// Then load from filesystem directories (can override built-in)
@@ -84,18 +85,18 @@ func (bte *BuildTemplateEngine) loadEmbeddedTemplates() error {
 		// Read the embedded file
 		data, err := resource.GetEmbeddedFile(filePath)
 		if err != nil {
-			log.Printf("WARNING: Failed to read embedded template %s: %v", filePath, err)
+			util.LogWarning("Failed to read embedded template %s: %v", filePath, err)
 			continue
 		}
 
 		// Parse and merge templates
 		if err := bte.loadTemplateData(data, filePath); err != nil {
-			log.Printf("WARNING: Failed to parse embedded template %s: %v", filePath, err)
+			util.LogWarning("Failed to parse embedded template %s: %v", filePath, err)
 			continue
 		}
 	}
 
-	log.Printf("Loaded %d embedded template(s)", len(bte.templates))
+	util.LogInfo("Loaded %d embedded template(s)", len(bte.templates))
 	return nil
 }
 
@@ -110,7 +111,7 @@ func (bte *BuildTemplateEngine) loadTemplateData(data []byte, sourceName string)
 		// Merge templates into the engine's template map
 		for name, tmpl := range templates {
 			if _, exists := bte.templates[name]; exists {
-				log.Printf("Template '%s' in %s overrides existing template", name, sourceName)
+				util.LogInfo("Template '%s' in %s overrides existing template", name, sourceName)
 			}
 			bte.templates[name] = tmpl
 		}
@@ -126,7 +127,7 @@ func (bte *BuildTemplateEngine) loadTemplates() error {
 		// Find all .yaml files in templates directory
 		entries, err := os.ReadDir(templatesDir)
 		if err != nil {
-			log.Printf("WARNING: Templates directory not found: %s", templatesDir)
+			util.LogVerbose("Additional templates directory not found, using built-in: %s", templatesDir)
 			continue // Not fatal, try next directory
 		}
 
@@ -150,11 +151,11 @@ func (bte *BuildTemplateEngine) loadTemplates() error {
 
 		newTemplates := len(bte.templates) - dirTemplateCount
 		if newTemplates > 0 {
-			log.Printf("Loaded %d template(s) from %s", newTemplates, templatesDir)
+			util.LogInfo("Loaded %d template(s) from %s", newTemplates, templatesDir)
 		}
 	}
 
-	log.Printf("Total templates loaded: %d", len(bte.templates))
+	util.LogInfo("Total templates loaded: %d", len(bte.templates))
 	return nil
 }
 
@@ -213,7 +214,7 @@ func (bte *BuildTemplateEngine) parseAllTemplateMetadata() {
 		metadata := bte.parseTemplateMetadata(tmpl)
 		if metadata != nil {
 			bte.templateMetadata[name] = metadata
-			log.Printf("Parsed metadata for template '%s': language=%s, types=%v",
+			util.LogVerbose("Parsed metadata for template '%s': language=%s, types=%v",
 				name, metadata.Language, metadata.TargetTypes)
 		}
 	}
@@ -278,6 +279,13 @@ func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *Temp
 		}
 	}
 
+	// Parse library_output_dir (defaults to "bin" if not specified)
+	if libDir, ok := metadataRaw["library_output_dir"].(string); ok {
+		metadata.LibraryOutputDir = libDir
+	} else {
+		metadata.LibraryOutputDir = "bin"
+	}
+
 	return metadata
 }
 
@@ -295,7 +303,7 @@ func (bte *BuildTemplateEngine) LookupTemplate(language, targetType string) (str
 			if tt == targetType {
 				tmpl := bte.GetTemplate(name)
 				if tmpl != nil {
-					log.Printf("Found template '%s' for language=%s, type=%s", name, language, targetType)
+					util.LogInfo("Found template '%s' for language=%s, type=%s", name, language, targetType)
 					return name, tmpl, metadata, nil
 				}
 			}
@@ -308,6 +316,72 @@ func (bte *BuildTemplateEngine) LookupTemplate(language, targetType string) (str
 // GetTemplateMetadata returns the metadata for a template by name
 func (bte *BuildTemplateEngine) GetTemplateMetadata(templateName string) *TemplateMetadata {
 	return bte.templateMetadata[templateName]
+}
+
+// registerMetadataVariables uses reflection to register all string fields from
+// TemplateMetadata as template variables with the "template." prefix.
+// This makes the system extensible - any new field added to TemplateMetadata
+// automatically becomes available as ${template.<field_name>} in templates.
+func (bte *BuildTemplateEngine) registerMetadataVariables(env *util.VariableEnvironment, metadata *TemplateMetadata) {
+	v := reflect.ValueOf(metadata).Elem()
+	t := v.Type()
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		value := v.Field(i)
+
+		// Convert field name from PascalCase to snake_case
+		varName := toSnakeCase(field.Name)
+
+		switch value.Kind() {
+		case reflect.String:
+			if str := value.String(); str != "" {
+				env.SetVariable("template."+varName, str, "template-metadata")
+			}
+		case reflect.Slice:
+			// For string slices, join with commas
+			if value.Type().Elem().Kind() == reflect.String {
+				strs := make([]string, value.Len())
+				for j := 0; j < value.Len(); j++ {
+					strs[j] = value.Index(j).String()
+				}
+				if len(strs) > 0 {
+					env.SetVariable("template."+varName, strings.Join(strs, ","), "template-metadata")
+				}
+			}
+		}
+	}
+}
+
+// toSnakeCase converts PascalCase to snake_case
+func toSnakeCase(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteByte('_')
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
+}
+
+// GetLibraryOutputDir returns the library output directory for a given target type.
+// This allows dependent targets to find where libraries are placed without hardcoding paths.
+func (bte *BuildTemplateEngine) GetLibraryOutputDir(language, targetType string) string {
+	// Find the template for this language/type and return its library_output_dir
+	for _, metadata := range bte.templateMetadata {
+		if metadata.Language == language {
+			for _, tt := range metadata.TargetTypes {
+				if tt == targetType {
+					if metadata.LibraryOutputDir != "" {
+						return metadata.LibraryOutputDir
+					}
+					return "bin" // Default fallback
+				}
+			}
+		}
+	}
+	return "bin" // Default if no matching template found
 }
 
 // ExpandTemplate expands a template into concrete build tasks
@@ -364,6 +438,12 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		module = m
 	}
 	templateEnv.SetVariable("module", module, "template")
+	
+	// Add template metadata variables (accessible as ${template.<field_name>}, etc.)
+	// Uses reflection to auto-register all string fields from TemplateMetadata
+	if metadata := bte.GetTemplateMetadata(templateName); metadata != nil {
+		bte.registerMetadataVariables(templateEnv, metadata)
+	}
 	
 	// Keep legacy context map for step reference resolution (compile.outputs, etc.)
 	// This is structural, not variable resolution
@@ -714,7 +794,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 						if strings.Contains(task.TaskID, artifactName) &&
 							(strings.HasPrefix(task.TaskID, "generate_") || strings.HasPrefix(task.TaskID, "transform_")) {
 							dependencies = append(dependencies, task.TaskID)
-							log.Printf("Added artifact dependency: %s -> %s", artifactName, task.TaskID)
+							util.LogInfo("Added artifact dependency: %s -> %s", artifactName, task.TaskID)
 						}
 					}
 				}
@@ -723,7 +803,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	// Handle target dependencies (depends_on.targets) for all target types
-	// This adds build order dependencies so that dependent targets build first
+	// This ONLY adds build order dependencies (no linking) - use for code generators, etc.
 	dependsOnTargets := []string{}
 	if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
 		if targets, ok := depsMap["targets"].([]any); ok {
@@ -742,26 +822,48 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		}
 	}
 
-	// Add build order dependencies for all target types
+	// Add build order dependencies for depends_on.targets (no linking)
 	for _, dep := range dependsOnTargets {
 		dependencies = append(dependencies, dep)
 	}
 
+	// Extract libs from itemConfig - these establish both linking AND build order
+	libsFromConfig := []string{}
+	if libs, ok := itemConfig["libs"].([]any); ok {
+		for _, lib := range libs {
+			if libStr, ok := lib.(string); ok {
+				libsFromConfig = append(libsFromConfig, libStr)
+			}
+		}
+	} else if libs, ok := itemConfig["libs"].([]string); ok {
+		libsFromConfig = libs
+	}
+
 	// Handle library linking for executables and shared libraries
+	// libs: establishes both build order AND linking
 	// (static libraries don't link against other libs at archive time)
 	libDirs := []string{}
 	libNames := []string{}
-	if (outputType == "executable" || outputType == "shared_library") && len(dependsOnTargets) > 0 {
-		libDirs = append(libDirs, filepath.Join(outputDir, "lib"))
+	if (outputType == "executable" || outputType == "shared_library") && len(libsFromConfig) > 0 {
+		// Get the library output directory from template metadata
+		// This makes it template-driven rather than hardcoded
+		libOutputDir := bte.GetLibraryOutputDir("cpp", "shared_library")
+		libDirs = append(libDirs, filepath.Join(outputDir, libOutputDir))
+
+		// Add build order dependencies for each library in libs:
+		// This ensures the library is built before linking
+		for _, lib := range libsFromConfig {
+			dependencies = append(dependencies, lib)
+		}
 
 		// Build dependency graph for libraries to determine correct link order
 		libDeps := make(map[string][]string)
 
-		for _, dep := range dependsOnTargets {
+		for _, lib := range libsFromConfig {
 			// Extract the target name (handle scoped references)
-			libName := dep
-			if strings.Contains(dep, ":") {
-				parts := strings.Split(dep, ":")
+			libName := lib
+			if strings.Contains(lib, ":") {
+				parts := strings.Split(lib, ":")
 				libName = parts[len(parts)-1]
 			}
 
@@ -777,11 +879,11 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 							parts := strings.Split(taskDep, "_")
 							if len(parts) >= 3 {
 								depLibName := strings.Join(parts[1:len(parts)-1], "_")
-								// Check if this is one of our depends_on libs
-								for _, checkDep := range dependsOnTargets {
-									checkName := checkDep
-									if strings.Contains(checkDep, ":") {
-										checkParts := strings.Split(checkDep, ":")
+								// Check if this is one of our libs
+								for _, checkLib := range libsFromConfig {
+									checkName := checkLib
+									if strings.Contains(checkLib, ":") {
+										checkParts := strings.Split(checkLib, ":")
 										checkName = checkParts[len(checkParts)-1]
 									}
 									if depLibName == checkName {
@@ -802,7 +904,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		// Topological sort to get correct link order
 		libNames = bte.topologicalSortLibs(libDeps)
 
-		log.Printf("Library link order: %v", libNames)
+		util.LogInfo("Library link order: %v", libNames)
 	}
 
 	// Get tool parameters
@@ -820,11 +922,22 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		resolvedParams["lib_dirs"] = mergedLibDirs
 	}
 	if len(libNames) > 0 {
-		// Merge libs from dependencies with existing libs from packages
+		// Get any additional libs from external packages (not from item.libs)
 		existingLibs := bte.flattenStringList(resolvedParams["libs"])
-		// Dependency libs first, then package/item libs
-		mergedLibs := append(libNames, existingLibs...)
-		resolvedParams["libs"] = mergedLibs
+		// Filter out libs that are already in libNames (from item.libs)
+		// to avoid duplicates - existingLibs may contain item.libs resolved from template
+		libNamesSet := make(map[string]bool)
+		for _, lib := range libNames {
+			libNamesSet[lib] = true
+		}
+		additionalLibs := []string{}
+		for _, lib := range existingLibs {
+			if !libNamesSet[lib] {
+				additionalLibs = append(additionalLibs, lib)
+			}
+		}
+		// Sorted item.libs first, then any additional external libs
+		resolvedParams["libs"] = append(libNames, additionalLibs...)
 	}
 
 	// Convert lib_dirs, libs, and frameworks to string slices
@@ -844,7 +957,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	// Build command
-	command, err := commandBuilder.BuildLinkCommand(
+	command, implib, err := commandBuilder.BuildLinkCommand(
 		tool,
 		filteredInputs,
 		output,
@@ -886,6 +999,13 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		}
 	}
 
+	// Build outputs list - primary output plus any secondary outputs (like import libraries)
+	outputs := []string{output}
+	if implib != "" {
+		outputs = append(outputs, implib)
+		util.LogVerbose("Shared library will also produce import library: %s", implib)
+	}
+
 	// Create task
 	taskName := "unnamed"
 	if name, ok := itemConfig["name"].(string); ok {
@@ -902,7 +1022,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		taskID,
 		action,
 		taskInputs,
-		[]string{output},
+		outputs,
 		dependencies,
 		command,
 	)

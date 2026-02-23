@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"log"
 	"sort"
 	"strings"
 
@@ -54,7 +53,7 @@ func (bte *BuildTemplateEngine) topologicalSortLibs(libDeps map[string][]string)
 
 	// Check for cycles
 	if len(result) != len(libDeps) {
-		log.Printf("WARNING: Circular dependency detected in libraries, using original order")
+		util.LogWarning("Circular dependency detected in libraries, using original order")
 		result = []string{}
 		for lib := range libDeps {
 			result = append(result, lib)

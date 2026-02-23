@@ -9,6 +9,7 @@ templates:
       language: c
       target_types: [shared_library]
       toolchain_language: c
+      library_output_dir: bin
       pre_processing:
         resolve_deps: true
         resolve_sources: true
@@ -34,7 +35,7 @@ templates:
       - name: link
         action: link
         output_type: shared_library
-        output: "${output_dir}/lib/${tool.output_pattern}"
+        output: "${output_dir}/${template.library_output_dir}/${tool.output_pattern}"
         inputs: "${compile.outputs}"
         depends_on: ["${compile.task_ids}"]
         tool_params:
@@ -117,6 +118,6 @@ templates:
         inputs: "${compile.outputs}"
         depends_on: ["${compile.task_ids}", "${item.depends_on.link_tasks}"]
         tool_params:
-          lib_dirs: ["${output_dir}/lib", "${item.lib_dirs}"]
+          lib_dirs: ["${output_dir}/lib", "${output_dir}/bin", "${item.lib_dirs}"]
           libs: "${item.libs}"
           frameworks: "${item.frameworks}"

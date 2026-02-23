@@ -43,7 +43,7 @@ toolchain:
       output_extension: ".dylib"
       output_pattern: "lib${name}.dylib"
       flags:
-        common: []
+        common: ["-Wl,-rpath,@loader_path"]
         debug: []
         release: []
       supports:
@@ -79,7 +79,7 @@ toolchain:
       output_extension: ""
       output_pattern: "${name}"
       flags:
-        common: []
+        common: ["-Wl,-rpath,@executable_path"]
         debug: []
         release: []
       supports:
