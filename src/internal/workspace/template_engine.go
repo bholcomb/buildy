@@ -850,61 +850,18 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		libOutputDir := bte.GetLibraryOutputDir("cpp", "shared_library")
 		libDirs = append(libDirs, filepath.Join(outputDir, libOutputDir))
 
-		// Add build order dependencies for each library in libs:
-		// This ensures the library is built before linking
+		// Add all libs as potential dependencies - resolution happens later
+		// in resolveCrossModuleDependencies where we know all targets
 		for _, lib := range libsFromConfig {
 			dependencies = append(dependencies, lib)
 		}
 
-		// Build dependency graph for libraries to determine correct link order
-		libDeps := make(map[string][]string)
-
-		for _, lib := range libsFromConfig {
-			// Extract the target name (handle scoped references)
-			libName := lib
-			if strings.Contains(lib, ":") {
-				parts := strings.Split(lib, ":")
-				libName = parts[len(parts)-1]
-			}
-
-			// Find this library's dependencies from existing_tasks
-			libDependencies := []string{}
-			for _, task := range existingTasks {
-				if task.TaskType == "link" && strings.Contains(task.TaskID, libName) {
-					// This is the library's link task, check its dependencies
-					for _, taskDep := range task.Dependencies {
-						// If dependency is another library link task, extract its name
-						if strings.HasPrefix(taskDep, "link_") && taskDep != task.TaskID {
-							// Extract library name from task_id like "link_engine_core_005"
-							parts := strings.Split(taskDep, "_")
-							if len(parts) >= 3 {
-								depLibName := strings.Join(parts[1:len(parts)-1], "_")
-								// Check if this is one of our libs
-								for _, checkLib := range libsFromConfig {
-									checkName := checkLib
-									if strings.Contains(checkLib, ":") {
-										checkParts := strings.Split(checkLib, ":")
-										checkName = checkParts[len(checkParts)-1]
-									}
-									if depLibName == checkName {
-										libDependencies = append(libDependencies, depLibName)
-										break
-									}
-								}
-							}
-						}
-					}
-					break
-				}
-			}
-
-			libDeps[libName] = libDependencies
-		}
-
-		// Topological sort to get correct link order
-		libNames = bte.topologicalSortLibs(libDeps)
-
-		util.LogInfo("Library link order: %v", libNames)
+		// For link ordering within the libs list, we don't need complex
+		// topological sorting here - the linker handles static lib order,
+		// and the dependency resolution will ensure build order is correct
+		libNames = libsFromConfig
+		
+		util.LogDebug("Resolved libs for %s: %v", itemConfig["name"], libsFromConfig)
 	}
 
 	// Get tool parameters

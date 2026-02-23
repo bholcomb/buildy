@@ -227,6 +227,21 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
+	// Get build context for filter resolution (needed early for libs filter resolution)
+	ctx := tg.getBuildContext()
+
+	// Resolve filtered lists BEFORE deps resolution, so that resolveDeps sees
+	// resolved strings rather than raw filter maps
+	if libsRaw, ok := targetConfig["libs"]; ok {
+		targetConfig["libs"] = ResolveFilteredList(libsRaw, ctx)
+	}
+	if definesRaw, ok := targetConfig["defines"]; ok {
+		targetConfig["defines"] = ResolveFilteredList(definesRaw, ctx)
+	}
+	if flagsRaw, ok := targetConfig["flags"]; ok {
+		targetConfig["flags"] = ResolveFilteredList(flagsRaw, ctx)
+	}
+
 	// Apply pre-processing based on metadata
 	if metadata.PreProcessing.ResolveDeps {
 		if err := tg.resolveDeps(targetConfig); err != nil {
@@ -249,26 +264,12 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
-	// Get build context for filter resolution
-	ctx := tg.getBuildContext()
-
 	if metadata.PreProcessing.ResolveSources {
 		sources, err := tg.PathResolver.ResolveSourcesWithContext(targetConfig, ctx)
 		if err != nil {
 			return nil, err
 		}
 		targetConfig["sources"] = sources
-	}
-
-	// Apply filter resolution to list fields that support filtering
-	if definesRaw, ok := targetConfig["defines"]; ok {
-		targetConfig["defines"] = ResolveFilteredList(definesRaw, ctx)
-	}
-	if libsRaw, ok := targetConfig["libs"]; ok {
-		targetConfig["libs"] = ResolveFilteredList(libsRaw, ctx)
-	}
-	if flagsRaw, ok := targetConfig["flags"]; ok {
-		targetConfig["flags"] = ResolveFilteredList(flagsRaw, ctx)
 	}
 
 	if metadata.PreProcessing.ResolveIncludeDirs {
