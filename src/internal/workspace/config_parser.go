@@ -399,8 +399,29 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 				}
 				resolvedDeps = append(resolvedDeps, resolvedID)
 			} else {
-			util.BuildWarning("dependency", "Could not resolve dependency '%s' in task '%s'", dep, task.TaskID)
-			resolvedDeps = append(resolvedDeps, dep)
+				// For link tasks, unresolved dependencies are likely external libs (vulkan, pthread, etc.)
+				// These don't need build ordering - they're system libraries.
+				// Only warn for non-link tasks where unresolved deps might indicate a config error.
+				if task.TaskType != "link" {
+					util.BuildWarning("dependency", "Could not resolve dependency '%s' in task '%s'", dep, task.TaskID)
+				} else {
+					util.LogVerbose("Skipping external library '%s' for build ordering in task '%s'", dep, task.TaskID)
+				}
+				// Don't add unresolved dependencies - they're either:
+				// - External libraries (no build order needed)
+				// - Task IDs that are already valid
+				// Check if it looks like a task ID (contains underscore pattern typical of task IDs)
+				if strings.Contains(dep, "_") && (strings.HasPrefix(dep, "compile_") ||
+					strings.HasPrefix(dep, "link_") ||
+					strings.HasPrefix(dep, "setup_") ||
+					strings.HasPrefix(dep, "transform_") ||
+					strings.HasPrefix(dep, "generate_") ||
+					strings.HasPrefix(dep, "copy_") ||
+					strings.HasPrefix(dep, "stage_")) {
+					// This looks like a task ID, keep it
+					resolvedDeps = append(resolvedDeps, dep)
+				}
+				// Otherwise, drop it (it's an external library name)
 			}
 		}
 
