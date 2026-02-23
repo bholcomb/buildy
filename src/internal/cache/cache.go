@@ -253,8 +253,9 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 				continue
 			}
 
-			// Track .d file for header dependency parsing
-			if strings.HasSuffix(outputPath, ".d") {
+			// Track dependency file for header dependency parsing
+			// GCC/Clang use .d files (Makefile format), MSVC uses .json files
+			if strings.HasSuffix(outputPath, ".d") || strings.HasSuffix(outputPath, ".json") {
 				depFile = outputPath
 			}
 
@@ -272,7 +273,9 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 			if err != nil {
 				return fmt.Errorf("failed to hash output: %w", err)
 			}
-			outputHashes[outputPath] = hash
+			// Normalize output path for consistent cache key lookup on case-insensitive filesystems
+			normalizedOutput := util.NormalizePath(outputPath)
+			outputHashes[normalizedOutput] = hash
 		}
 	}
 
@@ -281,13 +284,16 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 	headerHashes := make(map[string]string)
 
 	if depFile != "" && task.TaskType == "compile" {
-		headerDeps = bc.parseDependencyFile(depFile)
+		rawHeaderDeps := bc.parseDependencyFile(depFile)
 		// Calculate and store hashes for all header dependencies
-		for _, headerPath := range headerDeps {
+		// Normalize paths for consistent lookup on case-insensitive filesystems (Windows)
+		for _, headerPath := range rawHeaderDeps {
+			normalizedPath := util.NormalizePath(headerPath)
 			if _, err := os.Stat(headerPath); err == nil {
 				hash, err := bc.calculateFileHash(headerPath)
 				if err == nil {
-					headerHashes[headerPath] = hash
+					headerHashes[normalizedPath] = hash
+					headerDeps = append(headerDeps, normalizedPath)
 				}
 			} else {
 				util.LogInfo("Header dependency not found: %s", headerPath)

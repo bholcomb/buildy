@@ -159,14 +159,17 @@ func (cd *ChangeDetector) DetectChanges(configFile string, currentConfig map[str
 	}
 
 	// Check for new files
+	// Normalize paths for comparison to handle case-insensitive filesystems (Windows)
 	currentFiles := cd.getAllSourceFiles(currentConfig)
 	oldFiles := make(map[string]bool)
 	for file := range cd.buildState.FileMtimes {
-		oldFiles[file] = true
+		// FileMtimes keys should already be normalized, but normalize again for safety
+		oldFiles[util.NormalizePath(file)] = true
 	}
 
 	for file := range currentFiles {
-		if !oldFiles[file] {
+		normalizedFile := util.NormalizePath(file)
+		if !oldFiles[normalizedFile] {
 			changes.NewFiles = append(changes.NewFiles, file)
 		}
 	}
@@ -315,6 +318,7 @@ func (cd *ChangeDetector) getDependentTasks(taskID string, taskGraph *workspace.
 }
 
 // getAllSourceFiles gets all source files from configuration
+// Paths are returned as-is (not normalized) since the caller handles normalization
 func (cd *ChangeDetector) getAllSourceFiles(config map[string]interface{}) map[string]bool {
 	files := make(map[string]bool)
 

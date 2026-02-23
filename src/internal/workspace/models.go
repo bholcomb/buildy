@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"buildy/pkg/util"
 )
 
 // ResourceRequirements defines resource requirements for a task
@@ -100,12 +102,14 @@ func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string,
 
 // CalculateCacheKey calculates content-addressable cache key
 func (t *BuildTask) CalculateCacheKey() string {
-	// Build input tuples
+	// Build input tuples with normalized paths for consistent cache keys
+	// On Windows, paths are case-insensitive, so we normalize to lowercase
 	inputTuples := make([][2]string, len(t.Inputs))
 	for i, inp := range t.Inputs {
-		inputTuples[i] = [2]string{inp.Path, inp.Hash}
+		normalizedPath := util.NormalizePathForCache(inp.Path)
+		inputTuples[i] = [2]string{normalizedPath, inp.Hash}
 	}
-	
+
 	// Create content structure for hashing
 	// Includes all factors that affect build output
 	content := map[string]interface{}{
@@ -117,13 +121,13 @@ func (t *BuildTask) CalculateCacheKey() string {
 		"configuration": t.Configuration,
 		"toolchain":     t.Toolchain, // Include toolchain to invalidate cache on compiler changes
 	}
-	
+
 	// Serialize to JSON (Go's json.Marshal sorts keys by default)
 	jsonBytes, err := json.Marshal(content)
 	if err != nil {
 		return ""
 	}
-	
+
 	// Calculate SHA-256 hash
 	hash := sha256.Sum256(jsonBytes)
 	return fmt.Sprintf("%x", hash[:])

@@ -18,7 +18,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "cl.exe /nologo ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
+      command: "cl.exe ${dep_flags} /nologo ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
@@ -31,6 +31,7 @@ toolchain:
         includes: true
         include_flag: "/I"
         pic: false
+        dependencies: "/sourceDependencies ${dep_file}"
     
     # Shared library linking (DLL)
     link_shared_library:
