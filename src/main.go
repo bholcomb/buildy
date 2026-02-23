@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,8 +25,6 @@ var (
 	BuildConfig = "debug"
 )
 
-// Global verbose flag and logger
-var Verbose bool
 
 // detectPlatform returns the current platform name normalized for buildy
 func detectPlatform() string {
@@ -100,7 +97,7 @@ func main() {
 	// Get the directory where the buildy executable is located
 	buildyDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
-		log.Fatalf("Failed to get buildy directory: %v", err)
+		util.LogFatal("Failed to get buildy directory: %v", err)
 	}
 
 	// Define CLI flags with auto-detected defaults
@@ -111,7 +108,7 @@ func main() {
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
-	dryRun := flag.BoolP("dry-run", "n", false, "Generate tasks but don't execute")
+	dryRun := flag.BoolP("dry-run", "d", false, "Generate tasks but don't execute")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
@@ -121,6 +118,7 @@ func main() {
 	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
+	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
 
 	// Custom flag for multiple defines
 	var defines []string
@@ -145,12 +143,8 @@ func main() {
 
 	flag.Parse()
 
-	// Handle verbose flag
-	if *verbose {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
-	} else {
-		log.SetFlags(log.Ldate | log.Ltime)
-	}
+	// Initialize logger with notify level and verbose flag
+	util.InitLogger(*notifyLevel, *verbose)
 
 	// Handle toolchain flag
 	selectedToolchain := *toolchain
@@ -159,13 +153,13 @@ func main() {
 	cliDefines := make(map[string]string)
 	for _, define := range defines {
 		if !strings.Contains(define, "=") {
-			log.Fatalf("Invalid --define format: '%s' (expected VAR=VALUE)", define)
+			util.LogFatal("Invalid --define format: '%s' (expected VAR=VALUE)", define)
 		}
 		parts := strings.SplitN(define, "=", 2)
 		varName := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		cliDefines[varName] = value
-		log.Printf("CLI define: %s=%s", varName, value)
+		util.LogVerbose("CLI define: %s=%s", varName, value)
 	}
 
 	// Handle --clean flag
@@ -178,20 +172,20 @@ func main() {
 			// No config files specified - use current directory
 			workspaceRoot, err = os.Getwd()
 			if err != nil {
-				log.Fatalf("Failed to get current directory: %v", err)
+				util.LogFatal("Failed to get current directory: %v", err)
 			}
 		} else {
 			// Use directory of first config file
 			configPath := configFiles[0]
 			absPath, err := filepath.Abs(configPath)
 			if err != nil {
-				log.Fatalf("Failed to resolve config path: %v", err)
+				util.LogFatal("Failed to resolve config path: %v", err)
 			}
 			
 			// If it's a file, use its directory; if it's a directory, use it
 			info, err := os.Stat(absPath)
 			if err != nil {
-				log.Fatalf("Failed to stat config path: %v", err)
+				util.LogFatal("Failed to stat config path: %v", err)
 			}
 			
 			if info.IsDir() {
@@ -204,25 +198,25 @@ func main() {
 		// Clean cache directory
 		cachePath := filepath.Join(workspaceRoot, *cacheDir)
 		if _, err := os.Stat(cachePath); err == nil {
-			log.Printf("Removing cache directory: %s", cachePath)
+			util.LogProgress("Removing cache directory: %s", cachePath)
 			if err := os.RemoveAll(cachePath); err != nil {
-				log.Fatalf("Failed to remove cache directory: %v", err)
+				util.LogFatal("Failed to remove cache directory: %v", err)
 			}
-			log.Printf("✓ Cache directory removed")
+			util.LogProgress("✓ Cache directory removed")
 		} else {
-			log.Printf("Cache directory not found: %s", cachePath)
+			util.LogVerbose("Cache directory not found: %s", cachePath)
 		}
 		
 		// Clean build directory
 		buildPath := filepath.Join(workspaceRoot, "build")
 		if _, err := os.Stat(buildPath); err == nil {
-			log.Printf("Removing build directory: %s", buildPath)
+			util.LogProgress("Removing build directory: %s", buildPath)
 			if err := os.RemoveAll(buildPath); err != nil {
-				log.Fatalf("Failed to remove build directory: %v", err)
+				util.LogFatal("Failed to remove build directory: %v", err)
 			}
-			log.Printf("✓ Build directory removed")
+			util.LogProgress("✓ Build directory removed")
 		} else {
-			log.Printf("Build directory not found: %s", buildPath)
+			util.LogVerbose("Build directory not found: %s", buildPath)
 		}
 
 		// Clean staging directories (check common locations)
@@ -232,11 +226,11 @@ func main() {
 		}
 		for _, stagingPath := range stagingPaths {
 			if _, err := os.Stat(stagingPath); err == nil {
-				log.Printf("Removing staging directory: %s", stagingPath)
+				util.LogProgress("Removing staging directory: %s", stagingPath)
 				if err := os.RemoveAll(stagingPath); err != nil {
-					log.Printf("WARNING: Failed to remove staging directory: %v", err)
+					util.LogWarning("Failed to remove staging directory: %v", err)
 				} else {
-					log.Printf("✓ Staging directory removed: %s", stagingPath)
+					util.LogProgress("✓ Staging directory removed: %s", stagingPath)
 				}
 			}
 		}
@@ -244,36 +238,36 @@ func main() {
 		// Clean dist directory (install outputs)
 		distPath := filepath.Join(workspaceRoot, "dist")
 		if _, err := os.Stat(distPath); err == nil {
-			log.Printf("Removing dist directory: %s", distPath)
+			util.LogProgress("Removing dist directory: %s", distPath)
 			if err := os.RemoveAll(distPath); err != nil {
-				log.Printf("WARNING: Failed to remove dist directory: %v", err)
+				util.LogWarning("Failed to remove dist directory: %v", err)
 			} else {
-				log.Printf("✓ Dist directory removed")
+				util.LogProgress("✓ Dist directory removed")
 			}
 		}
 		
-		log.Printf("✓ Clean complete")
+		util.LogProgress("✓ Clean complete")
 		os.Exit(0)
 	}
 
 	// Verify embedded data
 	if err := resource.VerifyEmbeddedData(); err != nil {
-		log.Fatalf("Failed to verify embedded data: %v", err)
+		util.LogFatal("Failed to verify embedded data: %v", err)
 	}
 
 	// Initialize cache
 	buildCache, err := cache.NewBuildCache(*cacheDir)
 	if err != nil {
-		log.Fatalf("Failed to initialize cache: %v", err)
+		util.LogFatal("Failed to initialize cache: %v", err)
 	}
 
 	// Show cache stats if requested
 	if *cacheStats {
 		stats := buildCache.GetCacheStats()
-		log.Printf("Cache Statistics:")
-		log.Printf("  Total entries: %d", stats["total_entries"])
-		log.Printf("  Total size: %.1f MB", stats["total_size_mb"])
-		log.Printf("  Cache directory: %s", stats["cache_directory"])
+		util.LogInfo("Cache Statistics:")
+		util.LogInfo("  Total entries: %d", stats["total_entries"])
+		util.LogInfo("  Total size: %.1f MB", stats["total_size_mb"])
+		util.LogInfo("  Cache directory: %s", stats["cache_directory"])
 		os.Exit(0)
 	}
 
@@ -285,7 +279,7 @@ func main() {
 	}
 	templateEngine, err := workspace.NewBuildTemplateEngineMulti(templateDirs)
 	if err != nil {
-		log.Fatalf("Failed to initialize template engine: %v", err)
+		util.LogFatal("Failed to initialize template engine: %v", err)
 	}
 
 	// Get config files from remaining arguments
@@ -296,20 +290,20 @@ func main() {
 
 	if len(configFiles) == 0 {
 		// No config files specified - discover workspace from current directory
-		log.Printf("No config file specified, attempting workspace discovery...")
+		util.LogVerbose("No config file specified, attempting workspace discovery...")
 
 		// Try loading from cache first
 		ws, err = workspace.LoadDiscoveryCache(*cacheDir)
 		if err == nil && ws != nil {
-			log.Printf("Loaded workspace from cache: %s", ws.RootDir)
+			util.LogVerbose("Loaded workspace from cache: %s", ws.RootDir)
 		} else {
 			// Cache miss or invalid, do full discovery
 			cwd, _ := os.Getwd()
 			ws, err = workspace.DiscoverWorkspace(cwd)
 			if err != nil {
-				log.Fatalf("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
+				util.LogFatal("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
 			}
-			log.Printf("Discovered workspace at: %s", ws.RootDir)
+			util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
 		}
 	} else {
 		// Config file or directory specified - treat as workspace root
@@ -318,7 +312,7 @@ func main() {
 		// If it's a file, use its directory as workspace root
 		info, err := os.Stat(workspaceRoot)
 		if err != nil {
-			log.Fatalf("Path not found: %s", workspaceRoot)
+			util.LogFatal("Path not found: %s", workspaceRoot)
 		}
 		if !info.IsDir() {
 			workspaceRoot = filepath.Dir(workspaceRoot)
@@ -327,27 +321,27 @@ func main() {
 		// Verify buildy.yaml exists
 		configPath := filepath.Join(workspaceRoot, "buildy.yaml")
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			log.Fatalf("No buildy.yaml found in: %s", workspaceRoot)
+			util.LogFatal("No buildy.yaml found in: %s", workspaceRoot)
 		}
 
 		// Load as workspace
 		ws, err = workspace.NewWorkspace(workspaceRoot)
 		if err != nil {
-			log.Fatalf("Failed to load workspace from %s: %v", workspaceRoot, err)
+			util.LogFatal("Failed to load workspace from %s: %v", workspaceRoot, err)
 		}
-		log.Printf("Loaded workspace from: %s", ws.RootDir)
+		util.LogVerbose("Loaded workspace from: %s", ws.RootDir)
 
 		// Warn about multiple paths (not yet supported)
 		if len(configFiles) > 1 {
-			log.Printf("WARNING: Multiple paths not yet supported, using first one")
+			util.LogWarning("Multiple paths not yet supported, using first one")
 		}
 	}
 
 	// Discover modules (will always find at least the root module)
 	if _, err := ws.DiscoverModules(false); err != nil {
-		log.Fatalf("Failed to discover modules: %v", err)
+		util.LogFatal("Failed to discover modules: %v", err)
 	}
-	log.Printf("Found %d module(s)", len(ws.Modules))
+	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
 	// Determine target filter
 	var targetFilter []string
@@ -360,6 +354,14 @@ func main() {
 	rootVarEnv.SetVariable("platform", *platform, "builtin")
 	rootVarEnv.SetVariable("architecture", *architecture, "builtin")
 	rootVarEnv.SetVariable("configuration", *configuration, "builtin")
+
+	// Import environment variables from workspace config BEFORE dependency resolution
+	// This ensures ${VULKAN_SDK} and similar variables are available when resolving dependencies
+	if ws.Config.Variables != nil {
+		if err := rootVarEnv.ImportEnvVars(ws.Config.Variables, "buildy.yaml"); err != nil {
+			util.LogFatal("Failed to import environment variables: %v", err)
+		}
+	}
 
 	// Initialize toolchain manager with workspace and built-in paths
 	toolchainDirs := []string{}
@@ -374,14 +376,14 @@ func main() {
 	
 	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
 	if err != nil {
-		log.Fatalf("Failed to initialize toolchain manager: %v", err)
+		util.LogFatal("Failed to initialize toolchain manager: %v", err)
 	}
 
 	// Handle --list-toolchains (after workspace is loaded so we include workspace toolchains)
 	if *listToolchains {
-		log.Printf("Available toolchains:")
+		util.LogInfo("Available toolchains:")
 		for _, tc := range toolchainManager.ListToolchains() {
-			log.Printf("  %-20s - %s", tc.Name, tc.Description)
+			util.LogInfo("  %-20s - %s", tc.Name, tc.Description)
 		}
 		os.Exit(0)
 	}
@@ -392,18 +394,18 @@ func main() {
 
 	// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
 	if err := depResolver.LoadDependencies(ws.RootDir); err != nil {
-		log.Fatalf("Failed to load dependencies: %v", err)
+		util.LogFatal("Failed to load dependencies: %v", err)
 	}
 
 	// Resolve all dependencies
 	if err := depResolver.ResolveAll(); err != nil {
-		log.Fatalf("Failed to resolve dependencies: %v", err)
+		util.LogFatal("Failed to resolve dependencies: %v", err)
 	}
 
 	// Add buildy-config fetch dependencies as workspace modules
 	for name, depInfo := range depResolver.GetBuildyDependencies() {
 		if err := ws.AddFetchDependencyModule(name, depInfo.SourcePath, depInfo.ConfigFile); err != nil {
-			log.Fatalf("Failed to add fetch dependency module %s: %v", name, err)
+			util.LogFatal("Failed to add fetch dependency module %s: %v", name, err)
 		}
 	}
 
@@ -424,7 +426,7 @@ func main() {
 	// Create builder (cache directory already set above for dependency resolution)
 	builder, err := build.NewBuilder(workspaceCacheDir, *workers)
 	if err != nil {
-		log.Fatalf("Failed to create builder: %v", err)
+		util.LogFatal("Failed to create builder: %v", err)
 	}
 
 	// Configure builder options
@@ -444,19 +446,19 @@ func main() {
 	
 	// Check if we were interrupted
 	if shutdownManager.IsShuttingDown() {
-		log.Printf("Build interrupted by signal")
+		util.LogWarning("Build interrupted by signal")
 		os.Exit(130) // Standard exit code for SIGINT
 	}
 	
 	if err != nil {
-		log.Fatalf("Build failed: %v", err)
+		util.LogFatal("Build failed: %v", err)
 	}
 
 	// Generate and save build report
 	if result != nil {
 		reportPath := filepath.Join(workspaceCacheDir, "build_report.json")
 		if err := result.SaveReport(reportPath); err != nil {
-			log.Printf("WARNING: Failed to save build report: %v", err)
+			util.LogWarning("Failed to save build report: %v", err)
 		}
 		
 		// Print terminal summary
@@ -466,9 +468,9 @@ func main() {
 		if *compileCommands && result.Success {
 			compileCommandsPath := filepath.Join(ws.RootDir, "buildy_config", "compile_commands.json")
 			if err := result.GenerateCompileCommands(compileCommandsPath); err != nil {
-				log.Printf("WARNING: Failed to generate compile_commands.json: %v", err)
+				util.LogWarning("Failed to generate compile_commands.json: %v", err)
 			} else {
-				log.Printf("Generated compile_commands.json at %s", compileCommandsPath)
+				util.LogInfo("Generated compile_commands.json at %s", compileCommandsPath)
 			}
 		}
 	}

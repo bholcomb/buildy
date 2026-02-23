@@ -1,0 +1,33 @@
+project:
+  name: engine_platform
+  description: "Platform abstraction layer - window, input, filesystem"
+
+variables:
+  MODULE_NAME: "engine_platform"
+
+targets:
+  shared_libraries:
+    - name: engine_platform
+      language: cpp
+      sources:
+        # Common sources (all platforms)
+        - "src/common/*.cpp"
+        # Platform-specific sources using filtered list syntax
+        - linux:
+            - "src/linux/*.cpp"
+        - windows:
+            - "src/windows/*.cpp"
+        - macos:
+            - "src/macos/*.cpp"
+      include_dirs: ["include", "../core/include"]
+      libs:
+        - engine_core
+      defines:
+        - "ENGINE_PLATFORM_EXPORTS"
+        # Platform-specific defines
+        - linux:
+            - "ENGINE_PLATFORM_LINUX"
+        - windows:
+            - "ENGINE_PLATFORM_WINDOWS"
+        - macos:
+            - "ENGINE_PLATFORM_MACOS"

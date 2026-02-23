@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 )
@@ -47,7 +46,7 @@ func (ve *VariableEnvironment) CreateChild() *VariableEnvironment {
 // PushScope pushes a new scope onto the stack
 func (ve *VariableEnvironment) PushScope(scopeName string) {
 	ve.scopes = append(ve.scopes, scopeName)
-	log.Printf("Entered scope: %s", scopeName)
+	LogDebug("Entered scope: %s", scopeName)
 }
 
 // PopScope pops the current scope
@@ -55,7 +54,7 @@ func (ve *VariableEnvironment) PopScope() {
 	if len(ve.scopes) > 0 {
 		scope := ve.scopes[len(ve.scopes)-1]
 		ve.scopes = ve.scopes[:len(ve.scopes)-1]
-		log.Printf("Exited scope: %s", scope)
+		LogDebug("Exited scope: %s", scope)
 	}
 }
 
@@ -233,7 +232,7 @@ func (ve *VariableEnvironment) ExtractVariablesFromSection(section map[string]in
 	
 	varsMap, ok := variables.(map[string]interface{})
 	if !ok {
-		log.Printf("WARNING: Variables section in '%s' is not a dictionary", sourceName)
+		LogWarning("Variables section in '%s' is not a dictionary", sourceName)
 		return
 	}
 	
@@ -301,11 +300,11 @@ func (ve *VariableEnvironment) ImportEnvVars(variablesSection map[string]interfa
 		if envVal, exists := os.LookupEnv(name); exists {
 			value = envVal
 			source = "environment"
-			log.Printf("Imported env var: %s = %s (from environment)", name, value)
+			LogDebug("Imported env var: %s = %s (from environment)", name, value)
 		} else if defaultVal != nil {
 			value = *defaultVal
 			source = "default"
-			log.Printf("Imported env var: %s = %s (using default)", name, value)
+			LogDebug("Imported env var: %s = %s (using default)", name, value)
 		} else {
 			// Required but not set
 			return fmt.Errorf(
@@ -337,7 +336,7 @@ func (ve *VariableEnvironment) ExtractPlatformVariables(variablesSection map[str
 	
 	platformsMap, ok := platforms.(map[string]interface{})
 	if !ok {
-		log.Printf("WARNING: variables.platforms in '%s' is not a dictionary", sourceName)
+		LogWarning("variables.platforms in '%s' is not a dictionary", sourceName)
 		return
 	}
 	

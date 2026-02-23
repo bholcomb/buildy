@@ -2,7 +2,6 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,7 +55,7 @@ func NewBuildSystemManager() (*BuildSystemManager, error) {
 
 	// Load embedded build systems first
 	if err := bsm.loadEmbeddedSystems(); err != nil {
-		log.Printf("WARNING: Failed to load embedded build systems: %v", err)
+		util.LogWarning("Failed to load embedded build systems: %v", err)
 	}
 
 	return bsm, nil
@@ -76,18 +75,18 @@ func (bsm *BuildSystemManager) loadEmbeddedSystems() error {
 
 		data, err := GetEmbeddedFile(filePath)
 		if err != nil {
-			log.Printf("WARNING: Failed to read embedded build system %s: %v", filePath, err)
+			util.LogWarning("Failed to read embedded build system %s: %v", filePath, err)
 			continue
 		}
 
 		config, err := parseBuildSystemConfig(data, filePath)
 		if err != nil {
-			log.Printf("WARNING: Failed to parse embedded build system %s: %v", filePath, err)
+			util.LogWarning("Failed to parse embedded build system %s: %v", filePath, err)
 			continue
 		}
 
 		bsm.systems[config.Name] = config
-		log.Printf("Loaded embedded build system: %s - %s", config.Name, config.Description)
+		util.LogInfo("Loaded embedded build system: %s - %s", config.Name, config.Description)
 	}
 
 	return nil
@@ -102,7 +101,7 @@ func (bsm *BuildSystemManager) LoadFilesystemSystems(dirs []string) error {
 
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			log.Printf("WARNING: Failed to read build systems directory %s: %v", dir, err)
+			util.LogWarning("Failed to read build systems directory %s: %v", dir, err)
 			continue
 		}
 
@@ -114,22 +113,22 @@ func (bsm *BuildSystemManager) LoadFilesystemSystems(dirs []string) error {
 			filePath := filepath.Join(dir, entry.Name())
 			data, err := os.ReadFile(filePath)
 			if err != nil {
-				log.Printf("WARNING: Failed to read build system file %s: %v", filePath, err)
+				util.LogWarning("Failed to read build system file %s: %v", filePath, err)
 				continue
 			}
 
 			config, err := parseBuildSystemConfig(data, filePath)
 			if err != nil {
-				log.Printf("WARNING: Failed to parse build system file %s: %v", filePath, err)
+				util.LogWarning("Failed to parse build system file %s: %v", filePath, err)
 				continue
 			}
 
 			if _, exists := bsm.systems[config.Name]; exists {
-				log.Printf("Build system '%s' from %s overrides existing", config.Name, dir)
+				util.LogInfo("Build system '%s' from %s overrides existing", config.Name, dir)
 			}
 
 			bsm.systems[config.Name] = config
-			log.Printf("Loaded build system: %s - %s", config.Name, config.Description)
+			util.LogInfo("Loaded build system: %s - %s", config.Name, config.Description)
 		}
 	}
 
@@ -290,7 +289,7 @@ func (bsm *BuildSystemManager) Execute(
 			if phaseName == "configure" || phaseName == "build" {
 				return fmt.Errorf("required phase '%s' not defined for build system '%s'", phaseName, config.Name)
 			}
-			log.Printf("Skipping undefined phase '%s' for build system '%s'", phaseName, config.Name)
+			util.LogInfo("Skipping undefined phase '%s' for build system '%s'", phaseName, config.Name)
 			continue
 		}
 
@@ -308,7 +307,7 @@ func (bsm *BuildSystemManager) Execute(
 			workDir = bsm.substituteVariables(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil)
 		}
 
-		log.Printf("Executing %s phase: %s", phaseName, cmd)
+		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
 
 		// Execute the command
 		result, err := execEnv.Execute(cmd, workDir, 600) // 10 minute timeout
@@ -320,7 +319,7 @@ func (bsm *BuildSystemManager) Execute(
 			return fmt.Errorf("phase '%s' failed with exit code %d: %s", phaseName, result.ReturnCode, result.Stderr)
 		}
 
-		log.Printf("Phase '%s' completed successfully", phaseName)
+		util.LogInfo("Phase '%s' completed successfully", phaseName)
 	}
 
 	return nil

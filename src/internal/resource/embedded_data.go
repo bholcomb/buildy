@@ -4,7 +4,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"log"
+
+	"buildy/pkg/util"
 )
 
 // Embed the entire data directory
@@ -46,21 +47,21 @@ func VerifyEmbeddedData() error {
 	if err != nil {
 		return fmt.Errorf("failed to list templates: %w", err)
 	}
-	log.Printf("Found %d template file(s)", len(templates))
+	util.LogInfo("Found %d template file(s)", len(templates))
 	
 	// Check for toolchains
 	toolchains, err := ListEmbeddedFiles("toolchains")
 	if err != nil {
 		return fmt.Errorf("failed to list toolchains: %w", err)
 	}
-	log.Printf("Found %d toolchain file(s)", len(toolchains))
+	util.LogInfo("Found %d toolchain file(s)", len(toolchains))
 	
 	// Check for build systems
 	buildSystems, err := ListEmbeddedFiles("build_systems")
 	if err != nil {
 		return fmt.Errorf("failed to list build systems: %w", err)
 	}
-	log.Printf("Found %d build system file(s)", len(buildSystems))
+	util.LogInfo("Found %d build system file(s)", len(buildSystems))
 	
 	// Verify we can read at least one template file
 	if len(templates) == 0 {
@@ -77,7 +78,7 @@ func VerifyEmbeddedData() error {
 		return fmt.Errorf("no build system files found in embedded data")
 	}
 	
-	log.Println("Successfully verified embedded data access")
+	util.LogDebug("Successfully verified embedded data access")
 	
 	return nil
 }

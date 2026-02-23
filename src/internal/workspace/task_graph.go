@@ -2,7 +2,8 @@ package workspace
 
 import (
 	"fmt"
-	"log"
+
+	"buildy/pkg/util"
 )
 
 // TaskGraph represents a task dependency graph with topological sorting
@@ -138,19 +139,19 @@ func (tg *TaskGraph) GetExecutionPlan() (map[string]any, error) {
 func (tg *TaskGraph) LogExecutionPlan() {
 	plan, err := tg.GetExecutionPlan()
 	if err != nil {
-		log.Printf("ERROR: Failed to get execution plan: %v", err)
+		util.LogInfo("ERROR: Failed to get execution plan: %v", err)
 		return
 	}
 
-	log.Printf("Execution Plan:")
-	log.Printf("  Total stages: %v", plan["total_stages"])
-	log.Printf("  Total tasks: %v", plan["total_tasks"])
-	log.Printf("  Estimated time: %.2f seconds", plan["estimated_time_seconds"])
-	log.Printf("  Max parallel tasks: %v", plan["max_parallel_tasks"])
-	log.Printf("  Total CPU hours: %.4f", plan["total_cpu_hours"])
+	util.LogInfo("Execution Plan:")
+	util.LogInfo("  Total stages: %v", plan["total_stages"])
+	util.LogInfo("  Total tasks: %v", plan["total_tasks"])
+	util.LogInfo("  Estimated time: %.2f seconds", plan["estimated_time_seconds"])
+	util.LogInfo("  Max parallel tasks: %v", plan["max_parallel_tasks"])
+	util.LogInfo("  Total CPU hours: %.4f", plan["total_cpu_hours"])
 
 	for i, stage := range tg.ExecutionStages {
-		log.Printf("  Stage %d: %d tasks", i+1, len(stage))
+		util.LogVerbose("  Stage %d: %d tasks", i+1, len(stage))
 	}
 }
 

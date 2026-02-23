@@ -2,8 +2,8 @@ package workspace
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
+	"strings"
 
 	"buildy/internal/resource"
 	"buildy/pkg/util"
@@ -78,7 +78,7 @@ func (cp *ConfigParser) ParseConfigFile(configFile string) (map[string]any, erro
 	validationErrors := cp.YAMLParser.ValidateConfig(config)
 	if len(validationErrors) > 0 {
 		for _, errMsg := range validationErrors {
-			log.Printf("ERROR: Config validation error: %s", errMsg)
+			util.LogInfo("ERROR: Config validation error: %s", errMsg)
 		}
 		return nil, fmt.Errorf("configuration failed validation with %d error(s)", len(validationErrors))
 	}
@@ -96,7 +96,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 	if cp.DefaultToolchain != "" {
 		tc := cp.ToolchainManager.GetToolchain(cp.DefaultToolchain)
 		if tc != nil {
-			log.Printf("Using CLI-specified toolchain: %s", tc.Name)
+			util.LogInfo("Using CLI-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
 		util.BuildWarning("config", "CLI toolchain '%s' not found, falling back", cp.DefaultToolchain)
@@ -107,7 +107,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 		if projectToolchain, ok := project["toolchain"].(string); ok {
 			tc := cp.ToolchainManager.GetToolchain(projectToolchain)
 			if tc != nil {
-				log.Printf("Using project-specified toolchain: %s", tc.Name)
+				util.LogInfo("Using project-specified toolchain: %s", tc.Name)
 				return tc, nil
 			}
 			util.BuildWarning("config", "Project toolchain '%s' not found, falling back", projectToolchain)
@@ -118,7 +118,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 	if workspaceToolchain, ok := config["toolchain"].(string); ok {
 		tc := cp.ToolchainManager.GetToolchain(workspaceToolchain)
 		if tc != nil {
-			log.Printf("Using workspace-specified toolchain: %s", tc.Name)
+			util.LogInfo("Using workspace-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
 		util.BuildWarning("config", "Workspace toolchain '%s' not found, falling back", workspaceToolchain)
@@ -131,7 +131,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 			if platformToolchain, ok := toolchains[cp.Platform].(string); ok {
 				tc := cp.ToolchainManager.GetToolchain(platformToolchain)
 				if tc != nil {
-					log.Printf("Using platform-specified toolchain: %s", tc.Name)
+					util.LogInfo("Using platform-specified toolchain: %s", tc.Name)
 					return tc, nil
 				}
 				util.BuildWarning("config", "Platform toolchain '%s' not found, falling back", platformToolchain)
@@ -140,7 +140,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 			if defaultToolchain, ok := toolchains["default"].(string); ok {
 				tc := cp.ToolchainManager.GetToolchain(defaultToolchain)
 				if tc != nil {
-					log.Printf("Using default toolchain: %s", tc.Name)
+					util.LogInfo("Using default toolchain: %s", tc.Name)
 					return tc, nil
 				}
 				util.BuildWarning("config", "Default toolchain '%s' not found, falling back", defaultToolchain)
@@ -219,7 +219,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 			}
 		}
 
-		log.Printf("Processing module: %s", modulePath)
+		util.LogInfo("Processing module: %s", modulePath)
 
 		// Create module-specific parser with chained variable environment
 		moduleParser := NewConfigParser(
@@ -238,7 +238,14 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 		moduleParser.CurrentModule = modulePath
 		moduleParser.TargetRegistry = cp.TargetRegistry
 		moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
-		moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
+
+		// For fetch dependencies, use the source directory (RelativePath) not the config file directory
+		// This allows the buildy config to reference source files relative to the fetched source
+		if strings.HasPrefix(modulePath, "@fetch:") && moduleInfo.RelativePath != "" {
+			moduleParser.ConfigFileDir = moduleInfo.RelativePath
+		} else {
+			moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
+		}
 
 		// Merge workspace root config into module config
 		moduleConfig := make(map[string]any)
@@ -303,7 +310,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 	}
 	allTasks = append(allTasks, workspaceTasks...)
 
-	log.Printf("Generated %d tasks from %d modules", len(allTasks), len(cp.Workspace.Modules))
+	util.LogProgress("Generated %d tasks from %d modules", len(allTasks), len(cp.Workspace.Modules))
 	return allTasks, nil
 }
 
@@ -376,7 +383,7 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 		if task.TaskType == "link" {
 			// Check if already registered
 			if targetName, ok := globalTaskRegistry.GetTargetName(task.TaskID); ok {
-				log.Printf("Target '%s' already registered -> link task '%s'", targetName, task.TaskID)
+				util.LogInfo("Target '%s' already registered -> link task '%s'", targetName, task.TaskID)
 			}
 		}
 	}
@@ -388,7 +395,7 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []
 			// Try to resolve using the registry
 			if resolvedID, ok := globalTaskRegistry.ResolveDependency(dep); ok {
 				if resolvedID != dep {
-					log.Printf("Resolved dependency '%s' to link task '%s' in task '%s'", dep, resolvedID, task.TaskID)
+					util.LogInfo("Resolved dependency '%s' to link task '%s' in task '%s'", dep, resolvedID, task.TaskID)
 				}
 				resolvedDeps = append(resolvedDeps, resolvedID)
 			} else {
@@ -429,8 +436,8 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Configuration)
 	cp.ExecEnv = resource.CreateExecutionEnvironmentFromToolchain(tc)
 
-	log.Printf("Using toolchain: %s (%s)", tc.Name, tc.Description)
-	log.Printf("Execution environment: %s", tc.ExecutionType)
+	util.LogInfo("Using toolchain: %s (%s)", tc.Name, tc.Description)
+	util.LogInfo("Execution environment: %s", tc.ExecutionType)
 
 	// Build variable environment
 	if err := cp.setupVariableEnvironment(config); err != nil {
@@ -575,6 +582,6 @@ func (cp *ConfigParser) getOutputDir(config map[string]any) (string, error) {
 		resolvedPattern = filepath.Join(cp.Workspace.RootDir, resolvedPattern)
 	}
 
-	log.Printf("Output directory pattern '%s' resolved to '%s'", pattern, resolvedPattern)
+	util.LogInfo("Output directory pattern '%s' resolved to '%s'", pattern, resolvedPattern)
 	return resolvedPattern, nil
 }

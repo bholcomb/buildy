@@ -1,11 +1,12 @@
 package resource
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"buildy/pkg/util"
 )
 
 // ToolchainManager manages toolchain selection and loading
@@ -28,7 +29,7 @@ func NewToolchainManagerMulti(toolchainsDirs []string) (*ToolchainManager, error
 
 	// First load embedded toolchains (built-in)
 	if err := tm.loadEmbeddedToolchains(); err != nil {
-		log.Printf("WARNING: Failed to load embedded toolchains: %v", err)
+		util.LogWarning("Failed to load embedded toolchains: %v", err)
 	}
 
 	// Then load from filesystem directories (can override built-in)
@@ -55,19 +56,19 @@ func (tm *ToolchainManager) loadEmbeddedToolchains() error {
 		// Read the embedded file
 		data, err := GetEmbeddedFile(filePath)
 		if err != nil {
-			log.Printf("WARNING: Failed to read embedded toolchain %s: %v", filePath, err)
+			util.LogWarning("Failed to read embedded toolchain %s: %v", filePath, err)
 			continue
 		}
 
 		// Parse the toolchain
 		tc, err := LoadToolchainConfigFromData(data, filePath)
 		if err != nil {
-			log.Printf("WARNING: Failed to parse embedded toolchain %s: %v", filePath, err)
+			util.LogWarning("Failed to parse embedded toolchain %s: %v", filePath, err)
 			continue
 		}
 
 		tm.toolchains[tc.Name] = tc
-		log.Printf("Loaded embedded toolchain: %s - %s", tc.Name, tc.Description)
+		util.LogVerbose("Loaded embedded toolchain: %s - %s", tc.Name, tc.Description)
 	}
 
 	return nil
@@ -79,14 +80,14 @@ func (tm *ToolchainManager) loadToolchains() error {
 	for _, toolchainsDir := range tm.toolchainsDirs {
 		// Check if directory exists
 		if _, err := os.Stat(toolchainsDir); os.IsNotExist(err) {
-			log.Printf("WARNING: Toolchains directory not found: %s", toolchainsDir)
+			util.LogVerbose("Additional toolchains directory not found, using built-in: %s", toolchainsDir)
 			continue // Not fatal, try next directory
 		}
 
 		// Read all .yaml files
 		entries, err := os.ReadDir(toolchainsDir)
 		if err != nil {
-			log.Printf("WARNING: Failed to read toolchains directory %s: %v", toolchainsDir, err)
+			util.LogWarning("Failed to read toolchains directory %s: %v", toolchainsDir, err)
 			continue
 		}
 
@@ -99,16 +100,16 @@ func (tm *ToolchainManager) loadToolchains() error {
 				tcFile := filepath.Join(toolchainsDir, entry.Name())
 				tc, err := LoadToolchainConfig(tcFile)
 				if err != nil {
-					log.Printf("ERROR: Failed to load toolchain %s: %v", tcFile, err)
+					util.LogInfo("ERROR: Failed to load toolchain %s: %v", tcFile, err)
 					continue
 				}
 
 				if _, exists := tm.toolchains[tc.Name]; exists {
-					log.Printf("Toolchain '%s' from %s overrides built-in", tc.Name, toolchainsDir)
+					util.LogInfo("Toolchain '%s' from %s overrides built-in", tc.Name, toolchainsDir)
 				}
 
 				tm.toolchains[tc.Name] = tc
-				log.Printf("Loaded toolchain: %s - %s", tc.Name, tc.Description)
+				util.LogInfo("Loaded toolchain: %s - %s", tc.Name, tc.Description)
 			}
 		}
 	}
@@ -134,7 +135,7 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 	}
 
 	if len(matches) == 0 {
-		log.Printf("WARNING: No native toolchain found for %s-%s", platform, architecture)
+		util.LogWarning("No native toolchain found for %s-%s", platform, architecture)
 		return nil
 	}
 
@@ -152,7 +153,7 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 		for _, preferredName := range preferences {
 			for _, tc := range matches {
 				if tc.Name == preferredName {
-					log.Printf("Auto-detected toolchain: %s", tc.Name)
+					util.LogInfo("Auto-detected toolchain: %s", tc.Name)
 					return tc
 				}
 			}
@@ -164,7 +165,7 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 		return matches[i].Name < matches[j].Name
 	})
 
-	log.Printf("Auto-detected toolchain: %s (fallback)", matches[0].Name)
+	util.LogInfo("Auto-detected toolchain: %s (fallback)", matches[0].Name)
 	return matches[0]
 }
 
@@ -193,7 +194,7 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 	}
 
 	if len(matches) == 0 {
-		log.Printf("WARNING: No toolchain found for language=%s, platform=%s, arch=%s", language, platform, architecture)
+		util.LogWarning("No toolchain found for language=%s, platform=%s, arch=%s", language, platform, architecture)
 		return nil
 	}
 
@@ -220,7 +221,7 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 			for _, preferredName := range platformPrefs {
 				for _, tc := range matches {
 					if tc.Name == preferredName {
-						log.Printf("Auto-selected toolchain for %s: %s", language, tc.Name)
+						util.LogInfo("Auto-selected toolchain for %s: %s", language, tc.Name)
 						return tc
 					}
 				}
@@ -233,7 +234,7 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 		return matches[i].Name < matches[j].Name
 	})
 
-	log.Printf("Auto-selected toolchain for %s: %s (fallback)", language, matches[0].Name)
+	util.LogInfo("Auto-selected toolchain for %s: %s (fallback)", language, matches[0].Name)
 	return matches[0]
 }
 

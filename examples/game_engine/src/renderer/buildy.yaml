@@ -18,9 +18,8 @@ targets:
       libs:
         - engine_core
         - engine_platform
-      depends_on:
-        targets:
-          - engine_core
-          - engine_platform
-      compile:
-        defines: ["ENGINE_RENDERER_EXPORTS"]
+      defines:
+        - "ENGINE_RENDERER_EXPORTS"
+        # Debug rendering features
+        - debug:
+            - "ENGINE_RENDERER_DEBUG_DRAW=1"

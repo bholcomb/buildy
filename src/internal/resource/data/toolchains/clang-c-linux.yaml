@@ -43,7 +43,7 @@ toolchain:
       output_extension: ".so"
       output_pattern: "lib${name}.so"
       flags:
-        common: []
+        common: ["-Wl,-rpath,'$ORIGIN'"]
         debug: []
         release: ["-s"]
       supports:
@@ -77,7 +77,7 @@ toolchain:
       output_extension: ""
       output_pattern: "${name}"
       flags:
-        common: []
+        common: ["-Wl,-rpath,'$ORIGIN'"]
         debug: []
         release: ["-s"]
       supports:

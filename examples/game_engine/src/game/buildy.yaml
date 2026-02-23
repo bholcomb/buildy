@@ -1,0 +1,33 @@
+project:
+  name: game
+  description: "Game executable"
+
+variables:
+  GAME_NAME: "MyGame"
+
+targets:
+  executables:
+    - name: mygame
+      language: cpp
+      sources:
+        - "src/*.cpp"
+      include_dirs:
+        - "../core/include"
+        - "../platform/include"
+        - "../renderer/include"
+        - "../audio/include"
+      
+      # deps: External dependencies (provide include_dirs, lib_dirs, libs, defines)
+      deps:
+        - glfw3
+      
+      # libs: Internal libraries to link against (also establishes build order)
+      libs:
+        - engine_renderer
+        - engine_audio
+        - engine_platform
+        - engine_core
+
+      defines:
+        - debug:
+            - "GAME_DEBUG=1"

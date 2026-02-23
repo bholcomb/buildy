@@ -2,7 +2,6 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -62,9 +61,9 @@ func (tm *ToolMatcher) FindTool(action, filePath string) *Tool {
 	tool := tm.toolMap[key]
 
 	if tool != nil {
-		log.Printf("Matched %s (%s) -> tool '%s'", filePath, action, tool.Name)
+		util.LogInfo("Matched %s (%s) -> tool '%s'", filePath, action, tool.Name)
 	} else {
-		log.Printf("No tool found for action='%s' extension='%s'", action, ext)
+		util.LogInfo("No tool found for action='%s' extension='%s'", action, ext)
 	}
 
 	return tool
@@ -75,7 +74,7 @@ func (tm *ToolMatcher) FindBuildTool() *Tool {
 	// Look for tool with action='build'
 	for _, tool := range tm.toolchain.Tools {
 		if tool.Action == "build" {
-			log.Printf("Matched build tool -> '%s'", tool.Name)
+			util.LogInfo("Matched build tool -> '%s'", tool.Name)
 			return tool
 		}
 	}
@@ -90,11 +89,11 @@ func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
 		if tool.Action == "link" {
 			// Check if tool name or supports indicates it handles this output type
 			if strings.Contains(tool.Name, outputType) {
-				log.Printf("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
+				util.LogInfo("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
 				return tool
 			}
 			if supportedType, ok := tool.Supports["output_type"].(string); ok && supportedType == outputType {
-				log.Printf("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
+				util.LogInfo("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
 				return tool
 			}
 		}

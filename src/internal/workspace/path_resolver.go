@@ -2,11 +2,12 @@ package workspace
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"buildy/pkg/util"
 )
 
 // SourceEntry represents a source file entry that can be either a simple string
@@ -87,27 +88,52 @@ func (pr *PathResolver) ParseSourceEntries(sourcesRaw any) ([]SourceEntry, error
 
 // ResolveSources resolves source file paths from config, expanding globs
 // Returns an error if a non-optional glob matches no files
+// Deprecated: Use ResolveSourcesWithContext for filtered sources
 func (pr *PathResolver) ResolveSources(itemConfig map[string]any) ([]string, error) {
+	return pr.ResolveSourcesWithContext(itemConfig, BuildContext{})
+}
+
+// ResolveSourcesForPlatform resolves source file paths with platform filtering
+// Deprecated: Use ResolveSourcesWithContext instead
+func (pr *PathResolver) ResolveSourcesForPlatform(itemConfig map[string]any, platform string) ([]string, error) {
+	return pr.ResolveSourcesWithContext(itemConfig, BuildContext{Platform: platform})
+}
+
+// ResolveSourcesWithContext resolves source file paths with full filter support.
+// Sources can be:
+//   - Simple strings (always included)
+//   - Filter maps (included when filter matches context)
+//
+// Example:
+//
+//	sources:
+//	  - "src/common.c"        # Always included
+//	  - linux:                # Included when platform=linux
+//	      - "src/linux.c"
+//	  - windows:              # Included when platform=windows
+//	      - "src/windows.c"
+func (pr *PathResolver) ResolveSourcesWithContext(itemConfig map[string]any, ctx BuildContext) ([]string, error) {
 	sourcesRaw, ok := itemConfig["sources"]
 	if !ok {
 		return []string{}, nil
 	}
 
-	entries, err := pr.ParseSourceEntries(sourcesRaw)
-	if err != nil {
-		return nil, err
-	}
+	// Use ResolveFilteredList to get the filtered source patterns
+	patterns := ResolveFilteredList(sourcesRaw, ctx)
 
-	var sources []string
-	for _, entry := range entries {
-		resolved, err := pr.expandGlob(entry.Pattern, entry.Optional)
+	// Expand globs for each pattern
+	var allSources []string
+	for _, pattern := range patterns {
+		// Check if this is an optional pattern (object form with optional: true)
+		// For now, treat all patterns from filtered list as required
+		resolved, err := pr.expandGlob(pattern, false)
 		if err != nil {
 			return nil, err
 		}
-		sources = append(sources, resolved...)
+		allSources = append(allSources, resolved...)
 	}
 
-	return sources, nil
+	return allSources, nil
 }
 
 // expandGlob expands a glob pattern to sorted file list
@@ -116,12 +142,12 @@ func (pr *PathResolver) ResolveSources(itemConfig map[string]any) ([]string, err
 func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, error) {
 	var searchPattern string
 	if pr.ConfigFileDir == "" {
-		log.Printf("WARNING: Config file directory not set, using current directory for pattern '%s'", pattern)
+		util.LogWarning("Config file directory not set, using current directory for pattern '%s'", pattern)
 		searchPattern = pattern
 	} else {
 		// Make pattern relative to config file directory
 		searchPattern = filepath.Join(pr.ConfigFileDir, pattern)
-		log.Printf("Expanding pattern '%s' as '%s'", pattern, searchPattern)
+		util.LogInfo("Expanding pattern '%s' as '%s'", pattern, searchPattern)
 	}
 
 	results, err := filepath.Glob(searchPattern)
@@ -132,13 +158,13 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 	// Also match virtual files (artifact outputs) against the pattern
 	virtualMatches := pr.matchVirtualFiles(searchPattern)
 	if len(virtualMatches) > 0 {
-		log.Printf("Pattern '%s' matched %d virtual files from artifacts", pattern, len(virtualMatches))
+		util.LogInfo("Pattern '%s' matched %d virtual files from artifacts", pattern, len(virtualMatches))
 		results = append(results, virtualMatches...)
 	}
 
 	if len(results) == 0 {
 		if optional {
-			log.Printf("Optional glob pattern '%s' matched no files (skipped)", pattern)
+			util.LogInfo("Optional glob pattern '%s' matched no files (skipped)", pattern)
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("glob pattern '%s' (resolved to '%s') matched no files. "+
@@ -167,7 +193,7 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 	}
 
 	sort.Strings(relativeResults)
-	log.Printf("Pattern '%s' matched %d files: %v", pattern, len(relativeResults), relativeResults)
+	util.LogInfo("Pattern '%s' matched %d files: %v", pattern, len(relativeResults), relativeResults)
 	return relativeResults, nil
 }
 

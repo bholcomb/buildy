@@ -2,10 +2,11 @@ package workspace
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"buildy/pkg/util"
 )
 
 // TargetReference represents a reference to a target in the workspace
@@ -44,7 +45,7 @@ func (tr *TargetRegistry) Initialize() error {
 		return nil
 	}
 
-	log.Printf("Initializing target registry...")
+	util.LogInfo("Initializing target registry...")
 
 	// Discover all modules
 	modules, err := tr.workspace.DiscoverModules(false)
@@ -73,7 +74,7 @@ func (tr *TargetRegistry) Initialize() error {
 	}
 
 	tr.initialized = true
-	log.Printf("Indexed %d unique target names", len(tr.targetsByName))
+	util.LogInfo("Indexed %d unique target names", len(tr.targetsByName))
 	return nil
 }
 
@@ -112,7 +113,7 @@ func (tr *TargetRegistry) resolveLocal(targetName, currentModule string) (*Targe
 	// Look up in current module
 	moduleTargets := tr.targetsByModule[currentModule]
 	if ref, ok := moduleTargets[targetName]; ok {
-		log.Printf("Resolved local reference :%s to %s:%s", targetName, currentModule, targetName)
+		util.LogInfo("Resolved local reference :%s to %s:%s", targetName, currentModule, targetName)
 		return ref, nil
 	}
 
@@ -138,7 +139,7 @@ func (tr *TargetRegistry) resolveScoped(depString string) (*TargetReference, err
 	// Look up in specified module
 	moduleTargets := tr.targetsByModule[modulePath]
 	if ref, ok := moduleTargets[targetName]; ok {
-		log.Printf("Resolved scoped reference %s", depString)
+		util.LogInfo("Resolved scoped reference %s", depString)
 		return ref, nil
 	}
 
@@ -171,7 +172,7 @@ func (tr *TargetRegistry) resolveSimple(targetName, currentModule string) (*Targ
 
 	// If only one match, return it
 	if len(matches) == 1 {
-		log.Printf("Resolved simple reference %s to %s", targetName, matches[0].FullName())
+		util.LogInfo("Resolved simple reference %s to %s", targetName, matches[0].FullName())
 		return matches[0], nil
 	}
 
@@ -180,7 +181,7 @@ func (tr *TargetRegistry) resolveSimple(targetName, currentModule string) (*Targ
 		// 1. Check current module first
 		for _, match := range matches {
 			if match.ModulePath == currentModule {
-				log.Printf("Resolved simple reference %s to %s (current module)", targetName, match.FullName())
+				util.LogInfo("Resolved simple reference %s to %s (current module)", targetName, match.FullName())
 				return match, nil
 			}
 		}
@@ -191,7 +192,7 @@ func (tr *TargetRegistry) resolveSimple(targetName, currentModule string) (*Targ
 			parentPath := strings.Join(currentParts[:i], string(filepath.Separator))
 			for _, match := range matches {
 				if match.ModulePath == parentPath {
-					log.Printf("Resolved simple reference %s to %s (parent module)", targetName, match.FullName())
+					util.LogInfo("Resolved simple reference %s to %s (parent module)", targetName, match.FullName())
 					return match, nil
 				}
 			}

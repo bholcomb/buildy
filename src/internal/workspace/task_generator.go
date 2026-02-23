@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +9,20 @@ import (
 	"buildy/internal/resource"
 	"buildy/pkg/util"
 )
+
+// sanitizeModuleNameForPath converts a module name to a filesystem-safe path component.
+// This handles special prefixes like "@fetch:" which contain characters invalid on Windows.
+func sanitizeModuleNameForPath(moduleName string) string {
+	if moduleName == "" {
+		return moduleName
+	}
+	// Replace @fetch: prefix with a simple underscore prefix
+	// e.g., "@fetch:glfw3" -> "_fetch_glfw3"
+	result := moduleName
+	result = strings.ReplaceAll(result, "@", "_")
+	result = strings.ReplaceAll(result, ":", "_")
+	return result
+}
 
 // TaskGenerator generates build tasks from configuration
 type TaskGenerator struct {
@@ -113,6 +126,20 @@ func (tg *TaskGenerator) isWindows() bool {
 	return strings.Contains(strings.ToLower(tg.Platform), "windows")
 }
 
+// getBuildContext returns a BuildContext for filter resolution
+func (tg *TaskGenerator) getBuildContext() BuildContext {
+	toolchainName := ""
+	if tg.CurrentToolchain != nil {
+		toolchainName = tg.CurrentToolchain.Name
+	}
+	return BuildContext{
+		Platform:      tg.Platform,
+		Architecture:  tg.Architecture,
+		Configuration: tg.Configuration,
+		Toolchain:     toolchainName,
+	}
+}
+
 // createTaskVarEnv creates a child VarEnv with common task variables set
 func (tg *TaskGenerator) createTaskVarEnv(outputDir string) *util.VariableEnvironment {
 	childEnv := tg.VarEnv.CreateChild()
@@ -166,8 +193,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 		return nil, fmt.Errorf("failed to find template for language '%s' and type '%s': %w", language, targetType, err)
 	}
 
-	// Set module name for unique paths
-	targetConfig["module"] = tg.CurrentModule
+	// Set module name for unique paths (sanitized for filesystem compatibility)
+	targetConfig["module"] = sanitizeModuleNameForPath(tg.CurrentModule)
 	if targetConfig["module"] == "" {
 		targetConfig["module"] = "workspace"
 	}
@@ -215,22 +242,40 @@ func (tg *TaskGenerator) generateTargetTasks(
 				if artifactName, ok := a.(string); ok {
 					if outputs, exists := tg.artifactOutputs[artifactName]; exists {
 						tg.PathResolver.AddVirtualFiles(outputs)
-						log.Printf("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
+						util.LogInfo("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
 					}
 				}
 			}
 		}
 	}
 
+	// Get build context for filter resolution
+	ctx := tg.getBuildContext()
+
 	if metadata.PreProcessing.ResolveSources {
-		sources, err := tg.PathResolver.ResolveSources(targetConfig)
+		sources, err := tg.PathResolver.ResolveSourcesWithContext(targetConfig, ctx)
 		if err != nil {
 			return nil, err
 		}
 		targetConfig["sources"] = sources
 	}
 
+	// Apply filter resolution to list fields that support filtering
+	if definesRaw, ok := targetConfig["defines"]; ok {
+		targetConfig["defines"] = ResolveFilteredList(definesRaw, ctx)
+	}
+	if libsRaw, ok := targetConfig["libs"]; ok {
+		targetConfig["libs"] = ResolveFilteredList(libsRaw, ctx)
+	}
+	if flagsRaw, ok := targetConfig["flags"]; ok {
+		targetConfig["flags"] = ResolveFilteredList(flagsRaw, ctx)
+	}
+
 	if metadata.PreProcessing.ResolveIncludeDirs {
+		// First resolve filters, then resolve paths
+		if includeDirsRaw, ok := targetConfig["include_dirs"]; ok {
+			targetConfig["include_dirs"] = ResolveFilteredList(includeDirsRaw, ctx)
+		}
 		includeDirs, err := tg.PathResolver.ResolveIncludeDirs(targetConfig)
 		if err != nil {
 			return nil, err
@@ -247,6 +292,19 @@ func (tg *TaskGenerator) generateTargetTasks(
 			pathField = tg.PathResolver.ResolveRelativePath(pathField)
 		}
 		targetConfig["path"] = pathField
+	}
+
+	// Merge target-level defines into mergedConfig so templates can access them via ${config.defines}
+	// This allows both environment-level and target-level defines to be used
+	if itemDefines, ok := targetConfig["defines"].([]string); ok && len(itemDefines) > 0 {
+		existingDefines := ExtractStringList(mergedConfig["defines"])
+		mergedConfig["defines"] = append(existingDefines, itemDefines...)
+	}
+
+	// Merge target-level flags into mergedConfig
+	if itemFlags, ok := targetConfig["flags"].([]string); ok && len(itemFlags) > 0 {
+		existingFlags := ExtractStringList(mergedConfig["compiler_flags"])
+		mergedConfig["compiler_flags"] = append(existingFlags, itemFlags...)
 	}
 
 	// Expand template
@@ -297,7 +355,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 		// Scan for source files using the pattern from metadata
 		sourceFiles, scanErr := scanSourceFiles(scanPath, metadata.PostProcessing.ScanSourcesPattern)
 		if scanErr != nil {
-			log.Printf("WARNING: Failed to scan source files in %s: %v", scanPath, scanErr)
+			util.LogWarning("Failed to scan source files in %s: %v", scanPath, scanErr)
 		} else {
 			for _, task := range tasks {
 				for _, srcFile := range sourceFiles {
@@ -306,7 +364,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 				// Recalculate cache key with updated inputs
 				task.CacheKey = task.CalculateCacheKey()
 			}
-			log.Printf("Found %d source files matching '%s' in %s", len(sourceFiles), metadata.PostProcessing.ScanSourcesPattern, scanPath)
+			util.LogInfo("Found %d source files matching '%s' in %s", len(sourceFiles), metadata.PostProcessing.ScanSourcesPattern, scanPath)
 		}
 	}
 
@@ -335,7 +393,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 					outputPath = targetTask.Outputs[0]
 				}
 				globalTaskRegistry.RegisterTargetWithOutput(name, targetTask.TaskID, tg.CurrentModule, outputPath)
-				log.Printf("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
+				util.LogInfo("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
 			}
 		}
 	}
@@ -675,14 +733,14 @@ func (tg *TaskGenerator) generateTransformTasks(
 		}
 
 		if toolName == "" || len(inputPatterns) == 0 || outputPattern == "" {
-			log.Printf("WARNING: artifacts.transform item '%s' missing required fields (tool, inputs, outputs)", name)
+			util.LogWarning("artifacts.transform item '%s' missing required fields (tool, inputs, outputs)", name)
 			continue
 		}
 
 		// Look up the toolchain by name
 		toolchain := tg.ToolchainManager.GetToolchain(toolName)
 		if toolchain == nil {
-			log.Printf("WARNING: artifacts.transform '%s': toolchain '%s' not found", name, toolName)
+			util.LogWarning("artifacts.transform '%s': toolchain '%s' not found", name, toolName)
 			continue
 		}
 
@@ -695,7 +753,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 			}
 		}
 		if tool == nil {
-			log.Printf("WARNING: artifacts.transform '%s': no transform/convert/compile tool found in toolchain '%s'", name, toolName)
+			util.LogWarning("artifacts.transform '%s': no transform/convert/compile tool found in toolchain '%s'", name, toolName)
 			continue
 		}
 
@@ -710,7 +768,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 			// Expand glob pattern to get input files
 			inputFiles, err := filepath.Glob(inputPattern)
 			if err != nil {
-				log.Printf("WARNING: artifacts.transform '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
+				util.LogWarning("artifacts.transform '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
 				continue
 			}
 
@@ -718,7 +776,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 		}
 
 		if len(allInputFiles) == 0 {
-			log.Printf("WARNING: artifacts.transform '%s': no files matched any input patterns", name)
+			util.LogWarning("artifacts.transform '%s': no files matched any input patterns", name)
 			continue
 		}
 
@@ -741,7 +799,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 			var resolveErrors []string
 			resolvedOutput := iterVarEnv.ResolveString(outputPattern, &resolveErrors, 10)
 			if len(resolveErrors) > 0 {
-				log.Printf("WARNING: Unresolved variables in transform output pattern: %v", resolveErrors)
+				util.LogWarning("Unresolved variables in transform output pattern: %v", resolveErrors)
 			}
 
 			// Make output path absolute if relative (use module directory)
@@ -809,14 +867,14 @@ func (tg *TaskGenerator) generateTransformTasks(
 			artifactTaskIDList = append(artifactTaskIDList, taskID)
 			// Register output path -> task ID mapping for dependency lookup
 			tg.outputToTaskID[resolvedOutput] = taskID
-			log.Printf("Generated transform task: %s -> %s", inputFile, resolvedOutput)
+			util.LogInfo("Generated transform task: %s -> %s", inputFile, resolvedOutput)
 		}
 
 		// Register artifact outputs and task IDs for staging
 		if name != "" {
 			tg.artifactOutputs[name] = artifactOutputPaths
 			tg.artifactTaskIDs[name] = artifactTaskIDList
-			log.Printf("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
+			util.LogInfo("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
 		}
 	}
 
@@ -868,7 +926,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			}
 
 			if outputPath == "" {
-				log.Printf("WARNING: artifacts.generate '%s' missing 'output' field", name)
+				util.LogWarning("artifacts.generate '%s' missing 'output' field", name)
 				continue
 			}
 
@@ -888,7 +946,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			var resolveErrors []string
 			outputPath = genVarEnv.ResolveString(outputPath, &resolveErrors, 10)
 			if len(resolveErrors) > 0 {
-				log.Printf("WARNING: Unresolved variables in generate output path: %v", resolveErrors)
+				util.LogWarning("Unresolved variables in generate output path: %v", resolveErrors)
 			}
 
 			if !filepath.IsAbs(outputPath) && moduleDir != "" {
@@ -964,7 +1022,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			// Register output path -> task ID mapping for dependency lookup
 			tg.outputToTaskID[outputPath] = taskID
 
-			log.Printf("Generated template task: %s -> %s", templatePath, outputPath)
+			util.LogInfo("Generated template task: %s -> %s", templatePath, outputPath)
 
 		} else if toolName, ok := generateItem["tool"].(string); ok {
 			// Tool-based generation (e.g., protoc)
@@ -994,14 +1052,14 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			}
 
 			if inputPattern == "" || len(outputPatterns) == 0 {
-				log.Printf("WARNING: artifacts.generate '%s' with tool '%s' missing inputs or outputs", name, toolName)
+				util.LogWarning("artifacts.generate '%s' with tool '%s' missing inputs or outputs", name, toolName)
 				continue
 			}
 
 			// Look up the toolchain
 			toolchain := tg.ToolchainManager.GetToolchain(toolName)
 			if toolchain == nil {
-				log.Printf("WARNING: artifacts.generate '%s': toolchain '%s' not found", name, toolName)
+				util.LogWarning("artifacts.generate '%s': toolchain '%s' not found", name, toolName)
 				continue
 			}
 
@@ -1014,7 +1072,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				}
 			}
 			if tool == nil {
-				log.Printf("WARNING: artifacts.generate '%s': no generate/compile tool found in toolchain '%s'", name, toolName)
+				util.LogWarning("artifacts.generate '%s': no generate/compile tool found in toolchain '%s'", name, toolName)
 				continue
 			}
 
@@ -1026,12 +1084,12 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			// Expand glob pattern
 			inputFiles, err := filepath.Glob(inputPattern)
 			if err != nil {
-				log.Printf("WARNING: artifacts.generate '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
+				util.LogWarning("artifacts.generate '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
 				continue
 			}
 
 			if len(inputFiles) == 0 {
-				log.Printf("WARNING: artifacts.generate '%s': no files matched pattern '%s'", name, inputPattern)
+				util.LogWarning("artifacts.generate '%s': no files matched pattern '%s'", name, inputPattern)
 				continue
 			}
 
@@ -1064,7 +1122,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 					var resolveErrors []string
 					resolved := iterVarEnv.ResolveString(pattern, &resolveErrors, 10)
 					if len(resolveErrors) > 0 {
-						log.Printf("WARNING: Unresolved variables in generate output pattern: %v", resolveErrors)
+						util.LogWarning("Unresolved variables in generate output pattern: %v", resolveErrors)
 					}
 					if !filepath.IsAbs(resolved) && moduleDir != "" {
 						resolved = filepath.Join(moduleDir, resolved)
@@ -1130,7 +1188,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				for _, outputPath := range resolvedOutputs {
 					tg.outputToTaskID[outputPath] = taskID
 				}
-				log.Printf("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
+				util.LogInfo("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
 			}
 
 			// Register artifact outputs and task IDs
@@ -1190,7 +1248,7 @@ func (tg *TaskGenerator) generateStagingTasks(
 		var resolveErrors []string
 		destination = stagingVarEnv.ResolveString(d, &resolveErrors, 10)
 		if len(resolveErrors) > 0 {
-			log.Printf("WARNING: Unresolved variables in staging destination: %v", resolveErrors)
+			util.LogWarning("Unresolved variables in staging destination: %v", resolveErrors)
 		}
 	}
 
@@ -1237,7 +1295,7 @@ func (tg *TaskGenerator) generateStagingTasks(
 
 	// Register staging tasks for install dependencies
 	tg.stagingTasksByName[stagingName] = stagingTaskIDs
-	log.Printf("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
+	util.LogInfo("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
 
 	return tasks, nil
 }
@@ -1270,7 +1328,7 @@ func (tg *TaskGenerator) processStagingContents(
 				var resolveErrors []string
 				folderName = tg.VarEnv.ResolveString(folderName, &resolveErrors, 10)
 				if len(resolveErrors) > 0 {
-					log.Printf("WARNING: Unresolved variables in staging folder '%s': %v", f, resolveErrors)
+					util.LogWarning("Unresolved variables in staging folder '%s': %v", f, resolveErrors)
 				}
 			}
 		}
@@ -1355,7 +1413,7 @@ func (tg *TaskGenerator) processStagingContents(
 				outputs := tg.artifactOutputs[artifactName]
 				taskIDs := tg.artifactTaskIDs[artifactName]
 				if len(outputs) == 0 {
-					log.Printf("WARNING: artifact '%s' has no outputs for staging", artifactName)
+					util.LogWarning("artifact '%s' has no outputs for staging", artifactName)
 					continue
 				}
 
@@ -1414,7 +1472,7 @@ func (tg *TaskGenerator) processStagingContents(
 				if strings.Contains(sourcePattern, "*") {
 					matches, err := filepath.Glob(sourcePattern)
 					if err != nil {
-						log.Printf("WARNING: invalid glob pattern '%s': %v", sourcePattern, err)
+						util.LogWarning("invalid glob pattern '%s': %v", sourcePattern, err)
 						continue
 					}
 
@@ -1482,7 +1540,7 @@ func (tg *TaskGenerator) createTargetStagingTask(
 		taskID, found = globalTaskRegistry.GetLinkTaskID(targetName)
 	}
 	if !found {
-		log.Printf("WARNING: staging target '%s' not found in generated targets or global registry", targetName)
+		util.LogWarning("staging target '%s' not found in generated targets or global registry", targetName)
 		return nil
 	}
 
@@ -1490,7 +1548,7 @@ func (tg *TaskGenerator) createTargetStagingTask(
 	var sourcePath string
 	if registeredOutput, ok := globalTaskRegistry.GetTargetOutputPath(targetName); ok && registeredOutput != "" {
 		sourcePath = registeredOutput
-		log.Printf("Using registered output path for target '%s': %s", targetName, sourcePath)
+		util.LogInfo("Using registered output path for target '%s': %s", targetName, sourcePath)
 	} else {
 		// Fallback: Try to find the output file by checking multiple locations
 		possiblePaths := []string{
@@ -1599,7 +1657,7 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
 	task.CacheKey = task.CalculateCacheKey()
 
-	log.Printf("Generated %s task: %s -> %s", taskType, source, dest)
+	util.LogInfo("Generated %s task: %s -> %s", taskType, source, dest)
 	return &task
 }
 
@@ -1646,7 +1704,7 @@ func (tg *TaskGenerator) generateInstallTasks(
 			var resolveErrors []string
 			destination = installVarEnv.ResolveString(d, &resolveErrors, 10)
 			if len(resolveErrors) > 0 {
-				log.Printf("WARNING: Unresolved variables in install destination: %v", resolveErrors)
+				util.LogWarning("Unresolved variables in install destination: %v", resolveErrors)
 			}
 		}
 		if !filepath.IsAbs(destination) && workspaceRoot != "" {
@@ -1670,7 +1728,7 @@ func (tg *TaskGenerator) generateInstallTasks(
 			var resolveErrors []string
 			filename = installVarEnv.ResolveString(fn, &resolveErrors, 10)
 			if len(resolveErrors) > 0 {
-				log.Printf("WARNING: Unresolved variables in install filename: %v", resolveErrors)
+				util.LogWarning("Unresolved variables in install filename: %v", resolveErrors)
 			}
 		}
 
@@ -1753,7 +1811,7 @@ func (tg *TaskGenerator) generateInstallTasks(
 		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
-		log.Printf("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
+		util.LogInfo("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
 	}
 
 	return tasks, nil
@@ -1779,7 +1837,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 	}
 
 	// Log available targets for debugging
-	log.Printf("Available targets for artifact dependencies: %v", tg.generatedTargets)
+	util.LogInfo("Available targets for artifact dependencies: %v", tg.generatedTargets)
 
 	// Get workspace root for resolving relative paths
 	workspaceRoot := ""
@@ -1824,7 +1882,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			}
 
 			if len(sourcePatterns) == 0 || dest == "" {
-				log.Printf("WARNING: artifacts.copy batch item missing sources or destination")
+				util.LogWarning("artifacts.copy batch item missing sources or destination")
 				continue
 			}
 
@@ -1843,7 +1901,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			var resolveErrors []string
 			dest = copyVarEnv.ResolveString(dest, &resolveErrors, 10)
 			if len(resolveErrors) > 0 {
-				log.Printf("WARNING: Unresolved variables in copy destination: %v", resolveErrors)
+				util.LogWarning("Unresolved variables in copy destination: %v", resolveErrors)
 			}
 
 			// Make dest absolute if relative
@@ -1867,7 +1925,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 				// Expand glob pattern
 				files, err := filepath.Glob(pattern)
 				if err != nil {
-					log.Printf("WARNING: artifacts.copy '%s': invalid glob pattern '%s': %v", artifactName, pattern, err)
+					util.LogWarning("artifacts.copy '%s': invalid glob pattern '%s': %v", artifactName, pattern, err)
 					continue
 				}
 
@@ -1904,7 +1962,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 					tasks = append(tasks, &task)
 					artifactOutputPaths = append(artifactOutputPaths, destFile)
 					artifactTaskIDList = append(artifactTaskIDList, taskID)
-					log.Printf("Generated batch copy task: %s -> %s", srcFile, destFile)
+					util.LogInfo("Generated batch copy task: %s -> %s", srcFile, destFile)
 				}
 			}
 
@@ -1912,7 +1970,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			if artifactName != "" && len(artifactOutputPaths) > 0 {
 				tg.artifactOutputs[artifactName] = artifactOutputPaths
 				tg.artifactTaskIDs[artifactName] = artifactTaskIDList
-				log.Printf("Registered copy artifact '%s' with %d outputs", artifactName, len(artifactOutputPaths))
+				util.LogInfo("Registered copy artifact '%s' with %d outputs", artifactName, len(artifactOutputPaths))
 			}
 
 			continue // Done with this batch copy item
@@ -1928,9 +1986,9 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			// Look up the target's output path from the registry
 			if outputPath, found := globalTaskRegistry.GetTargetOutputPath(targetName); found && outputPath != "" {
 				source = outputPath
-				log.Printf("Resolved target '%s' to output path: %s", targetName, source)
+				util.LogInfo("Resolved target '%s' to output path: %s", targetName, source)
 			} else {
-				log.Printf("WARNING: artifacts.copy target '%s' not found in registry or has no output path", targetName)
+				util.LogWarning("artifacts.copy target '%s' not found in registry or has no output path", targetName)
 				continue
 			}
 			// Auto-add dependency on the target's link task
@@ -1951,7 +2009,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		}
 
 		if source == "" || dest == "" {
-			log.Printf("WARNING: artifacts.copy item missing source/target or dest/destination")
+			util.LogWarning("artifacts.copy item missing source/target or dest/destination")
 			continue
 		}
 
@@ -1965,7 +2023,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		source = copyVarEnv.ResolveString(source, &resolveErrors, 10)
 		dest = copyVarEnv.ResolveString(dest, &resolveErrors, 10)
 		if len(resolveErrors) > 0 {
-			log.Printf("WARNING: Variable resolution errors in artifacts.copy: %v", resolveErrors)
+			util.LogWarning("Variable resolution errors in artifacts.copy: %v", resolveErrors)
 		}
 
 		// Make relative paths absolute (relative to module dir)
@@ -1986,12 +2044,12 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 					// Look up the task ID for this target name
 					if taskID, found := tg.generatedTargets[depStr]; found {
 						dependencies = append(dependencies, taskID)
-						log.Printf("Resolved dependency '%s' -> task '%s'", depStr, taskID)
+						util.LogInfo("Resolved dependency '%s' -> task '%s'", depStr, taskID)
 					} else if taskID, found := globalTaskRegistry.GetLinkTaskID(depStr); found {
 						dependencies = append(dependencies, taskID)
-						log.Printf("Resolved dependency '%s' -> task '%s' (from registry)", depStr, taskID)
+						util.LogInfo("Resolved dependency '%s' -> task '%s' (from registry)", depStr, taskID)
 					} else {
-						log.Printf("WARNING: artifacts.copy dependency '%s' not found", depStr)
+						util.LogWarning("artifacts.copy dependency '%s' not found", depStr)
 					}
 				}
 			}
@@ -2033,7 +2091,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
-		log.Printf("Generated copy task: %s -> %s", source, dest)
+		util.LogInfo("Generated copy task: %s -> %s", source, dest)
 	}
 
 	return tasks, nil

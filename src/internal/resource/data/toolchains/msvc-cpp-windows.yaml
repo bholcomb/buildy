@@ -23,7 +23,7 @@ toolchain:
       output_extension: ".obj"
       flags:
         common: ["/W4", "/nologo"]
-        debug: ["/Od", "/Zi", "/MDd"]
+        debug: ["/Od", "/Zi", "/FS", "/MDd"]
         release: ["/O2", "/MD", "/DNDEBUG"]
       supports:
         defines: true
@@ -41,7 +41,7 @@ toolchain:
       output_extension: ".obj"
       flags:
         common: ["/W4", "/nologo", "/EHsc"]
-        debug: ["/Od", "/Zi", "/MDd"]
+        debug: ["/Od", "/Zi", "/FS", "/MDd"]
         release: ["/O2", "/MD", "/DNDEBUG"]
       supports:
         defines: true
@@ -55,7 +55,7 @@ toolchain:
     # Shared library linking (DLL)
     link_shared_library:
       action: link
-      command: "link.exe /DLL ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output}"
+      command: "link.exe /DLL ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output} /IMPLIB:${implib}"
       input_extensions: [".obj"]
       output_extension: ".dll"
       output_pattern: "${name}.dll"
@@ -69,6 +69,8 @@ toolchain:
         lib_dir_flag: "/LIBPATH:"
         libs: true
         lib_flag: ""
+        lib_suffix: ".lib"
+        implib: true
     
     # Static library archiving
     link_static_library:
@@ -103,3 +105,4 @@ toolchain:
         lib_dir_flag: "/LIBPATH:"
         libs: true
         lib_flag: ""
+        lib_suffix: ".lib"

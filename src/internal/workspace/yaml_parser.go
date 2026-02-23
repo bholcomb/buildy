@@ -60,7 +60,7 @@ var knownLibraryKeys = map[string]bool{
 
 var knownExecutableKeys = map[string]bool{
 	"name": true, "language": true, "sources": true, "include_dirs": true,
-	"deps": true, "libs": true, "depends_on": true, "runtime_deps": true,
+	"deps": true, "libs": true, "depends_on": true,
 	"compile": true, "toolchain": true, "defines": true, "flags": true,
 	// Go-specific keys (when language: go)
 	"path": true, "output": true, "build_tags": true, "ldflags": true,

@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
+
+	"buildy/pkg/util"
 )
 
 // TaskResult represents the result of a completed task
@@ -60,14 +61,14 @@ func (bs *BuildState) Save(stateFile string) error {
 		return fmt.Errorf("failed to write build state: %w", err)
 	}
 	
-	log.Printf("Saved build state to %s", stateFile)
+	util.LogInfo("Saved build state to %s", stateFile)
 	return nil
 }
 
 // LoadBuildState loads build state from disk
 func LoadBuildState(stateFile string) (*BuildState, error) {
 	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
-		log.Printf("No build state found at %s", stateFile)
+		util.LogInfo("No build state found at %s", stateFile)
 		return nil, nil
 	}
 	
@@ -89,7 +90,7 @@ func LoadBuildState(stateFile string) (*BuildState, error) {
 		state.FileMtimes = make(map[string]float64)
 	}
 	
-	log.Printf("Loaded build state from %s", stateFile)
+	util.LogInfo("Loaded build state from %s", stateFile)
 	return &state, nil
 }
 

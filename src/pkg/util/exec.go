@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -48,7 +47,7 @@ func (ee *ExecutionEnvironment) Execute(command, cwd string, timeout int) (*Exec
 	case "docker":
 		return ee.executeDocker(command, cwd, timeout)
 	default:
-		log.Printf("WARNING: Unknown execution type '%s', falling back to native", ee.Type)
+		LogWarning("Unknown execution type '%s', falling back to native", ee.Type)
 		return ee.executeNative(command, cwd, timeout)
 	}
 }
@@ -77,15 +76,21 @@ func (ee *ExecutionEnvironment) executeNative(command, cwd string, timeout int) 
 	}
 	cmd.Dir = cwd
 
-	// Capture output
-	stdout, err := cmd.Output()
-	stderr := ""
+	// Capture both stdout and stderr using CombinedOutput
+	// This ensures we see all compiler output (warnings/errors go to stdout for cl.exe)
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	stdout := stdoutBuf.String()
+	stderr := stderrBuf.String()
+
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = string(exitErr.Stderr)
 			return &ExecutionResult{
 				ReturnCode: exitErr.ExitCode(),
-				Stdout:     string(stdout),
+				Stdout:     stdout,
 				Stderr:     stderr,
 			}, nil
 		}
@@ -95,8 +100,8 @@ func (ee *ExecutionEnvironment) executeNative(command, cwd string, timeout int) 
 
 	return &ExecutionResult{
 		ReturnCode: 0,
-		Stdout:     string(stdout),
-		Stderr:     "",
+		Stdout:     stdout,
+		Stderr:     stderr,
 	}, nil
 }
 
@@ -154,7 +159,7 @@ func (ee *ExecutionEnvironment) executeDocker(command, cwd string, timeout int) 
 	dockerArgs = append(dockerArgs, image)
 	dockerArgs = append(dockerArgs, "sh", "-c", command)
 
-	log.Printf("Docker command: docker %s", strings.Join(dockerArgs, " "))
+	LogDebug("Docker command: docker %s", strings.Join(dockerArgs, " "))
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
