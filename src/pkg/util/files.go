@@ -3,6 +3,9 @@ package util
 import (
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // CopyFile copies a file from src to dst, preserving permissions
@@ -30,4 +33,29 @@ func CopyFile(src, dst string) error {
 	}
 
 	return os.Chmod(dst, sourceInfo.Mode())
+}
+
+// NormalizePath normalizes a file path for consistent cache key generation.
+// On Windows, this lowercases the entire path since the filesystem is case-insensitive.
+// On all platforms, it cleans the path to remove redundant separators.
+func NormalizePath(path string) string {
+	// First, clean the path to normalize separators and remove redundant parts
+	cleaned := filepath.Clean(path)
+
+	// On Windows, lowercase the path for consistent comparisons
+	// Windows filesystem is case-insensitive, so C:\Dev and c:\dev are the same
+	if runtime.GOOS == "windows" {
+		cleaned = strings.ToLower(cleaned)
+	}
+
+	return cleaned
+}
+
+// NormalizePathForCache is specifically for cache key calculation.
+// It normalizes the path and also converts to forward slashes for cross-platform
+// cache key consistency (though cache is typically not shared across platforms).
+func NormalizePathForCache(path string) string {
+	normalized := NormalizePath(path)
+	// Convert to forward slashes for consistent cache keys
+	return filepath.ToSlash(normalized)
 }
