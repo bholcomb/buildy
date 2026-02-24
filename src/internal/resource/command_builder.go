@@ -2,6 +2,7 @@ package resource
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"buildy/pkg/util"
@@ -223,11 +224,18 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	implib := ""
 	if supportsImplib, ok := tool.Supports["implib"].(bool); ok && supportsImplib {
 		if strings.HasSuffix(output, ".dll") {
-			// Replace /bin/ with /lib/ in the path, or just change extension if no bin/
-			if strings.Contains(output, "/bin/") {
-				implib = strings.Replace(output, "/bin/", "/lib/", 1)
-				implib = strings.TrimSuffix(implib, ".dll") + ".lib"
+			// Replace bin with lib in the path, handling both path separators
+			// Use filepath.Dir/Base to properly handle the path components
+			outputDir := filepath.Dir(output)
+			outputBase := filepath.Base(output)
+			parentDir := filepath.Dir(outputDir)
+			dirName := filepath.Base(outputDir)
+
+			if dirName == "bin" {
+				// Replace bin with lib
+				implib = filepath.Join(parentDir, "lib", strings.TrimSuffix(outputBase, ".dll")+".lib")
 			} else {
+				// Just change extension if not in bin/
 				implib = strings.TrimSuffix(output, ".dll") + ".lib"
 			}
 		}
