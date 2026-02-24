@@ -185,7 +185,7 @@ func (bc *BuildCache) HasCacheEntry(cacheKey string) bool {
 }
 
 // RestoreCachedResult restores cached task outputs
-func (bc *BuildCache) RestoreCachedResult(task *workspace.BuildTask) error {
+func (bc *BuildCache) RestoreCachedResult(task *workspace.BuildTask, totalTaskCount int) error {
 	bc.mutex.RLock()
 	_, exists := bc.cacheIndex[task.CacheKey]
 	bc.mutex.RUnlock()
@@ -225,7 +225,7 @@ func (bc *BuildCache) RestoreCachedResult(task *workspace.BuildTask) error {
 		}
 	}
 
-	util.LogProgress("✓ %s - cache hit, restored outputs", task.TaskID)
+	util.LogProgress("[%d/%d] %s - cache hit, restored outputs", task.TaskNumber, totalTaskCount, task.TaskID)
 	return nil
 }
 

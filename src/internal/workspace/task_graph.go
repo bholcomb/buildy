@@ -85,6 +85,18 @@ func (tg *TaskGraph) BuildExecutionStages() ([][]string, error) {
 	}
 
 	tg.ExecutionStages = stages
+	
+	// Assign sequential task numbers in execution order (1-based)
+	taskNumber := 1
+	for _, stage := range stages {
+		for _, taskID := range stage {
+			if task, ok := tg.Tasks[taskID]; ok {
+				task.TaskNumber = taskNumber
+				taskNumber++
+			}
+		}
+	}
+	
 	return stages, nil
 }
 
