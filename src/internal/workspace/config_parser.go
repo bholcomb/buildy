@@ -200,107 +200,14 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 
 	// Process each module
 	for modulePath, moduleInfo := range cp.Workspace.Modules {
-		// Skip if target filter specified and this module has no matching targets
-		if len(targetFilter) > 0 {
-			hasMatchingTarget := false
-			for _, target := range moduleInfo.Targets {
-				for _, filter := range targetFilter {
-					if target == filter {
-						hasMatchingTarget = true
-						break
-					}
-				}
-				if hasMatchingTarget {
-					break
-				}
-			}
-			if !hasMatchingTarget {
-				continue
-			}
-		}
-
-		util.LogInfo("Processing module: %s", modulePath)
-
-		// Create module-specific parser with chained variable environment
-		moduleParser := NewConfigParser(
-			cp.Platform,
-			cp.Architecture,
-			cp.Configuration,
-			cp.CLIDefines,
-			cp.ToolchainManager,
-			cp.DefaultToolchain,
-			cp.TemplateEngine,
-			cp.Workspace,
-			cp.DependencyResolver,
-			workspaceVarEnv,
-		)
-
-		moduleParser.CurrentModule = modulePath
-		moduleParser.TargetRegistry = cp.TargetRegistry
-		moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
-
-		// For fetch dependencies, use the source directory (RelativePath) not the config file directory
-		// This allows the buildy config to reference source files relative to the fetched source
-		if strings.HasPrefix(modulePath, "@fetch:") && moduleInfo.RelativePath != "" {
-			moduleParser.ConfigFileDir = moduleInfo.RelativePath
-		} else {
-			moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
-		}
-
-		// Merge workspace root config into module config
-		moduleConfig := make(map[string]any)
-		for k, v := range moduleInfo.Config {
-			moduleConfig[k] = v
-		}
-
-		// Inherit environment section from workspace if module doesn't have one
-		if workspaceEnv, ok := cp.Workspace.Config.RawConfig["environment"].(map[string]any); ok {
-			if _, hasEnv := moduleConfig["environment"]; !hasEnv {
-				moduleConfig["environment"] = workspaceEnv
-			} else if moduleEnv, ok := moduleConfig["environment"].(map[string]any); ok {
-				mergedEnv := make(map[string]any)
-				for k, v := range workspaceEnv {
-					mergedEnv[k] = v
-				}
-				for k, v := range moduleEnv {
-					mergedEnv[k] = v
-				}
-				moduleConfig["environment"] = mergedEnv
-			}
-		}
-
-		if workspaceConfig, ok := cp.Workspace.Config.RawConfig["config"].(map[string]any); ok {
-			mergedModuleConfig := make(map[string]any)
-			for k, v := range workspaceConfig {
-				mergedModuleConfig[k] = v
-			}
-
-			if moduleConfigSection, ok := moduleConfig["config"].(map[string]any); ok {
-				for key, value := range moduleConfigSection {
-					if valueList, ok := value.([]any); ok {
-						if existingList, ok := mergedModuleConfig[key].([]any); ok {
-							mergedModuleConfig[key] = append(existingList, valueList...)
-						} else {
-							mergedModuleConfig[key] = value
-						}
-					} else {
-						mergedModuleConfig[key] = value
-					}
-				}
-			}
-			moduleConfig["config"] = mergedModuleConfig
-		}
-
-		// Generate tasks for this module
-		moduleTasks, err := moduleParser.GenerateTasks(moduleConfig)
+		moduleTasks, err := cp.processModule(modulePath, moduleInfo, targetFilter, workspaceVarEnv)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+			return nil, err
 		}
-
 		allTasks = append(allTasks, moduleTasks...)
 	}
 
-	// Second pass: resolve cross-module dependencies
+	// Second pass: resolve cross-module dependencies (target names -> task IDs)
 	allTasks = cp.resolveCrossModuleDependencies(allTasks)
 
 	// Third pass: generate workspace-level staging and install tasks from root config
@@ -312,6 +219,112 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 
 	util.LogProgress("Generated %d tasks from %d modules", len(allTasks), len(cp.Workspace.Modules))
 	return allTasks, nil
+}
+
+// processModule generates tasks for a single module
+func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo, targetFilter []string, workspaceVarEnv *util.VariableEnvironment) ([]*BuildTask, error) {
+	// Skip if target filter specified and this module has no matching targets
+	if len(targetFilter) > 0 {
+		hasMatchingTarget := false
+		for _, target := range moduleInfo.Targets {
+			for _, filter := range targetFilter {
+				if target == filter {
+					hasMatchingTarget = true
+					break
+				}
+			}
+			if hasMatchingTarget {
+				break
+			}
+		}
+		if !hasMatchingTarget {
+			return []*BuildTask{}, nil
+		}
+	}
+
+	util.LogInfo("Processing module: %s", modulePath)
+
+	// Create module-specific parser with chained variable environment
+	moduleParser := NewConfigParser(
+		cp.Platform,
+		cp.Architecture,
+		cp.Configuration,
+		cp.CLIDefines,
+		cp.ToolchainManager,
+		cp.DefaultToolchain,
+		cp.TemplateEngine,
+		cp.Workspace,
+		cp.DependencyResolver,
+		workspaceVarEnv,
+	)
+
+	moduleParser.CurrentModule = modulePath
+	moduleParser.TargetRegistry = cp.TargetRegistry
+	moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
+
+	// For fetch dependencies, use the source directory (RelativePath) not the config file directory
+	// This allows the buildy config to reference source files relative to the fetched source
+	if strings.HasPrefix(modulePath, "@fetch:") && moduleInfo.RelativePath != "" {
+		moduleParser.ConfigFileDir = moduleInfo.RelativePath
+	} else if cp.Workspace.ConfigPath != "" {
+		// For explicit config path (e.g., dependency builds with override configs),
+		// use the workspace root for path resolution, not the config file's directory
+		moduleParser.ConfigFileDir = cp.Workspace.RootDir
+	} else {
+		moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
+	}
+
+	// Merge workspace root config into module config
+	moduleConfig := make(map[string]any)
+	for k, v := range moduleInfo.Config {
+		moduleConfig[k] = v
+	}
+
+	// Inherit environment section from workspace if module doesn't have one
+	if workspaceEnv, ok := cp.Workspace.Config.RawConfig["environment"].(map[string]any); ok {
+		if _, hasEnv := moduleConfig["environment"]; !hasEnv {
+			moduleConfig["environment"] = workspaceEnv
+		} else if moduleEnv, ok := moduleConfig["environment"].(map[string]any); ok {
+			mergedEnv := make(map[string]any)
+			for k, v := range workspaceEnv {
+				mergedEnv[k] = v
+			}
+			for k, v := range moduleEnv {
+				mergedEnv[k] = v
+			}
+			moduleConfig["environment"] = mergedEnv
+		}
+	}
+
+	if workspaceConfig, ok := cp.Workspace.Config.RawConfig["config"].(map[string]any); ok {
+		mergedModuleConfig := make(map[string]any)
+		for k, v := range workspaceConfig {
+			mergedModuleConfig[k] = v
+		}
+
+		if moduleConfigSection, ok := moduleConfig["config"].(map[string]any); ok {
+			for key, value := range moduleConfigSection {
+				if valueList, ok := value.([]any); ok {
+					if existingList, ok := mergedModuleConfig[key].([]any); ok {
+						mergedModuleConfig[key] = append(existingList, valueList...)
+					} else {
+						mergedModuleConfig[key] = value
+					}
+				} else {
+					mergedModuleConfig[key] = value
+				}
+			}
+		}
+		moduleConfig["config"] = mergedModuleConfig
+	}
+
+	// Generate tasks for this module
+	moduleTasks, err := moduleParser.GenerateTasks(moduleConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+	}
+
+	return moduleTasks, nil
 }
 
 // generateWorkspaceLevelTasks generates staging and install tasks from the workspace root config

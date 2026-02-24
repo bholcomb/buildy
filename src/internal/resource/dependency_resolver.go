@@ -33,8 +33,6 @@ type ResolvedDependency struct {
 	Sources     []string
 	Path        string // For fetch deps, the resolved path
 	Resolved    bool
-	ConfigFile  string // For fetch deps: buildy config file to use
-	NeedsBuildy bool   // True if this fetch dep should be built via buildy config
 	SourceURL   string // For URL fetch deps: the original URL
 	SourceGit   string // For git fetch deps: the git URL
 	SourceRef   string // For git fetch deps: the ref (tag/branch)
@@ -98,6 +96,7 @@ type DependencyResolver struct {
 	platform           string
 	architecture       string
 	toolchain          string
+	configuration      string
 	varEnv             *util.VariableEnvironment
 	cacheDir           string
 	workspaceRoot      string
@@ -109,7 +108,7 @@ type DependencyResolver struct {
 }
 
 // NewDependencyResolver creates a new DependencyResolver
-func NewDependencyResolver(platform, architecture, toolchain, cacheDir, workspaceRoot string, varEnv *util.VariableEnvironment) *DependencyResolver {
+func NewDependencyResolver(platform, architecture, toolchain, configuration, cacheDir, workspaceRoot string, varEnv *util.VariableEnvironment) *DependencyResolver {
 	bsm, err := NewBuildSystemManager()
 	if err != nil {
 		util.LogWarning("Failed to create BuildSystemManager: %v", err)
@@ -119,6 +118,7 @@ func NewDependencyResolver(platform, architecture, toolchain, cacheDir, workspac
 		platform:           platform,
 		architecture:       architecture,
 		toolchain:          toolchain,
+		configuration:      configuration,
 		varEnv:             varEnv,
 		cacheDir:           cacheDir,
 		workspaceRoot:      workspaceRoot,
@@ -389,6 +389,7 @@ func (dr *DependencyResolver) resolveDependency(name string, config *DependencyC
 	depVarEnv.SetVariable("platform", dr.platform, "dependency")
 	depVarEnv.SetVariable("arch", dr.architecture, "dependency")
 	depVarEnv.SetVariable("toolchain", dr.toolchain, "dependency")
+	depVarEnv.SetVariable("config", dr.configuration, "dependency")
 	depVarEnv.SetVariable("workspace_root", dr.workspaceRoot, "dependency")
 
 	// Infer dependency type from fields
@@ -597,24 +598,10 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 	varEnv.SetVariable("dep_dir", dest, "dependency")
 
 	// Handle build configuration
-	if section.Build != nil {
-		if section.Build.System == "buildy" {
-			// Will be built via buildy - store config for later
-			if section.Build.Override != "" {
-				// Override file is relative to the dependencies config directory
-				configPath := filepath.Join(dr.workspaceRoot, "buildy_config", "dependencies", section.Build.Override)
-				resolved.ConfigFile = configPath
-			} else {
-				// Look for buildy.yaml in the fetched source
-				resolved.ConfigFile = filepath.Join(dest, "buildy.yaml")
-			}
-			resolved.NeedsBuildy = true
-			util.LogInfo("Fetch dependency '%s' will be built using buildy config: %s", name, resolved.ConfigFile)
-		} else if section.Build.System != "" && section.Build.System != "none" {
-			// Build using external build system
-			if err := dr.buildFetchedDep(name, section, dest, resolved); err != nil {
-				return fmt.Errorf("failed to build '%s': %w", name, err)
-			}
+	if section.Build != nil && section.Build.System != "" && section.Build.System != "none" {
+		// Build using the specified build system (cmake, make, meson, buildy, etc.)
+		if err := dr.buildFetchedDep(name, section, dest, resolved); err != nil {
+			return fmt.Errorf("failed to build '%s': %w", name, err)
 		}
 	}
 
@@ -643,6 +630,7 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 }
 
 // buildFetchedDep builds a fetched dependency using its build system
+// Builds both debug and release configurations so users can link against either
 func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySection, dest string, resolved *ResolvedDependency) error {
 	if dr.buildSystemManager == nil {
 		return fmt.Errorf("BuildSystemManager not initialized")
@@ -665,11 +653,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		}
 	}
 
-	// Set up directories
-	buildDir := filepath.Join(dest, "_build")
-	installDir := filepath.Join(dest, "_install")
-	os.MkdirAll(buildDir, 0755)
-	os.MkdirAll(installDir, 0755)
+	util.LogProgress("=== Building dependency: %s (using %s) ===", name, bsConfig.Name)
 
 	// Determine execution environment
 	execEnv := dr.defaultExecEnv
@@ -677,21 +661,74 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		execEnv = dr.createExecutionEnv(section.Execution)
 	}
 
-	// Default phases
-	phases := []string{"configure", "build"}
+	// Build both debug and release configurations
+	configurations := []string{"debug", "release"}
 
-	// Execute the build
-	util.LogInfo("Building %s with %s (phases: %v)", name, bsConfig.Name, phases)
-	if err := dr.buildSystemManager.Execute(bsConfig, dest, buildDir, installDir, execEnv, phases, section.Build.Args); err != nil {
-		return fmt.Errorf("build failed for %s: %w", name, err)
+	for _, config := range configurations {
+		// Set up per-configuration directories
+		buildDir := filepath.Join(dest, "_build", config)
+		installDir := filepath.Join(dest, "_install", config)
+		os.MkdirAll(buildDir, 0755)
+		os.MkdirAll(installDir, 0755)
+
+		// Build context with additional variables
+		context := map[string]string{
+			"config":   config,
+			"platform": dr.platform,
+			"arch":     dr.architecture,
+		}
+
+		// For buildy build system, add the executable path and handle override config
+		if bsConfig.Name == "buildy" {
+			buildyExe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("failed to find buildy executable: %w", err)
+			}
+			context["buildy_exe"] = buildyExe
+
+			// If override config is specified, pass it as the config file argument
+			// The source_dir remains the fetched dependency directory
+			if section.Build.Override != "" {
+				overrideConfig := filepath.Join(dr.workspaceRoot, "buildy_config", "dependencies", section.Build.Override)
+				context["config_file"] = overrideConfig
+			} else {
+				// No override - use the default buildy.yaml in the source directory
+				context["config_file"] = ""
+			}
+		}
+
+		// Determine phases - buildy only has "build", others have "configure" and "build"
+		var phases []string
+		if bsConfig.Name == "buildy" {
+			phases = []string{"build"}
+		} else {
+			phases = []string{"configure", "build"}
+		}
+
+		// Build configuration-specific args
+		extraArgs := append([]string{}, section.Build.Args...)
+		if bsConfig.Name == "cmake" {
+			// Override CMAKE_BUILD_TYPE for each configuration
+			extraArgs = append(extraArgs, fmt.Sprintf("-DCMAKE_BUILD_TYPE=%s", strings.Title(config)))
+		}
+
+		util.LogInfo("Building %s (%s) with %s", name, config, bsConfig.Name)
+		if err := dr.buildSystemManager.ExecuteWithContext(bsConfig, dest, buildDir, installDir, execEnv, phases, extraArgs, context); err != nil {
+			return fmt.Errorf("build failed for %s (%s): %w", name, config, err)
+		}
+
+		util.LogInfo("Build completed for %s (%s)", name, config)
 	}
 
-	// Get output paths from build system config
-	includeDirs, libDirs := dr.buildSystemManager.GetOutputPaths(bsConfig, dest, buildDir, installDir)
+	// Get output paths from the debug build (headers are typically the same)
+	// Library paths will be per-configuration in the dependency config
+	debugBuildDir := filepath.Join(dest, "_build", "debug")
+	debugInstallDir := filepath.Join(dest, "_install", "debug")
+	includeDirs, libDirs := dr.buildSystemManager.GetOutputPaths(bsConfig, dest, debugBuildDir, debugInstallDir)
 	resolved.IncludeDirs = append(resolved.IncludeDirs, includeDirs...)
 	resolved.LibDirs = append(resolved.LibDirs, libDirs...)
 
-	util.LogInfo("Build completed for %s", name)
+	util.LogProgress("=== Dependency %s built successfully ===", name)
 	return nil
 }
 
@@ -777,20 +814,6 @@ func (dr *DependencyResolver) GetDependency(name string) *ResolvedDependency {
 // GetAllDependencies returns all resolved dependencies
 func (dr *DependencyResolver) GetAllDependencies() map[string]*ResolvedDependency {
 	return dr.resolved
-}
-
-// GetBuildyDependencies returns fetch dependencies that need to be built via buildy config
-func (dr *DependencyResolver) GetBuildyDependencies() map[string]struct{ SourcePath, ConfigFile string } {
-	result := make(map[string]struct{ SourcePath, ConfigFile string })
-	for name, dep := range dr.resolved {
-		if dep.NeedsBuildy && dep.ConfigFile != "" {
-			result[name] = struct{ SourcePath, ConfigFile string }{
-				SourcePath: dep.Path,
-				ConfigFile: dep.ConfigFile,
-			}
-		}
-	}
-	return result
 }
 
 // ResolveDependencies resolves a list of dependency names and returns merged settings

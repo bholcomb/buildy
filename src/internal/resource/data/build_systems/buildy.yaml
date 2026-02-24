@@ -1,0 +1,19 @@
+build_system:
+  name: buildy
+  description: "Buildy build system (recursive)"
+  
+  detection:
+    marker_files: ["buildy.yaml"]
+    priority: 20
+  
+  phases:
+    build:
+      command: "${buildy_exe} --platform ${platform} --architecture ${arch} --config ${config} ${config_file}"
+      working_dir: "${source_dir}"
+      required: true
+  
+  output:
+    include_patterns:
+      - "${source_dir}/include"
+    lib_patterns:
+      - "${build_dir}/lib"

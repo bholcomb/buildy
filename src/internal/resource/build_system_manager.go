@@ -274,6 +274,18 @@ func (bsm *BuildSystemManager) Execute(
 	phases []string,
 	extraArgs []string,
 ) error {
+	return bsm.ExecuteWithContext(config, sourceDir, buildDir, installDir, execEnv, phases, extraArgs, nil)
+}
+
+// ExecuteWithContext executes specified phases with additional context variables
+func (bsm *BuildSystemManager) ExecuteWithContext(
+	config *BuildSystemConfig,
+	sourceDir, buildDir, installDir string,
+	execEnv *util.ExecutionEnvironment,
+	phases []string,
+	extraArgs []string,
+	context map[string]string,
+) error {
 	// Get number of parallel jobs
 	jobs := runtime.NumCPU()
 
@@ -299,12 +311,12 @@ func (bsm *BuildSystemManager) Execute(
 		}
 
 		// Build the command with variable substitution
-		cmd := bsm.substituteVariables(phase.Command, sourceDir, buildDir, installDir, jobs, extraArgs, phase.DefaultArgs)
+		cmd := bsm.substituteVariablesWithContext(phase.Command, sourceDir, buildDir, installDir, jobs, extraArgs, phase.DefaultArgs, context)
 
 		// Determine working directory
 		workDir := sourceDir
 		if phase.WorkingDir != "" {
-			workDir = bsm.substituteVariables(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil)
+			workDir = bsm.substituteVariablesWithContext(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil, context)
 		}
 
 		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
@@ -332,6 +344,17 @@ func (bsm *BuildSystemManager) substituteVariables(
 	jobs int,
 	extraArgs, defaultArgs []string,
 ) string {
+	return bsm.substituteVariablesWithContext(template, sourceDir, buildDir, installDir, jobs, extraArgs, defaultArgs, nil)
+}
+
+// substituteVariablesWithContext replaces placeholders with additional context variables
+func (bsm *BuildSystemManager) substituteVariablesWithContext(
+	template string,
+	sourceDir, buildDir, installDir string,
+	jobs int,
+	extraArgs, defaultArgs []string,
+	context map[string]string,
+) string {
 	// Combine default args with extra args
 	allArgs := append(defaultArgs, extraArgs...)
 	argsStr := strings.Join(allArgs, " ")
@@ -342,6 +365,11 @@ func (bsm *BuildSystemManager) substituteVariables(
 	result = strings.ReplaceAll(result, "${install_dir}", installDir)
 	result = strings.ReplaceAll(result, "${jobs}", fmt.Sprintf("%d", jobs))
 	result = strings.ReplaceAll(result, "${args}", argsStr)
+
+	// Apply additional context variables
+	for key, value := range context {
+		result = strings.ReplaceAll(result, "${"+key+"}", value)
+	}
 
 	return result
 }
