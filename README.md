@@ -29,14 +29,22 @@ A modern, data-driven build system for multi-language projects.
 # Build with default settings (debug, auto-detected platform)
 buildy
 
+# Build a specific directory
+buildy path/to/project/
+
+# Build a specific config file (standalone mode)
+buildy path/to/config.yaml
+
 # Build release configuration
-buildy --config release
+buildy -r              # Short form
+buildy --config release  # Long form
 
 # Specify platform for cross-compilation
-buildy --platform linux --arch x86_64
+buildy --platform linux --architecture x86_64
 
-# Verbose output
-buildy --verbose
+# Verbose/debug output
+buildy -n 4               # Verbose level
+buildy -n 5               # Debug level
 ```
 
 ## Project Configuration
@@ -134,39 +142,42 @@ project:
 
 workspace:
   modules:
-    common:       # Built on all platforms
-      - core
-      - renderer
-      - audio
-    linux:        # Linux only
-      - platform/linux
-    windows:      # Windows only
-      - platform/windows
+    - core                    # Built on all platforms
+    - renderer
+    - audio
+    - linux:                  # Linux only
+        - platform/linux
+    - windows:                # Windows only
+        - platform/windows
 ```
 
-Each subdirectory contains its own `buildy.yaml`.
+Each subdirectory contains its own `buildy.yaml`. The module list uses filtered list syntax - plain strings are always included, map entries with platform keys are filtered.
 
 ## Dependencies
 
-External dependencies are defined in the `dependencies` section:
+External dependencies are defined in `buildy_config/dependencies.yaml`:
 
 ```yaml
-dependencies:
-  system:
-    common:
-      - name: zlib
-        pkg_config: zlib
-    linux:
-      - name: pthread
-        libs: ["pthread"]
+# buildy_config/dependencies.yaml
+zlib:
+  common:
+    pkg_config: zlib
 
-  packages:
-    - glfw3        # Resolves to buildy/packages/glfw3.yaml
+pthread:
+  linux:
+    libs: ["pthread"]
 
-  fetch:
-    - name: imgui
-      git: "https://github.com/ocornut/imgui.git"
-      ref: "v1.90.1"
+imgui:
+  common:
+    git: "https://github.com/ocornut/imgui.git"
+    ref: "v1.90.1"
+    include_dirs: ["${dep_dir}"]
+
+glfw3:
+  common:
+    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
+    checksum: "sha256:abc123..."  # Recommended for reproducibility
+    include_dirs: ["${dep_dir}/include"]
 ```
 
 ## Command-Line Options
@@ -175,17 +186,18 @@ dependencies:
 Usage: buildy [options]
 
 Options:
-  --config <name>       Build configuration (debug, release)
-  --platform <name>     Target platform (linux, windows, macos)
-  --arch <name>         Target architecture (x86_64, arm64)
-  --toolchain <name>    Override toolchain selection
-  --target <name>       Build specific target only
-  --jobs <n>            Number of parallel jobs
-  --verbose             Enable verbose output
-  --dry-run             Show what would be built
+  -c, --config <name>   Build configuration (debug, release)
+  -r, --release         Shortcut for --config=release
+  -p, --platform <name> Target platform (linux, windows, macos)
+  -a, --arch <name>     Target architecture (x86_64, arm64)
+  -t, --toolchain <name> Override toolchain selection
+  --target <name>       Build specific target(s)
+  -j, --workers <n>     Number of parallel workers
+  -d, --dry-run         Show what would be built
   --clean               Clean build outputs
-  --force               Ignore cache, rebuild all
+  -f, --force           Ignore cache, rebuild all
   --compile-commands    Generate compile_commands.json
+  -n, --notify <level>  Log level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug
 ```
 
 ## Project Structure
@@ -193,15 +205,20 @@ Options:
 ```
 my-project/
 ├── buildy.yaml              # Project configuration
-├── buildy/
+├── buildy_config/
 │   ├── dependencies.yaml    # External dependencies (optional)
-│   ├── packages/            # Package definitions
+│   ├── dependencies/        # Per-dependency configs (optional)
 │   │   └── glfw3.yaml
+│   ├── dependencies.lock    # Lockfile (auto-generated)
 │   └── toolchains/          # Custom toolchains (optional)
 │       └── custom-gcc.yaml
 ├── src/                     # Source files
 ├── include/                 # Headers
-└── build/                   # Output directory (auto-created)
+├── build/                   # Output directory (auto-created)
+└── .buildy_cache/           # Build cache (git-ignored)
+    ├── deps/                # Fetched dependencies
+    ├── downloads/           # Cached archives
+    └── objects/             # Compiled objects
 ```
 
 ## Built-in Toolchains

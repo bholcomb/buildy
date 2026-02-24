@@ -74,6 +74,7 @@ func parseModuleList(raw any) []ModuleEntry {
 // Workspace manages multi-module workspace with buildy.yaml files
 type Workspace struct {
 	RootDir    string
+	ConfigPath string                  // Explicit config file path (empty for default buildy.yaml discovery)
 	Config     *WorkspaceConfig
 	Modules    map[string]*ModuleInfo // relative_path -> ModuleInfo
 	discovered bool
@@ -96,7 +97,26 @@ func NewWorkspace(rootDir string) (*Workspace, error) {
 		discovered: false,
 	}
 
-	config, err := ws.loadWorkspaceConfig()
+	config, err := ws.loadWorkspaceConfig("")
+	if err != nil {
+		return nil, err
+	}
+	ws.Config = config
+
+	return ws, nil
+}
+
+// NewWorkspaceWithConfig creates a new Workspace with a custom config file path
+// This is used when building dependencies with override config files
+func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, error) {
+	ws := &Workspace{
+		RootDir:    rootDir,
+		ConfigPath: configPath, // Store explicit config path
+		Modules:    make(map[string]*ModuleInfo),
+		discovered: false,
+	}
+
+	config, err := ws.loadWorkspaceConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -141,9 +161,13 @@ func findWorkspaceRoot(startDir string) (string, error) {
 	}
 }
 
-// loadWorkspaceConfig loads workspace configuration from root buildy.yaml
-func (ws *Workspace) loadWorkspaceConfig() (*WorkspaceConfig, error) {
-	configFile := filepath.Join(ws.RootDir, "buildy.yaml")
+// loadWorkspaceConfig loads workspace configuration from buildy.yaml
+// If configPath is empty, uses buildy.yaml in the workspace root
+func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, error) {
+	configFile := configPath
+	if configFile == "" {
+		configFile = filepath.Join(ws.RootDir, "buildy.yaml")
+	}
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace config not found: %s", configFile)
@@ -307,6 +331,19 @@ func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (ma
 
 	util.LogVerbose("Discovering modules in workspace...")
 	ws.Modules = make(map[string]*ModuleInfo)
+
+	// If we have an explicit config path (e.g., dependency build with override),
+	// load it directly as the root module instead of discovering
+	if ws.ConfigPath != "" {
+		moduleInfo, err := ws.loadModule(ws.ConfigPath, ".")
+		if err != nil {
+			return nil, fmt.Errorf("failed to load module from config %s: %w", ws.ConfigPath, err)
+		}
+		ws.Modules["."] = moduleInfo
+		ws.discovered = true
+		util.LogVerbose("Loaded root module from explicit config: %s (%d targets)", ws.ConfigPath, len(moduleInfo.Targets))
+		return ws.Modules, nil
+	}
 
 	// Check if we have explicit modules defined
 	if len(ws.Config.ExplicitModules) > 0 {
@@ -664,40 +701,6 @@ func (ws *Workspace) countTotalTargets() int {
 		total += len(module.Targets)
 	}
 	return total
-}
-
-// AddFetchDependencyModule adds a fetch dependency with a buildy config as a module
-// sourcePath is the fetched dependency directory, configFile is the buildy config path
-// (can be absolute or relative to sourcePath)
-func (ws *Workspace) AddFetchDependencyModule(name, sourcePath, configFile string) error {
-	var fullConfigPath string
-
-	if configFile == "" {
-		fullConfigPath = filepath.Join(sourcePath, "buildy.yaml")
-	} else if filepath.IsAbs(configFile) {
-		// configFile is an absolute path (e.g., override file in workspace)
-		fullConfigPath = configFile
-	} else {
-		// configFile is relative to sourcePath
-		fullConfigPath = filepath.Join(sourcePath, configFile)
-	}
-
-	if _, err := os.Stat(fullConfigPath); os.IsNotExist(err) {
-		return fmt.Errorf("fetch dependency config not found: %s", fullConfigPath)
-	}
-
-	// Use a special prefix for fetch dependency modules to avoid conflicts
-	moduleKey := "@fetch:" + name
-
-	moduleInfo, err := ws.loadModule(fullConfigPath, sourcePath)
-	if err != nil {
-		return fmt.Errorf("failed to load fetch dependency module %s: %w", name, err)
-	}
-
-	ws.Modules[moduleKey] = moduleInfo
-	util.LogVerbose("Added fetch dependency as module: %s (%s, %d targets)", name, configFile, len(moduleInfo.Targets))
-
-	return nil
 }
 
 // GetModule gets a module by relative path

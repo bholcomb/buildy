@@ -28,7 +28,7 @@ var (
 
 // InitLogger initializes the logging system with the specified notify level
 // notifyLevel: 1=error, 2=warning, 3=info, 4=verbose, 5=debug
-func InitLogger(level int, verbose bool) {
+func InitLogger(level int) {
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
@@ -41,15 +41,8 @@ func InitLogger(level int, verbose bool) {
 	}
 	notifyLevel = LogLevel(level)
 
-	// Set log flags based on verbose mode
-	var flags int
-	if verbose {
-		flags = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
-	} else {
-		flags = log.Ldate | log.Ltime
-	}
-
-	stdLogger = log.New(os.Stdout, "", flags)
+	// Log format: date, time with milliseconds
+	stdLogger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	initialized = true
 }
 

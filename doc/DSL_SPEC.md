@@ -50,20 +50,32 @@ project/
 ├── buildy_config/
 │   ├── dependencies.yaml          # External dependencies (optional)
 │   ├── dependencies.lock          # Lockfile (auto-generated)
-│   ├── packages/
-│   │   └── glfw3.yaml             # Package definitions
-│   └── toolchains/
-│       └── mesh-converter.yaml    # Custom tool definitions
-├── core/
-│   └── buildy.yaml                # Submodule
-├── renderer/
-│   └── buildy.yaml                # Submodule
-└── platform/
-    ├── buildy.yaml                # Intermediate module (has children)
-    ├── linux/
-    │   └── buildy.yaml            # Leaf module
-    └── windows/
-        └── buildy.yaml            # Leaf module
+│   └── dependencies/              # Per-dependency config files (optional)
+│       ├── glfw3.yaml             # Dependency definition
+│       └── glfw3_build.yaml       # Custom build config for dependency
+├── src/
+│   ├── core/
+│   │   └── buildy.yaml            # Submodule
+│   ├── renderer/
+│   │   └── buildy.yaml            # Submodule
+│   ├── audio/
+│   │   └── buildy.yaml            # Submodule
+│   ├── platform/
+│   │   └── buildy.yaml            # Platform abstraction module
+│   └── game/
+│       └── buildy.yaml            # Main executable module
+├── assets/
+│   └── shaders/
+│       └── buildy.yaml            # Shader compilation module
+└── .buildy_cache/                 # Build cache (git-ignored)
+    ├── cache_index.json           # Content-addressable cache index
+    ├── deps/                      # Fetched dependency sources
+    │   └── glfw3/                 # Extracted dependency
+    ├── downloads/                 # Cached archive downloads
+    │   ├── glfw-3.4.zip           # Downloaded archive
+    │   └── glfw-3.4.zip.meta.json # Download metadata (SHA256, etc.)
+    ├── objects/                   # Compiled object files
+    └── response_files/            # Compiler response files
 ```
 
 ---
@@ -204,18 +216,19 @@ Define hierarchical module structure. Modules are **explicitly listed** (no auto
 ```yaml
 workspace:
   modules:
-    common:                    # Built on all platforms
-      - core
-      - renderer
-      - audio
-      - platform               # Has its own child modules
-    linux:                     # Linux-only modules
-      - tools/linux_profiler
-    windows:                   # Windows-only modules
-      - tools/windows_debugger
-    macos:                     # macOS-only modules
-      - tools/xcode_integration
+    - core                      # Always built (all platforms)
+    - renderer                  # Always built
+    - audio                     # Always built
+    - platform                  # Has its own child modules
+    - linux:                    # Linux-only modules
+        - tools/linux_profiler
+    - windows:                  # Windows-only modules
+        - tools/windows_debugger
+    - macos:                    # macOS-only modules
+        - tools/xcode_integration
 ```
+
+This uses the same filtered list syntax as other arrays (sources, libs, etc.). Plain strings are always included; map entries with platform/architecture/configuration keys are filtered.
 
 ### Intermediate Module (with children)
 
@@ -228,10 +241,10 @@ project:
 
 workspace:
   modules:
-    linux:
-      - linux              # platform/linux/buildy.yaml
-    windows:
-      - windows            # platform/windows/buildy.yaml
+    - linux:                # Linux-only child module
+        - linux             # platform/linux/buildy.yaml
+    - windows:              # Windows-only child module
+        - windows           # platform/windows/buildy.yaml
 
 targets:
   shared_libraries:
@@ -262,10 +275,9 @@ targets:
 ```yaml
 workspace:
   modules:
-    common:
-      - path: vendor/imgui
-        config: imgui_build.yaml  # Custom filename
-      - core                      # Uses default buildy.yaml
+    - path: vendor/imgui
+      config: imgui_build.yaml    # Custom filename
+    - core                        # Uses default buildy.yaml
 ```
 
 ### Module Resolution Rules
@@ -389,16 +401,21 @@ stb:
     include_dirs: ["${dep_dir}"]
 
 # Fetched dependency built with custom buildy config
-some_lib:
-  common:
-    git: "https://github.com/example/some_lib.git"
+glfw3:
+  linux:
+    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
     build:
       system: buildy
-      override: some_lib.buildy.yaml
-    execution:
-      type: docker
-      image: "gcc:13"
+      override: glfw3_build.yaml   # Config file in buildy_config/dependencies/
+    include_dirs: ["${dep_dir}/include"]
+    lib_dirs: ["${dep_dir}/build/linux-x86_64-${config}/lib"]
+    libs: ["glfw3"]
 ```
+
+**Note:** When `build.system: buildy` is used:
+- Buildy automatically builds **both debug and release** configurations
+- The `${config}` variable in `lib_dirs` resolves to the current build configuration
+- The override config is invoked in **standalone mode** (no dependency resolution, no module discovery)
 
 ### Dependency Types
 
@@ -418,8 +435,39 @@ Dependencies are defined in `buildy_config/dependencies.yaml` or organized into 
 - **Source**: `.buildy_cache/deps/<name>/`
 - **Build**: `.buildy_cache/deps/<name>/_build/`
 - **Install**: `.buildy_cache/deps/<name>/_install/`
+- **Downloads**: `.buildy_cache/downloads/` (cached archives for URL dependencies)
 
 The `${dep_dir}` variable refers to the fetched source directory.
+
+**Download caching and validation:**
+
+When fetching URL dependencies, buildy uses a robust caching and validation process:
+
+1. **Temp file downloads** - Archives are downloaded to a temporary file first, then moved to the cache only after validation passes
+2. **Checksum verification** - If a `checksum` is provided, the archive is verified against it
+3. **Archive integrity** - The archive is opened and verified to be readable (not corrupted/truncated)
+4. **Metadata storage** - A `.meta.json` file is stored alongside each cached archive containing:
+   - Original URL
+   - SHA256 hash (computed from the downloaded file)
+   - File size
+   - Download timestamp
+
+Example metadata file (`.buildy_cache/downloads/glfw-3.4.zip.meta.json`):
+```json
+{
+  "url": "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
+  "sha256": "b5ec004b2712fd08e8861dc271428f048775200a2df719ccf575143ba749a3e9",
+  "size": 1653725,
+  "downloaded_at": "2026-02-24T12:40:57Z",
+  "filename": "glfw-3.4.zip"
+}
+```
+
+The stored SHA256 hash is used for:
+- **Re-extraction validation** - If the extracted directory is deleted but the archive remains, the archive is verified against its stored hash before re-extracting
+- **Lockfile generation** - The hash is included in `dependencies.lock` for reproducible builds
+
+**Warning:** If no `checksum` is provided in the dependency configuration, buildy will log a warning encouraging you to add one for reproducible builds.
 
 **Complete dependency schema:**
 
@@ -463,7 +511,7 @@ glfw:
 | `git` | Git repository URL | Infers `fetch` type |
 | `url` | Archive URL (.tar.gz, .zip, etc.) | Infers `fetch` type |
 | `ref` | Git ref (tag, branch, commit) | For `git:` dependencies |
-| `checksum` | SHA256 checksum for URL downloads | Recommended for `url:` |
+| `checksum` | SHA256 checksum for URL downloads | Format: `sha256:<hash>`. Recommended for reproducibility |
 | `pkg_config` | pkg-config package name | Infers `system` type |
 | `root` | Base path for pre-built library | Available as `${root}` |
 | `include_dirs` | Include directories | Can use `${root}`, `${dep_dir}` |
@@ -501,9 +549,11 @@ Dependencies support platform-specific configuration via sections. Sections are 
 | `${version}` | Dependency version |
 | `${platform}` | Current platform (linux, windows, macos) |
 | `${arch}` | Current architecture (x86_64, arm64) |
+| `${config}` | Build configuration (debug, release) |
 | `${toolchain}` | Current toolchain name |
 | `${root}` | Value of `root:` field (for system deps) |
 | `${dep_dir}` | Fetched source directory (for fetch deps) |
+| `${workspace_root}` | Root directory of the workspace |
 
 Environment variables are referenced with uppercase names: `${VULKAN_SDK}`, `${THIRD_PARTY_ROOT}`
 
@@ -1677,6 +1727,43 @@ Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make
 | `autoconf` | configure, configure.ac | GNU Autoconf/Automake |
 | `cargo` | Cargo.toml | Rust Cargo |
 | `go_mod` | go.mod | Go modules |
+| `buildy` | buildy.yaml | Buildy itself (recursive) |
+
+### Buildy as a Build System
+
+When `build.system: buildy` is specified, buildy invokes itself recursively to build the dependency:
+
+```yaml
+glfw3:
+  linux:
+    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
+    build:
+      system: buildy
+      override: glfw3_build.yaml  # Config file in buildy_config/dependencies/
+    include_dirs: ["${dep_dir}/include"]
+    lib_dirs: ["${dep_dir}/build/linux-x86_64-${config}/lib"]
+    libs: ["glfw3"]
+```
+
+**Behavior:**
+- Buildy automatically builds **both debug and release** configurations
+- The override config file is invoked in **standalone mode** (see CLI Reference)
+- Source paths in the override config are resolved relative to the fetched source directory
+- The `${config}` variable can be used in `lib_dirs` to reference configuration-specific output paths
+
+**Override config example** (`glfw3_build.yaml`):
+
+```yaml
+project:
+  name: glfw3
+
+targets:
+  static_libraries:
+    - name: glfw3
+      language: c
+      sources: ["src/*.c"]
+      include_dirs: ["include", "src"]
+```
 
 ### Build Phases
 
@@ -1851,6 +1938,7 @@ dependencies:
   stb:
     url: "https://github.com/nothings/stb/archive/master.tar.gz"
     checksum: "sha256:789xyz..."
+    fetched_at: "2026-01-20T15:00:00Z"
 
 system_warnings:
   - "zlib: using system library /usr/lib/libz.so.1"
@@ -1864,6 +1952,24 @@ system_warnings:
 | `fetch` without lockfile | Partial (ref may move) | Optional |
 | `paths` | User-controlled | None |
 | `system` | Platform-dependent | Once per build |
+
+### Lockfile Validation
+
+When a lockfile exists, buildy validates dependencies on each build:
+
+- **Git dependencies**: Current commit hash must match the locked commit
+- **URL dependencies**: SHA256 hash (from download metadata) must match the locked checksum
+
+If validation fails, buildy reports which dependency changed and suggests running `buildy --update-lock`.
+
+### Checksum Sources
+
+For URL dependencies, the lockfile checksum comes from:
+
+1. **Config checksum** - If `checksum:` is specified in the dependency config, it's verified during download
+2. **Computed hash** - The SHA256 is always computed and stored in the `.meta.json` metadata file
+
+Even if you don't provide a checksum in your config, the lockfile will capture the SHA256 of what was downloaded, enabling reproducible builds via `--require-lock`.
 
 ---
 
@@ -1886,14 +1992,13 @@ variables:
 
 workspace:
   modules:
-    common:
-      - core
-      - renderer
-      - game
-    linux:
-      - platform/linux
-    windows:
-      - platform/windows
+    - core
+    - renderer
+    - game
+    - linux:
+        - platform/linux
+    - windows:
+        - platform/windows
 
 dependencies:
   file: buildy_config/dependencies.yaml
@@ -2057,6 +2162,12 @@ targets:
 # Basic build (platform/architecture auto-detected from host)
 buildy
 
+# Build specific directory
+buildy path/to/project/
+
+# Standalone mode - build a specific config file
+buildy path/to/config.yaml
+
 # Specify configuration
 buildy --config release
 buildy --config debug
@@ -2086,11 +2197,35 @@ buildy --compile-commands  # Generate buildy_config/compile_commands.json for ID
 
 # Other options
 buildy --jobs 8            # Parallel jobs
-buildy --verbose           # Verbose output
+buildy -n 4                # Verbose logging
+buildy -n 5                # Debug logging
 buildy --dry-run           # Show what would be built
 buildy --clean             # Clean build outputs
 buildy --force             # Ignore cache, rebuild all
 ```
+
+### Workspace Mode vs Standalone Mode
+
+Buildy operates in two modes depending on how it's invoked:
+
+| Invocation | Mode | Behavior |
+|------------|------|----------|
+| `buildy` | Workspace | Discover modules, resolve dependencies, build workspace |
+| `buildy path/to/dir/` | Workspace | Same as above, using specified directory |
+| `buildy path/to/config.yaml` | Standalone | Build only what's in that config file |
+
+**Workspace Mode** (default):
+- Discovers all `buildy.yaml` modules in the project
+- Resolves dependencies from `buildy_config/dependencies/`
+- Builds both debug and release versions of fetched dependencies
+- Generates a full task graph with proper ordering
+
+**Standalone Mode** (explicit config file):
+- Only builds what's defined in the specified config file
+- Does not discover other modules
+- Does not resolve or fetch dependencies
+- Source paths are resolved relative to the current working directory
+- Used internally for building dependencies with `build.system: buildy`
 
 ### Platform Auto-Detection
 

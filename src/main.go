@@ -107,17 +107,16 @@ func main() {
 	platform := flag.StringP("platform", "p", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
+	release := flag.BoolP("release", "r", false, "Build in release mode (shortcut for --config=release)")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
 	dryRun := flag.BoolP("dry-run", "d", false, "Generate tasks but don't execute")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
-	verbose := flag.BoolP("verbose", "v", false, "Enable verbose logging")
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
 	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
-	_ = flag.Bool("all", false, "Build all targets in workspace (default if no --target specified)")
 	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
 
 	// Custom flag for multiple defines
@@ -143,8 +142,13 @@ func main() {
 
 	flag.Parse()
 
-	// Initialize logger with notify level and verbose flag
-	util.InitLogger(*notifyLevel, *verbose)
+	// Handle -r/--release shortcut
+	if *release {
+		*configuration = "release"
+	}
+
+	// Initialize logger with notify level
+	util.InitLogger(*notifyLevel)
 
 	// Handle toolchain flag
 	selectedToolchain := *toolchain
@@ -307,29 +311,39 @@ func main() {
 		}
 	} else {
 		// Config file or directory specified - treat as workspace root
-		workspaceRoot := configFiles[0]
-		
-		// If it's a file, use its directory as workspace root
-		info, err := os.Stat(workspaceRoot)
+		argPath := configFiles[0]
+		var workspaceRoot string
+		var configPath string
+
+		// Check if it's a file or directory
+		info, err := os.Stat(argPath)
 		if err != nil {
-			util.LogFatal("Path not found: %s", workspaceRoot)
-		}
-		if !info.IsDir() {
-			workspaceRoot = filepath.Dir(workspaceRoot)
-		}
-		
-		// Verify buildy.yaml exists
-		configPath := filepath.Join(workspaceRoot, "buildy.yaml")
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			util.LogFatal("No buildy.yaml found in: %s", workspaceRoot)
+			util.LogFatal("Path not found: %s", argPath)
 		}
 
-		// Load as workspace
-		ws, err = workspace.NewWorkspace(workspaceRoot)
+		if info.IsDir() {
+			// Directory provided - use it as workspace root, look for buildy.yaml
+			workspaceRoot = argPath
+			configPath = filepath.Join(workspaceRoot, "buildy.yaml")
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				util.LogFatal("No buildy.yaml found in: %s", workspaceRoot)
+			}
+		} else {
+			// File provided - use file as config, current directory as workspace root
+			configPath = argPath
+			// Use current working directory as workspace root for dependency builds
+			workspaceRoot, err = os.Getwd()
+			if err != nil {
+				util.LogFatal("Failed to get current directory: %v", err)
+			}
+		}
+
+		// Load as workspace with explicit config path
+		ws, err = workspace.NewWorkspaceWithConfig(workspaceRoot, configPath)
 		if err != nil {
 			util.LogFatal("Failed to load workspace from %s: %v", workspaceRoot, err)
 		}
-		util.LogVerbose("Loaded workspace from: %s", ws.RootDir)
+		util.LogVerbose("Loaded workspace from: %s (config: %s)", ws.RootDir, configPath)
 
 		// Warn about multiple paths (not yet supported)
 		if len(configFiles) > 1 {
@@ -390,22 +404,21 @@ func main() {
 
 	// Initialize dependency resolver and load dependencies
 	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
-	depResolver := resource.NewDependencyResolver(*platform, *architecture, *toolchain, workspaceCacheDir, ws.RootDir, rootVarEnv)
+	depResolver := resource.NewDependencyResolver(*platform, *architecture, *toolchain, *configuration, workspaceCacheDir, ws.RootDir, rootVarEnv)
 
-	// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
-	if err := depResolver.LoadDependencies(ws.RootDir); err != nil {
-		util.LogFatal("Failed to load dependencies: %v", err)
-	}
+	// Skip dependency resolution in standalone mode (explicit config file provided)
+	// When a specific config file is passed on the command line, we only build what's
+	// in that file - no module discovery, no dependency resolution
+	standaloneMode := ws.ConfigPath != ""
+	if !standaloneMode {
+		// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
+		if err := depResolver.LoadDependencies(ws.RootDir); err != nil {
+			util.LogFatal("Failed to load dependencies: %v", err)
+		}
 
-	// Resolve all dependencies
-	if err := depResolver.ResolveAll(); err != nil {
-		util.LogFatal("Failed to resolve dependencies: %v", err)
-	}
-
-	// Add buildy-config fetch dependencies as workspace modules
-	for name, depInfo := range depResolver.GetBuildyDependencies() {
-		if err := ws.AddFetchDependencyModule(name, depInfo.SourcePath, depInfo.ConfigFile); err != nil {
-			util.LogFatal("Failed to add fetch dependency module %s: %v", name, err)
+		// Resolve all dependencies
+		if err := depResolver.ResolveAll(); err != nil {
+			util.LogFatal("Failed to resolve dependencies: %v", err)
 		}
 	}
 
@@ -437,6 +450,7 @@ func main() {
 	}
 
 	// Build the workspace
+	// Note: All dependencies (cmake, make, meson, buildy) are already built during ResolveAll()
 	result, err := builder.BuildWorkspace(
 		ws,
 		configParser,

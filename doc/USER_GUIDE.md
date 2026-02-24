@@ -40,7 +40,8 @@ Buildy auto-detects your platform and architecture, selects an appropriate toolc
 
 ```bash
 buildy                    # Debug build (default)
-buildy -c release         # Release build
+buildy -r                 # Release build (shortcut)
+buildy -c release         # Release build (explicit)
 buildy --config release   # Same as above
 ```
 
@@ -48,7 +49,9 @@ buildy --config release   # Same as above
 
 ```bash
 buildy -j 8               # Use 8 parallel workers
-buildy --verbose          # Verbose output
+buildy -n 3               # Info level logging (default is 2=warning)
+buildy -n 4               # Verbose level logging
+buildy -n 5               # Debug level logging
 buildy --force            # Ignore cache, rebuild everything
 buildy --clean            # Clean build artifacts
 buildy --dry-run          # Show what would be built
@@ -298,25 +301,29 @@ environment:
 
 ## Working with Dependencies
 
+Dependencies are defined in `buildy_config/dependencies.yaml`. Each dependency has a name and platform-specific settings.
+
 ### System Dependencies
 
 System dependencies use pkg-config or explicit library names:
 
 ```yaml
-dependencies:
-  system:
-    common:
-      - name: zlib
-        pkg_config: zlib
-    linux:
-      - name: pthread
-        libs: ["pthread"]
-    windows:
-      - name: winsock
-        libs: ["ws2_32"]
-    macos:
-      - name: cocoa
-        frameworks: ["Cocoa", "IOKit"]
+# buildy_config/dependencies.yaml
+zlib:
+  common:
+    pkg_config: zlib
+
+pthread:
+  linux:
+    libs: ["pthread"]
+
+winsock:
+  windows:
+    libs: ["ws2_32"]
+
+cocoa:
+  macos:
+    frameworks: ["Cocoa", "IOKit"]
 ```
 
 ### Path Dependencies
@@ -324,13 +331,12 @@ dependencies:
 For libraries at known paths (like SDKs):
 
 ```yaml
-dependencies:
-  paths:
-    - name: vulkan_sdk
-      path: "${VULKAN_SDK}"
-      include_dirs: ["${path}/include"]
-      lib_dirs: ["${path}/lib"]
-      libs: ["vulkan"]
+vulkan_sdk:
+  common:
+    root: "${VULKAN_SDK}"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
+    libs: ["vulkan"]
 ```
 
 ### Dependencies
@@ -412,23 +418,58 @@ stb:
 
 ### Building with Buildy Config
 
-Instead of external build systems, you can build fetched dependencies using a buildy config:
+Instead of external build systems, you can build fetched dependencies using a users buildy config:
 
 ```yaml
-some_lib:
-  common:
-    git: "https://github.com/example/some_lib.git"
-    ref: "v1.0.0"
+# buildy_config/dependencies/glfw3.yaml
+glfw3:
+  description: "GLFW window library"
+  linux:
+    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
     build:
       system: buildy
-      override: some_lib.buildy.yaml  # Custom buildy config
+      override: glfw3_build.yaml  # Custom buildy config in same directory
+    include_dirs: ["${dep_dir}/include"]
+    lib_dirs: ["${dep_dir}/build/linux-x86_64-${config}/lib"]
+    libs: ["glfw3"]
 ```
 
-When `build.system: buildy` is specified:
-1. The dependency is fetched as usual
-2. Buildy processes the config file instead of cmake/meson/etc
-3. The dependency becomes a module in your workspace
-4. Its targets are available for `depends_on.targets` in your own targets
+When `build.system: buildy` is specified with an `override`:
+
+1. The dependency source is fetched as usual to `.buildy_cache/deps/<name>/`
+2. Buildy invokes itself recursively in **standalone mode** to build the dependency
+3. The override config file defines targets that compile the dependency source
+4. Both debug and release configurations are built automatically
+5. The library paths use `${config}` to reference the correct build output
+
+**Standalone Mode:** When buildy is invoked with an explicit config file path (instead of a directory), it operates in standalone mode:
+- Only builds what's defined in that specific config file
+- Does not discover modules or resolve dependencies
+- Source paths are resolved relative to the working directory
+
+**Example override config** (`glfw3_build.yaml`):
+
+```yaml
+project:
+  name: glfw3
+  description: "GLFW static library build"
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  static_libraries:
+    - name: glfw3
+      language: c
+      sources:
+        - "src/context.c"
+        - "src/init.c"
+        # ... more source files
+      include_dirs:
+        - "include"
+        - "src"
+```
 
 ### Dependencies File Organization
 
@@ -492,14 +533,13 @@ Define modules in the root `buildy.yaml`:
 ```yaml
 workspace:
   modules:
-    common:           # All platforms
-      - core
-      - renderer
-      - game
-    linux:            # Linux only
-      - platform/linux
-    windows:          # Windows only
-      - platform/windows
+    - core                    # All platforms
+    - renderer
+    - game
+    - linux:                  # Linux only
+        - platform/linux
+    - windows:                # Windows only
+        - platform/windows
 ```
 
 ### Module Dependencies
@@ -527,9 +567,8 @@ Use non-standard config filenames:
 ```yaml
 workspace:
   modules:
-    common:
-      - path: vendor/imgui
-        config: imgui_build.yaml
+    - path: vendor/imgui
+      config: imgui_build.yaml
 ```
 
 ## Building with Docker
@@ -569,16 +608,17 @@ environment:
 **Per-dependency override:**
 
 ```yaml
-dependencies:
-  fetch:
-    - name: complex_lib
-      git: "https://github.com/example/lib.git"
-      build_system: cmake
-      execution:
-        type: docker
-        image: "ubuntu:22.04"
-        volumes:
-          - "${PWD}:/workspace"
+# buildy_config/dependencies.yaml
+complex_lib:
+  common:
+    git: "https://github.com/example/lib.git"
+    build:
+      system: cmake
+    execution:
+      type: docker
+      image: "ubuntu:22.04"
+      volumes:
+        - "${PWD}:/workspace"
 ```
 
 ### Docker Configuration
@@ -900,7 +940,8 @@ buildy --ignore-lock             # Ignore lockfile
 ### Debugging
 
 ```bash
-buildy --verbose                 # Verbose output
+buildy -n 4                      # Verbose level logging
+buildy -n 5                      # Debug level logging
 buildy --dry-run                 # Show what would build
 ```
 
@@ -909,6 +950,7 @@ buildy --dry-run                 # Show what would build
 | Option | Short | Description |
 |--------|-------|-------------|
 | `--config` | `-c` | Build configuration (debug/release) |
+| `--release` | `-r` | Shortcut for `--config=release` |
 | `--platform` | `-p` | Target platform |
 | `--architecture` | `-a` | Target architecture |
 | `--toolchain` | `-t` | Override toolchain |
@@ -916,8 +958,8 @@ buildy --dry-run                 # Show what would build
 | `--workers` | `-j` | Parallel workers |
 | `--force` | `-f` | Ignore cache |
 | `--clean` | | Clean artifacts |
-| `--dry-run` | `-n` | Don't execute |
-| `--verbose` | `-v` | Verbose output |
+| `--dry-run` | `-d` | Don't execute |
+| `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
 | `--update-lock` | | Update lockfile |
 | `--require-lock` | | Require lockfile |
@@ -926,7 +968,6 @@ buildy --dry-run                 # Show what would build
 | `--cache-dir` | | Cache directory |
 | `--cache-stats` | | Show cache statistics |
 | `--add-data-dir` | | Additional data directory |
-| `--package-dir` | | Additional package directory |
 
 ## Build Reports
 
