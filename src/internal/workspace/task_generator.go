@@ -1287,7 +1287,7 @@ func (tg *TaskGenerator) generateStagingTasks(
 
 	// Process contents section - new hierarchical folder-based format
 	if contents, ok := staging["contents"].([]any); ok {
-		folderTasks := tg.processStagingContents(contents, destination, "", defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir)
+		folderTasks := tg.processStagingContents(contents, destination, "", defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, stagingVarEnv)
 		tasks = append(tasks, folderTasks...)
 		for _, t := range folderTasks {
 			stagingTaskIDs = append(stagingTaskIDs, t.TaskID)
@@ -1311,6 +1311,7 @@ func (tg *TaskGenerator) processStagingContents(
 	outputDir string,
 	workspaceRoot string,
 	moduleDir string,
+	varEnv *util.VariableEnvironment,
 ) []*BuildTask {
 	var tasks []*BuildTask
 
@@ -1327,7 +1328,7 @@ func (tg *TaskGenerator) processStagingContents(
 			// Resolve variables in folder name using VarEnv
 			if strings.Contains(folderName, "${") {
 				var resolveErrors []string
-				folderName = tg.VarEnv.ResolveString(folderName, &resolveErrors, 10)
+				folderName = varEnv.ResolveString(folderName, &resolveErrors, 10)
 				if len(resolveErrors) > 0 {
 					util.LogWarning("Unresolved variables in staging folder '%s': %v", f, resolveErrors)
 				}
@@ -1453,7 +1454,7 @@ func (tg *TaskGenerator) processStagingContents(
 
 				// Resolve variables in source pattern
 				if strings.Contains(sourcePattern, "${") {
-					sourcePattern = tg.VarEnv.ResolveString(sourcePattern, nil, 10)
+					sourcePattern = varEnv.ResolveString(sourcePattern, nil, 10)
 				}
 
 				// Resolve source pattern relative to module directory (not workspace root)
@@ -1474,8 +1475,12 @@ func (tg *TaskGenerator) processStagingContents(
 						match = filepath.Clean(match)
 						destPath := filepath.Join(folderPath, filepath.Base(match))
 						// Check if this file is produced by a task and add dependency if so
+						// First check local outputToTaskID (for transform/generate tasks)
+						// Then check global registry (for link tasks)
 						var deps []string
 						if taskID := tg.outputToTaskID[match]; taskID != "" {
+							deps = []string{taskID}
+						} else if taskID, ok := globalTaskRegistry.GetTaskIDByOutputPath(match); ok {
 							deps = []string{taskID}
 						}
 						task := tg.createSymlinkOrCopyTask(match, destPath, useSymlink, isWindows, deps)
@@ -1488,8 +1493,12 @@ func (tg *TaskGenerator) processStagingContents(
 					sourcePattern = filepath.Clean(sourcePattern)
 					destPath := filepath.Join(folderPath, filepath.Base(sourcePattern))
 					// Check if this file is produced by a task and add dependency if so
+					// First check local outputToTaskID (for transform/generate tasks)
+					// Then check global registry (for link tasks)
 					var deps []string
 					if taskID := tg.outputToTaskID[sourcePattern]; taskID != "" {
+						deps = []string{taskID}
+					} else if taskID, ok := globalTaskRegistry.GetTaskIDByOutputPath(sourcePattern); ok {
 						deps = []string{taskID}
 					}
 					task := tg.createSymlinkOrCopyTask(sourcePattern, destPath, useSymlink, isWindows, deps)
@@ -1510,7 +1519,7 @@ func (tg *TaskGenerator) processStagingContents(
 			} else {
 				nestedPath = filepath.Join(currentPath, folderName)
 			}
-			nestedTasks := tg.processStagingContents(nestedContents, stagingRoot, nestedPath, defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir)
+			nestedTasks := tg.processStagingContents(nestedContents, stagingRoot, nestedPath, defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, varEnv)
 			tasks = append(tasks, nestedTasks...)
 		}
 	}

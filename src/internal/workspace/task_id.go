@@ -182,6 +182,21 @@ func (r *TaskIDRegistry) ResolveDependency(dep string) (string, bool) {
 	return r.GetLinkTaskID(dep)
 }
 
+// GetTaskIDByOutputPath returns the link task ID for a given output file path
+func (r *TaskIDRegistry) GetTaskIDByOutputPath(outputPath string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	// Search through all target output paths to find a match
+	for targetName, path := range r.targetOutputPath {
+		if path == outputPath {
+			taskID, ok := r.targetToLinkTask[targetName]
+			return taskID, ok
+		}
+	}
+	return "", false
+}
+
 // Clear removes all entries from the registry
 func (r *TaskIDRegistry) Clear() {
 	r.mu.Lock()

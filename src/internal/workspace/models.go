@@ -65,6 +65,7 @@ func (t *TaskInput) CalculateHash() string {
 // BuildTask represents an individual build task following Blizzard's parse/execute model
 type BuildTask struct {
 	TaskID               string               `json:"task_id"`
+	TaskNumber           int                  `json:"task_number"`            // Sequential task number for logging (1-based)
 	TaskType             string               `json:"task_type"`
 	Inputs               []TaskInput          `json:"inputs"`
 	Outputs              []string             `json:"outputs"`
