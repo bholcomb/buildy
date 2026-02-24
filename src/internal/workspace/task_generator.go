@@ -1433,23 +1433,15 @@ func (tg *TaskGenerator) processStagingContents(
 			}
 		}
 
-		// Process files
-		if files, ok := item["files"].([]any); ok {
-			for _, fileRaw := range files {
-				useSymlink := defaultUseSymlinks
-				var sourcePattern string
+		// Process files (with platform filter support)
+		if filesRaw, ok := item["files"]; ok {
+			// Resolve filtered list to support platform-specific files
+			// e.g., files: [windows: ["mylib.dll"], linux: ["libmylib.so"]]
+			ctx := tg.getBuildContext()
+			resolvedFiles := ResolveFilteredList(filesRaw, ctx)
 
-				switch v := fileRaw.(type) {
-				case string:
-					sourcePattern = v
-				case map[string]any:
-					if s, ok := v["source"].(string); ok {
-						sourcePattern = s
-					}
-					if us, ok := v["use_symlink"].(bool); ok {
-						useSymlink = us
-					}
-				}
+			for _, sourcePattern := range resolvedFiles {
+				useSymlink := defaultUseSymlinks
 
 				if sourcePattern == "" {
 					continue
