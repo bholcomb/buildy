@@ -35,6 +35,9 @@ type ResolvedDependency struct {
 	Resolved    bool
 	ConfigFile  string // For fetch deps: buildy config file to use
 	NeedsBuildy bool   // True if this fetch dep should be built via buildy config
+	SourceURL   string // For URL fetch deps: the original URL
+	SourceGit   string // For git fetch deps: the git URL
+	SourceRef   string // For git fetch deps: the ref (tag/branch)
 }
 
 // BuildConfig represents the build section for fetch dependencies
@@ -577,8 +580,11 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 	var err error
 	if section.Git != "" {
 		err = dr.fetchManager.FetchGit(section.Git, section.Ref, dest)
+		resolved.SourceGit = section.Git
+		resolved.SourceRef = section.Ref
 	} else if section.URL != "" {
 		err = dr.fetchManager.FetchURL(section.URL, section.Checksum, dest)
+		resolved.SourceURL = section.URL
 	}
 
 	if err != nil {

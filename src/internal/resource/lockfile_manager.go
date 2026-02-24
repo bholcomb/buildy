@@ -86,15 +86,30 @@ func (lm *LockfileManager) Generate(deps map[string]*ResolvedDependency, fetchMa
 				FetchedAt: time.Now().UTC().Format(time.RFC3339),
 			}
 
-			// Get git commit if it's a git repo
-			if dep.Path != "" {
-				gitDir := filepath.Join(dep.Path, ".git")
-				if _, err := os.Stat(gitDir); err == nil {
-					// It's a git repo
+			// Handle git dependencies
+			if dep.SourceGit != "" {
+				entry.Git = dep.SourceGit
+				entry.Ref = dep.SourceRef
+
+				// Get current commit hash
+				if dep.Path != "" {
 					commit, err := fetchManager.GetGitCommit(dep.Path)
 					if err == nil {
 						entry.Commit = commit
 					}
+				}
+			}
+
+			// Handle URL dependencies
+			if dep.SourceURL != "" {
+				entry.URL = dep.SourceURL
+
+				// Get SHA256 from download metadata
+				metadata, err := fetchManager.GetDownloadMetadata(dep.SourceURL)
+				if err == nil && metadata.SHA256 != "" {
+					entry.Checksum = "sha256:" + metadata.SHA256
+				} else {
+					util.LogWarning("Could not get checksum for '%s' - lockfile may not be fully reproducible", name)
 				}
 			}
 
@@ -144,8 +159,12 @@ func (lm *LockfileManager) Validate(deps map[string]*ResolvedDependency, fetchMa
 			continue
 		}
 
-		if dep.Type == DepTypeFetch && dep.Path != "" && lockedEntry.Commit != "" {
-			// Verify git commit matches
+		if dep.Type != DepTypeFetch {
+			continue
+		}
+
+		// Validate git dependencies by commit hash
+		if lockedEntry.Commit != "" && dep.Path != "" {
 			currentCommit, err := fetchManager.GetGitCommit(dep.Path)
 			if err != nil {
 				return fmt.Errorf("failed to get commit for %s: %w", name, err)
@@ -155,6 +174,28 @@ func (lm *LockfileManager) Validate(deps map[string]*ResolvedDependency, fetchMa
 				return fmt.Errorf(
 					"dependency '%s' commit mismatch:\n  locked:  %s\n  current: %s\n\nRun 'buildy --update-lock' to update the lockfile",
 					name, lockedEntry.Commit, currentCommit,
+				)
+			}
+		}
+
+		// Validate URL dependencies by checksum
+		if lockedEntry.URL != "" && lockedEntry.Checksum != "" {
+			metadata, err := fetchManager.GetDownloadMetadata(lockedEntry.URL)
+			if err != nil {
+				util.LogWarning("Could not verify checksum for '%s': no metadata found", name)
+				continue
+			}
+
+			// Compare checksums (lockfile stores "sha256:hash", metadata stores just hash)
+			lockedHash := lockedEntry.Checksum
+			if len(lockedHash) > 7 && lockedHash[:7] == "sha256:" {
+				lockedHash = lockedHash[7:]
+			}
+
+			if metadata.SHA256 != lockedHash {
+				return fmt.Errorf(
+					"dependency '%s' checksum mismatch:\n  locked:  %s\n  current: %s\n\nRun 'buildy --update-lock' to update the lockfile",
+					name, lockedEntry.Checksum, "sha256:"+metadata.SHA256,
 				)
 			}
 		}
