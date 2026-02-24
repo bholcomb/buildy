@@ -394,6 +394,10 @@ func (tg *TaskGenerator) generateTargetTasks(
 					outputPath = targetTask.Outputs[0]
 				}
 				globalTaskRegistry.RegisterTargetWithOutput(name, targetTask.TaskID, tg.CurrentModule, outputPath)
+				// Register all outputs (including secondary outputs like import libraries) for dependency lookup
+				if len(targetTask.Outputs) > 0 {
+					globalTaskRegistry.RegisterTargetOutputs(targetTask.TaskID, targetTask.Outputs)
+				}
 				util.LogInfo("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
 			}
 		}
@@ -1245,9 +1249,9 @@ func (tg *TaskGenerator) generateStagingTasks(
 
 	destination := filepath.Join(outputDir, "staging")
 	if d, ok := staging["destination"].(string); ok {
-		// Resolve destination using VarEnv
+		// Resolve destination using VarEnv and normalize path separators
 		var resolveErrors []string
-		destination = stagingVarEnv.ResolveString(d, &resolveErrors, 10)
+		destination = filepath.Clean(stagingVarEnv.ResolveString(d, &resolveErrors, 10))
 		if len(resolveErrors) > 0 {
 			util.LogWarning("Unresolved variables in staging destination: %v", resolveErrors)
 		}
@@ -1328,7 +1332,7 @@ func (tg *TaskGenerator) processStagingContents(
 			// Resolve variables in folder name using VarEnv
 			if strings.Contains(folderName, "${") {
 				var resolveErrors []string
-				folderName = varEnv.ResolveString(folderName, &resolveErrors, 10)
+				folderName = filepath.Clean(varEnv.ResolveString(folderName, &resolveErrors, 10))
 				if len(resolveErrors) > 0 {
 					util.LogWarning("Unresolved variables in staging folder '%s': %v", f, resolveErrors)
 				}
@@ -1452,9 +1456,9 @@ func (tg *TaskGenerator) processStagingContents(
 					useSymlink = false
 				}
 
-				// Resolve variables in source pattern
+				// Resolve variables in source pattern and normalize path separators
 				if strings.Contains(sourcePattern, "${") {
-					sourcePattern = varEnv.ResolveString(sourcePattern, nil, 10)
+					sourcePattern = filepath.Clean(varEnv.ResolveString(sourcePattern, nil, 10))
 				}
 
 				// Resolve source pattern relative to module directory (not workspace root)

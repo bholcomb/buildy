@@ -623,7 +623,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		if out, ok := step["output"].(string); ok {
 			outputTemplate = out
 		}
-		output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
+		output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
 
 		// Get tool parameters
 		toolParams := map[string]any{}
@@ -741,7 +741,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
+	output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
 
 	// Collect inputs from previous step
 	inputsRef := ""
@@ -1034,12 +1034,12 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := sc.VarEnv.ResolveString(outputTemplate, nil, 10)
+	output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
 
 	// Get working directory (module path)
 	workingDir := ""
 	if wd, ok := step["working_dir"].(string); ok {
-		workingDir = sc.VarEnv.ResolveString(wd, nil, 10)
+		workingDir = filepath.Clean(sc.VarEnv.ResolveString(wd, nil, 10))
 	}
 	if workingDir == "" {
 		if path, ok := itemConfig["path"].(string); ok {

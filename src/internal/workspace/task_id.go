@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -82,6 +83,9 @@ type TaskIDRegistry struct {
 	
 	// targetOutputPath maps target name -> primary output file path
 	targetOutputPath map[string]string
+	
+	// outputPathToTask maps normalized output path -> task ID (for all outputs including secondary)
+	outputPathToTask map[string]string
 }
 
 // NewTaskIDRegistry creates a new TaskIDRegistry
@@ -91,7 +95,19 @@ func NewTaskIDRegistry() *TaskIDRegistry {
 		taskToTarget:     make(map[string]string),
 		moduleTargets:    make(map[string][]string),
 		targetOutputPath: make(map[string]string),
+		outputPathToTask: make(map[string]string),
 	}
+}
+
+// normalizePathForLookup normalizes a path for case-insensitive lookup on Windows
+func normalizePathForLookup(path string) string {
+	// Clean the path to normalize separators
+	cleaned := filepath.Clean(path)
+	// On Windows, lowercase for case-insensitive comparison
+	if runtime.GOOS == "windows" {
+		cleaned = strings.ToLower(cleaned)
+	}
+	return cleaned
 }
 
 // RegisterTarget registers a target name to its link task ID
@@ -117,6 +133,17 @@ func (r *TaskIDRegistry) RegisterTargetWithOutput(targetName, linkTaskID, module
 	
 	// Track targets per module
 	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
+}
+
+// RegisterTargetOutputs registers all output paths for a task (including secondary outputs like import libraries)
+func (r *TaskIDRegistry) RegisterTargetOutputs(linkTaskID string, outputs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	for _, output := range outputs {
+		normalized := normalizePathForLookup(output)
+		r.outputPathToTask[normalized] = linkTaskID
+	}
 }
 
 // GetTargetOutputPath returns the output path for a target name
@@ -187,9 +214,17 @@ func (r *TaskIDRegistry) GetTaskIDByOutputPath(outputPath string) (string, bool)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	
-	// Search through all target output paths to find a match
+	// Normalize the path for lookup (handles case-insensitivity on Windows)
+	normalized := normalizePathForLookup(outputPath)
+	
+	// First check the direct output path map (includes secondary outputs like import libraries)
+	if taskID, ok := r.outputPathToTask[normalized]; ok {
+		return taskID, true
+	}
+	
+	// Fall back to searching target output paths (primary outputs only)
 	for targetName, path := range r.targetOutputPath {
-		if path == outputPath {
+		if normalizePathForLookup(path) == normalized {
 			taskID, ok := r.targetToLinkTask[targetName]
 			return taskID, ok
 		}
@@ -206,6 +241,7 @@ func (r *TaskIDRegistry) Clear() {
 	r.taskToTarget = make(map[string]string)
 	r.moduleTargets = make(map[string][]string)
 	r.targetOutputPath = make(map[string]string)
+	r.outputPathToTask = make(map[string]string)
 }
 
 // isTaskID checks if a string looks like a task ID (rather than a target name)
