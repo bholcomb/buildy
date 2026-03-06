@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// GOOS is the operating system for path normalization (injectable for testing)
+var GOOS = runtime.GOOS
+
 // CopyFile copies a file from src to dst, preserving permissions
 func CopyFile(src, dst string) error {
 	sourceFile, err := os.Open(src)
@@ -44,7 +47,7 @@ func NormalizePath(path string) string {
 
 	// On Windows, lowercase the path for consistent comparisons
 	// Windows filesystem is case-insensitive, so C:\Dev and c:\dev are the same
-	if runtime.GOOS == "windows" {
+	if GOOS == "windows" {
 		cleaned = strings.ToLower(cleaned)
 	}
 
