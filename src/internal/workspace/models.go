@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"buildy/pkg/util"
 )
@@ -138,15 +141,34 @@ func (t *BuildTask) CalculateCacheKey() string {
 // This should be called before cache lookup when input files may have been created by dependencies
 func (t *BuildTask) UpdateInputHashesAndCacheKey() error {
 	for i := range t.Inputs {
-		if t.Inputs[i].Hash == "" {
-			// Calculate hash for input file if it exists
-			if _, err := os.Stat(t.Inputs[i].Path); err == nil {
-				hash, err := calculateFileHashForInput(t.Inputs[i].Path)
-				if err != nil {
-					return err
-				}
-				t.Inputs[i].Hash = hash
+		// Skip symlink inputs - they intentionally don't hash content
+		if strings.HasPrefix(t.Inputs[i].Hash, "symlink:") {
+			continue
+		}
+		
+		path := t.Inputs[i].Path
+		info, err := os.Stat(path)
+		if err != nil {
+			continue // File doesn't exist yet
+		}
+		
+		if info.IsDir() {
+			// For directory inputs, hash the directory contents
+			// This is used by install tasks that package staging directories
+			hash, err := calculateDirectoryHash(path)
+			if err != nil {
+				return err
 			}
+			t.Inputs[i].Hash = hash
+		} else {
+			// Always recalculate hash for input files that exist
+			// This is critical for tasks like link that depend on outputs from earlier tasks
+			// (e.g., object files from compile tasks) - the file content may have changed
+			hash, err := calculateFileHashForInput(path)
+			if err != nil {
+				return err
+			}
+			t.Inputs[i].Hash = hash
 		}
 	}
 	// Recalculate cache key with updated input hashes
@@ -177,5 +199,50 @@ func calculateFileHashForInput(filePath string) (string, error) {
 		}
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// calculateDirectoryHash calculates a hash of directory contents
+// This includes all file paths and their content hashes, sorted for determinism
+func calculateDirectoryHash(dirPath string) (string, error) {
+	var entries []string
+	
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		
+		// Get relative path for consistent hashing
+		relPath, err := filepath.Rel(dirPath, path)
+		if err != nil {
+			return err
+		}
+		
+		// Calculate file hash
+		fileHash, err := calculateFileHashForInput(path)
+		if err != nil {
+			return err
+		}
+		
+		// Use forward slashes for cross-platform consistency
+		entries = append(entries, filepath.ToSlash(relPath)+":"+fileHash)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	
+	// Sort for deterministic ordering
+	sort.Strings(entries)
+	
+	// Hash the combined entries
+	h := sha256.New()
+	for _, entry := range entries {
+		h.Write([]byte(entry))
+		h.Write([]byte("\n"))
+	}
+	return fmt.Sprintf("dir:%x", h.Sum(nil)), nil
 }
 

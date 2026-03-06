@@ -99,12 +99,15 @@ func NewTaskIDRegistry() *TaskIDRegistry {
 	}
 }
 
+// goos is the operating system for path normalization (injectable for testing)
+var goos = runtime.GOOS
+
 // normalizePathForLookup normalizes a path for case-insensitive lookup on Windows
 func normalizePathForLookup(path string) string {
 	// Clean the path to normalize separators
 	cleaned := filepath.Clean(path)
 	// On Windows, lowercase for case-insensitive comparison
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		cleaned = strings.ToLower(cleaned)
 	}
 	return cleaned
