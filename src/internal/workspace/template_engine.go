@@ -596,6 +596,12 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		action = a
 	}
 
+	// Get the module directory to compute relative paths for unique object file names
+	moduleDir := ""
+	if m, ok := context["module"].(string); ok {
+		moduleDir = m
+	}
+
 	for _, source := range sources {
 		// Find appropriate tool for this source file
 		tool := toolMatcher.FindTool(action, source)
@@ -605,8 +611,12 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 				action, source, filepath.Ext(source))
 		}
 
-		// Create step context with tool info
-		sourceStem := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
+		// Compute source_stem preserving subdirectory structure to avoid collisions.
+		// For source "src/widgets/window.cpp" with module "src", this produces
+		// "widgets/window" instead of just "window", preventing two files with the
+		// same name in different directories from clobbering each other's object files.
+		sourceStem := computeSourceStem(source, moduleDir)
+
 		sc := newStepContext(context, varEnv, "for_each", struct {
 			OutputExt     string
 			OutputPattern string
@@ -1120,4 +1130,34 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	task.CacheKey = task.CalculateCacheKey()
 
 	return &task, nil
+}
+
+// computeSourceStem computes a source stem that preserves subdirectory structure
+// relative to the module directory. This prevents object file collisions when
+// multiple source files have the same name in different directories.
+//
+// Examples (moduleDir="src"):
+//
+//	"src/window.cpp"         -> "window"
+//	"src/widgets/window.cpp" -> "widgets/window"
+//	"main.cpp"               -> "main"
+func computeSourceStem(source, moduleDir string) string {
+	// Normalize all separators to forward slashes for consistent processing
+	source = strings.ReplaceAll(source, "\\", "/")
+	moduleDir = strings.ReplaceAll(moduleDir, "\\", "/")
+
+	// Try to strip the module directory prefix to get the relative path
+	relPath := source
+	if moduleDir != "" && moduleDir != "workspace" {
+		prefix := moduleDir + "/"
+		if strings.HasPrefix(source, prefix) {
+			relPath = source[len(prefix):]
+		}
+	}
+
+	// Strip the extension to get the stem
+	ext := filepath.Ext(relPath)
+	stem := strings.TrimSuffix(relPath, ext)
+
+	return stem
 }
