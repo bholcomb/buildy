@@ -45,16 +45,51 @@ func ResolveFilteredList(raw any, ctx BuildContext) []string {
 			// Plain string - always include
 			result = append(result, v)
 		case map[string]any:
-			// Map item - check if any key matches a filter
+			// Map item — check if any key matches a filter dimension.
+			// Values may themselves be filter maps (nested filters), so
+			// we recurse to handle cases like debug: > gcc-cpp-linux: ["-O0"].
 			for key, value := range v {
 				if matchesFilter(key, ctx) {
-					result = append(result, extractStrings(value)...)
+					result = append(result, resolveFilterValue(value, ctx)...)
 				}
 			}
 		}
 	}
 
 	return result
+}
+
+// resolveFilterValue handles the value side of a matched filter. If the
+// value is itself a map (nested filter), it recurses. Otherwise it
+// extracts plain strings.
+func resolveFilterValue(v any, ctx BuildContext) []string {
+	switch inner := v.(type) {
+	case map[string]any:
+		var result []string
+		for key, val := range inner {
+			if matchesFilter(key, ctx) {
+				result = append(result, resolveFilterValue(val, ctx)...)
+			}
+		}
+		return result
+	case []any:
+		var result []string
+		for _, item := range inner {
+			switch s := item.(type) {
+			case string:
+				result = append(result, s)
+			case map[string]any:
+				for key, val := range s {
+					if matchesFilter(key, ctx) {
+						result = append(result, resolveFilterValue(val, ctx)...)
+					}
+				}
+			}
+		}
+		return result
+	default:
+		return extractStrings(v)
+	}
 }
 
 // matchesFilter returns true if the key matches any of the 4 filter dimensions

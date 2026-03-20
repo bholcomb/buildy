@@ -14,6 +14,16 @@ toolchain:
   execution:
     type: native
   
+  flag_mappings:
+    optimization:
+      none: ["-O0"]
+      size: ["-Os"]
+      speed: ["-O"]
+      full: ["-O"]
+    symbols:
+      "true": ["-g"]
+      "false": []
+
   tools:
     # GLSL shader compilation
     compile:
@@ -23,8 +33,8 @@ toolchain:
       output_extension: ".spv"
       flags:
         common: []
-        debug: ["-g", "-O0"]
-        release: ["-O"]
+        debug: []
+        release: []
       supports:
         defines: true
         define_flag: "-D"

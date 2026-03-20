@@ -233,17 +233,18 @@ func NewTool(name, action, command string, inputExts []string, outputExt string)
 
 // ToolchainConfig represents a toolchain configuration loaded from YAML
 type ToolchainConfig struct {
-	Name               string            `yaml:"name"`
-	Description        string            `yaml:"description"`
-	Language           string            `yaml:"language"` // Programming language this toolchain supports (e.g., "go", "c++", "rust")
-	TargetPlatform     string            `yaml:"-"`
-	TargetArchitecture string            `yaml:"-"`
-	HostPlatform       string            `yaml:"-"`
-	HostArchitecture   string            `yaml:"-"`
-	ExecutionType      string            `yaml:"-"`
-	ExecutionConfig    map[string]any    `yaml:"-"`
-	Tools              map[string]*Tool  `yaml:"-"`
-	Variables          map[string]string `yaml:"-"` // Toolchain-specific variables for command substitution
+	Name               string                              `yaml:"name"`
+	Description        string                              `yaml:"description"`
+	Language           string                              `yaml:"language"` // Programming language this toolchain supports (e.g., "go", "c++", "rust")
+	TargetPlatform     string                              `yaml:"-"`
+	TargetArchitecture string                              `yaml:"-"`
+	HostPlatform       string                              `yaml:"-"`
+	HostArchitecture   string                              `yaml:"-"`
+	ExecutionType      string                              `yaml:"-"`
+	ExecutionConfig    map[string]any                      `yaml:"-"`
+	Tools              map[string]*Tool                    `yaml:"-"`
+	Variables          map[string]string                   `yaml:"-"`
+	FlagMappings       map[string]map[string][]string      `yaml:"-"` // abstract keyword -> value -> concrete flags
 }
 
 // NewToolchainConfig creates a new ToolchainConfig

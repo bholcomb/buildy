@@ -90,15 +90,15 @@ project:
 environment:
   compile:
     cpp_standard: "c++20"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
 
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      symbols: true
       defines: ["DEBUG=1", "MATH_LIB_VERSION=1"]
-      flags: ["-g"]
     release:
-      optimization: "-O3"
+      optimization: full
       defines: ["NDEBUG=1", "MATH_LIB_VERSION=1"]
 
 targets:
@@ -137,25 +137,25 @@ Every buildy project needs a name. The version is optional but recommended.
 environment:
   compile:
     cpp_standard: "c++20"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
 ```
 
-This sets the C++ standard and warning flags for all C++ targets.
+This sets the C++ standard and warning level for all C++ targets. The `warnings: extra` keyword resolves to the appropriate flags for whichever toolchain is active (e.g., `-Wall -Wextra` for GCC/Clang, `/W4` for MSVC).
 
 ### Build Configurations
 
 ```yaml
 configurations:
   debug:
-    optimization: "-O0"
+    optimization: none
+    symbols: true
     defines: ["DEBUG=1"]
-    flags: ["-g"]
   release:
-    optimization: "-O3"
+    optimization: full
     defines: ["NDEBUG=1"]
 ```
 
-Debug builds include debug symbols and the `DEBUG` preprocessor macro. Release builds optimize for speed.
+Debug builds include debug symbols and the `DEBUG` preprocessor macro. Release builds optimize for speed. Abstract keywords like `optimization` and `symbols` are resolved to concrete compiler flags by the active toolchain.
 
 ### Static Library Target
 

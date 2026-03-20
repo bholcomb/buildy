@@ -303,9 +303,20 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	// Merge target-level flags into mergedConfig
-	if itemFlags, ok := targetConfig["flags"].([]string); ok && len(itemFlags) > 0 {
-		existingFlags := ExtractStringList(mergedConfig["compiler_flags"])
-		mergedConfig["compiler_flags"] = append(existingFlags, itemFlags...)
+	if rawFlags := targetConfig["flags"]; rawFlags != nil {
+		itemFlags := ExtractStringList(rawFlags)
+		if len(itemFlags) > 0 {
+			existingFlags := ExtractStringList(mergedConfig["flags"])
+			mergedConfig["flags"] = append(existingFlags, itemFlags...)
+		}
+	}
+
+	// Apply target-level flag/define removals
+	if removals := ExtractStringList(targetConfig["remove_flags"]); len(removals) > 0 {
+		mergedConfig["flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["flags"]), removals)
+	}
+	if removals := ExtractStringList(targetConfig["remove_defines"]); len(removals) > 0 {
+		mergedConfig["defines"] = applyFlagRemovals(ExtractStringList(mergedConfig["defines"]), removals)
 	}
 
 	// Expand template
@@ -471,7 +482,10 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 	setupTask := tg.createSetupTask(outputDir)
 	tasks = append(tasks, &setupTask)
 
-	mergedConfig := tg.getMergedConfig(config)
+	mergedConfig, err := tg.getMergedConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build merged config: %w", err)
+	}
 
 	// IMPORTANT: Generate artifact tasks BEFORE targets so targets can depend on them
 	// This allows targets to use depends_on.artifacts for code generation workflows

@@ -1,9 +1,16 @@
 package workspace
 
-import "buildy/pkg/util"
+import (
+	"fmt"
+	"sort"
+	"strings"
 
-// getMergedConfig extracts and merges configuration hierarchy
-func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
+	"buildy/pkg/util"
+)
+
+// getMergedConfig extracts and merges configuration hierarchy, then resolves
+// abstract keywords via toolchain flag_mappings and applies flag removals.
+func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any, error) {
 	globalConfig := make(map[string]any)
 	if gc, ok := config["config"].(map[string]any); ok {
 		globalConfig = gc
@@ -52,8 +59,6 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
 	// Extract platform-specific settings from within the configuration
 	var configPlatformSettings any
 	if configMap, ok := configSettings.(map[string]any); ok {
-		// Check for platform subsection within the configuration
-		// e.g., configurations.debug.linux: { defines: [...] }
 		if platformSettings, ok := configMap[tg.Platform]; ok {
 			configPlatformSettings = platformSettings
 		}
@@ -64,11 +69,107 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) map[string]any {
 		platforms[tg.Platform],
 		architectures[tg.Architecture],
 		configSettings,
-		configPlatformSettings, // Platform-specific settings within the configuration
+		configPlatformSettings,
 	)
 
-	// Resolve variables in the merged config
-	return tg.resolveConfigMap(merged)
+	// Resolve filtered lists at the environment level so platform/arch/config/
+	// toolchain filters work inside environment and configuration sections.
+	ctx := tg.getBuildContext()
+	for key, val := range merged {
+		if _, ok := val.([]any); ok {
+			merged[key] = ResolveFilteredList(val, ctx)
+		}
+	}
+
+	// Resolve abstract keywords (optimization, warnings, symbols, runtime, etc.)
+	// via the toolchain's flag_mappings. Resolved flags are prepended to merged["flags"].
+	if tg.CurrentToolchain != nil && len(tg.CurrentToolchain.FlagMappings) > 0 {
+		if err := resolveAbstractKeywords(merged, tg.CurrentToolchain.FlagMappings); err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply configuration-level flag/define removals
+	if removals := ExtractStringList(merged["remove_flags"]); len(removals) > 0 {
+		merged["flags"] = applyFlagRemovals(ExtractStringList(merged["flags"]), removals)
+		delete(merged, "remove_flags")
+	}
+	if removals := ExtractStringList(merged["remove_defines"]); len(removals) > 0 {
+		merged["defines"] = applyFlagRemovals(ExtractStringList(merged["defines"]), removals)
+		delete(merged, "remove_defines")
+	}
+
+	return tg.resolveConfigMap(merged), nil
+}
+
+// resolveAbstractKeywords iterates over the toolchain's flag_mappings and,
+// for each keyword present in merged, resolves the user's value to concrete
+// flags. Resolved flags are prepended to merged["flags"]. The consumed
+// keyword key is deleted from merged. Returns an error if a keyword's value
+// cannot be resolved (unknown value for that toolchain).
+func resolveAbstractKeywords(merged map[string]any, mappings map[string]map[string][]string) error {
+	var resolvedFlags []string
+
+	// Sort keywords for deterministic flag ordering across builds.
+	sortedKeywords := make([]string, 0, len(mappings))
+	for keyword := range mappings {
+		sortedKeywords = append(sortedKeywords, keyword)
+	}
+	sort.Strings(sortedKeywords)
+
+	for _, keyword := range sortedKeywords {
+		valueMap := mappings[keyword]
+		rawVal, exists := merged[keyword]
+		if !exists {
+			continue
+		}
+
+		userValue := ""
+		switch v := rawVal.(type) {
+		case string:
+			userValue = v
+		case bool:
+			userValue = fmt.Sprintf("%t", v)
+		default:
+			continue
+		}
+
+		flags, valid := valueMap[userValue]
+		if !valid {
+			validValues := make([]string, 0, len(valueMap))
+			for k := range valueMap {
+				validValues = append(validValues, k)
+			}
+			sort.Strings(validValues)
+			return fmt.Errorf("abstract keyword %q has unresolvable value %q; valid values: [%s]",
+				keyword, userValue, strings.Join(validValues, ", "))
+		}
+
+		resolvedFlags = append(resolvedFlags, flags...)
+		delete(merged, keyword)
+	}
+
+	if len(resolvedFlags) > 0 {
+		existing := ExtractStringList(merged["flags"])
+		merged["flags"] = append(resolvedFlags, existing...)
+	}
+
+	return nil
+}
+
+// applyFlagRemovals returns base with all entries in removals excluded.
+func applyFlagRemovals(base []string, removals []string) []string {
+	removeSet := make(map[string]bool, len(removals))
+	for _, f := range removals {
+		removeSet[f] = true
+	}
+	result := make([]string, 0, len(base))
+	for _, f := range base {
+		if !removeSet[f] {
+			result = append(result, f)
+		}
+	}
+	return result
 }
 
 // mergeConfigs merges configuration hierarchy

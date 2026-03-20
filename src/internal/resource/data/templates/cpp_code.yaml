@@ -28,7 +28,7 @@ templates:
         tool_params:
           defines: "${config.defines}"
           include_dirs: "${item.include_dirs}"
-          extra_flags: "${config.compiler_flags}"
+          extra_flags: "${config.flags}"
           is_shared_library: true
           std: "${config.cpp_standard}"
       
@@ -68,7 +68,7 @@ templates:
         tool_params:
           defines: "${config.defines}"
           include_dirs: "${item.include_dirs}"
-          extra_flags: "${config.compiler_flags}"
+          extra_flags: "${config.flags}"
           is_shared_library: false
           std: "${config.cpp_standard}"
       
@@ -107,7 +107,7 @@ templates:
         tool_params:
           defines: "${config.defines}"
           include_dirs: "${item.include_dirs}"
-          extra_flags: "${config.compiler_flags}"
+          extra_flags: "${config.flags}"
           is_shared_library: false
           std: "${config.cpp_standard}"
       

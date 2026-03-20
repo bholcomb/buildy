@@ -595,15 +595,15 @@ environment:
   compile:
     cpp_standard: "c++20"
     c_standard: "c17"
-    warnings: ["-Wall", "-Wextra", "-Wpedantic"]
+    warnings: everything
     
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      symbols: true
       defines: ["DEBUG=1"]
-      flags: ["-g"]
     release:
-      optimization: "-O3"
+      optimization: full
       defines: ["NDEBUG=1"]
       flags: ["-flto"]
 ```
@@ -776,10 +776,9 @@ targets:
       
       flags:
         - debug:
-            - "-g"
-            - "-O0"
+            - "-fsanitize=address"
         - release:
-            - "-O2"
+            - "-flto"
 ```
 
 **Filter evaluation order:**
@@ -1289,9 +1288,9 @@ tools:
     output_extension: ".o"
     output_pattern: "${name}.o"
     flags:
-      common: ["-Wall"]
-      debug: ["-g", "-O0"]
-      release: ["-O3"]
+      common: []
+      debug: []
+      release: []
     supports:
       defines: true
       define_flag: "-D"
@@ -2011,15 +2010,15 @@ environment:
     
   compile:
     cpp_standard: "c++20"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
     
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      symbols: true
       defines: ["DEBUG=1"]
-      flags: ["-g"]
     release:
-      optimization: "-O3"
+      optimization: full
       defines: ["NDEBUG=1"]
       flags: ["-flto"]
 
