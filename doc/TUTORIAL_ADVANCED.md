@@ -59,15 +59,15 @@ environment:
 
   compile:
     cpp_standard: "c++17"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
 
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      symbols: true
       defines: ["DEBUG=1"]
-      flags: ["-g"]
     release:
-      optimization: "-O2"
+      optimization: speed
       defines: ["NDEBUG=1"]
 
 targets:

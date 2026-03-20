@@ -6,13 +6,14 @@ project:
 environment:
   compile:
     cpp_standard: "c++20"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
     
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      symbols: true
     release:
-      optimization: "-O3"
+      optimization: full
 
 targets:
   static_libraries:

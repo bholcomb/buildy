@@ -80,6 +80,9 @@ func LoadToolchainConfig(toolchainFile string) (*ToolchainConfig, error) {
 		}
 	}
 
+	// Parse flag_mappings
+	tc.FlagMappings = parseFlagMappings(tcData)
+
 	// Parse tools
 	if toolsData, ok := tcData["tools"].(map[string]any); ok {
 		for toolName, toolDataRaw := range toolsData {
@@ -163,6 +166,9 @@ func LoadToolchainConfigFromData(data []byte, sourceName string) (*ToolchainConf
 			}
 		}
 	}
+
+	// Parse flag_mappings
+	tc.FlagMappings = parseFlagMappings(tcData)
 
 	// Parse tools
 	if toolsData, ok := tcData["tools"].(map[string]any); ok {
@@ -428,6 +434,42 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 	}
 
 	return tool
+}
+
+// parseFlagMappings parses the flag_mappings section from toolchain YAML data.
+// flag_mappings maps abstract keywords (e.g., "optimization") to value->flags mappings
+// (e.g., "speed" -> ["-O2"]). This is fully data-driven: the Go code makes no
+// assumptions about which keywords exist.
+func parseFlagMappings(tcData map[string]any) map[string]map[string][]string {
+	mappingsRaw, ok := tcData["flag_mappings"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	result := make(map[string]map[string][]string, len(mappingsRaw))
+	for keyword, valuesRaw := range mappingsRaw {
+		valuesMap, ok := valuesRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		valueFlags := make(map[string][]string, len(valuesMap))
+		for value, flagsRaw := range valuesMap {
+			switch f := flagsRaw.(type) {
+			case []any:
+				flags := make([]string, 0, len(f))
+				for _, flag := range f {
+					if s, ok := flag.(string); ok {
+						flags = append(flags, s)
+					}
+				}
+				valueFlags[value] = flags
+			case []string:
+				valueFlags[value] = f
+			}
+		}
+		result[keyword] = valueFlags
+	}
+	return result
 }
 
 // parseCommandParam parses a command parameter definition from YAML data

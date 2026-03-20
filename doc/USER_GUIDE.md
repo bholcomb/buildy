@@ -290,14 +290,155 @@ Define debug and release configurations:
 environment:
   configurations:
     debug:
-      optimization: "-O0"
+      optimization: none
+      warnings: extra
+      symbols: true
       defines: ["DEBUG=1"]
-      flags: ["-g"]
     release:
-      optimization: "-O3"
+      optimization: full
+      warnings: default
+      symbols: false
       defines: ["NDEBUG=1"]
       flags: ["-flto"]
 ```
+
+## Compiler Flags
+
+Buildy uses a three-layer flag pipeline to build the final set of compiler flags for each target:
+
+1. **Toolchain mechanical flags** -- flags baked into the toolchain definition (e.g., `/nologo`, `/EHsc`, `/FS` for MSVC). These are always applied and cannot be overridden.
+2. **Abstract keywords** -- high-level settings like `optimization`, `warnings`, `symbols`, and `runtime` that are resolved to concrete compiler flags by the toolchain.
+3. **Raw flags** -- literal compiler flags from your `buildy.yaml` (`flags` key).
+
+All three layers are concatenated in that order to produce the final flag list.
+
+### Abstract Keywords
+
+Abstract keywords let you write toolchain-agnostic configurations. Buildy resolves them to concrete flags using the active toolchain's `flag_mappings`.
+
+| Keyword | Values | Description |
+|---------|--------|-------------|
+| `optimization` | `none`, `size`, `speed`, `full` | Optimization level |
+| `warnings` | `off`, `default`, `extra`, `everything` | Warning level |
+| `symbols` | `true`, `false` | Debug symbols |
+| `runtime` | `debug`, `release` | Runtime library (MSVC only) |
+
+Example -- these abstract keywords produce the same result on GCC, Clang, and MSVC:
+
+```yaml
+environment:
+  configurations:
+    debug:
+      optimization: none
+      warnings: extra
+      symbols: true
+    release:
+      optimization: full
+      warnings: default
+      symbols: false
+```
+
+On GCC/Clang, `optimization: full` resolves to `-O3`. On MSVC, it resolves to `/Ox`. If a keyword value is not recognized by the toolchain, the build fails with an error listing valid values.
+
+### Raw Flags
+
+Use the `flags` key to pass literal compiler flags. These are applied at every level of the configuration hierarchy and concatenated:
+
+```yaml
+environment:
+  compile:
+    flags: ["-fpermissive"]
+  configurations:
+    debug:
+      flags: ["-fsanitize=address"]
+    release:
+      flags: ["-flto"]
+
+targets:
+  executables:
+    - name: myapp
+      language: cpp
+      sources: ["src/*.cpp"]
+      flags: ["-fno-rtti"]
+```
+
+In a debug build, `myapp` would receive: `[resolved abstract keywords] + [-fpermissive] + [-fsanitize=address] + [-fno-rtti]`.
+
+### Flag Removal
+
+Use `remove_flags` and `remove_defines` to exclude flags or defines inherited from higher levels. This is useful when a specific target or configuration needs to opt out of a global setting:
+
+```yaml
+environment:
+  compile:
+    warnings: extra
+    defines: ["FEATURE_A=1"]
+
+  configurations:
+    release:
+      remove_flags: ["-Wextra"]
+
+targets:
+  executables:
+    - name: legacy_module
+      language: cpp
+      sources: ["src/*.cpp"]
+      remove_flags: ["-Wall"]
+      remove_defines: ["FEATURE_A=1"]
+```
+
+Removals apply after all flags are merged, so they can remove flags from any source -- abstract keywords, environment flags, or configuration flags.
+
+### Filtered Flags
+
+Flags support the same filter syntax as other list values, allowing platform, architecture, configuration, and toolchain conditions:
+
+```yaml
+environment:
+  compile:
+    flags:
+      - "-fvisibility=hidden"
+      - linux:
+          - "-pthread"
+      - windows:
+          - "/utf-8"
+```
+
+Filters can be nested to combine conditions:
+
+```yaml
+environment:
+  compile:
+    flags:
+      - debug:
+          gcc-cpp-linux:
+            - "-fsanitize=address"
+          clang-cpp-linux:
+            - "-fsanitize=memory"
+```
+
+This applies `-fsanitize=address` only when building in debug mode with the GCC toolchain.
+
+### Custom Toolchain Keywords
+
+Abstract keywords are fully data-driven. Custom toolchains can define their own keywords by adding a `flag_mappings` section:
+
+```yaml
+toolchain:
+  name: "my-custom-compiler"
+  flag_mappings:
+    optimization:
+      none: ["-O0"]
+      full: ["-O3"]
+    vectorization:
+      off: []
+      sse4: ["-msse4.2"]
+      avx2: ["-mavx2"]
+  tools:
+    # ...
+```
+
+Users can then write `vectorization: avx2` in their `buildy.yaml` and it will resolve to `-mavx2`.
 
 ## Working with Dependencies
 

@@ -14,6 +14,24 @@ toolchain:
   execution:
     type: native
   
+  flag_mappings:
+    optimization:
+      none: ["-O0"]
+      size: ["-Os"]
+      speed: ["-O2"]
+      full: ["-O3"]
+    warnings:
+      off: []
+      default: ["-Wall"]
+      extra: ["-Wall", "-Wextra"]
+      everything: ["-Wall", "-Wextra", "-Wpedantic"]
+    symbols:
+      "true": ["-g"]
+      "false": []
+    runtime:
+      debug: []
+      release: []
+
   tools:
     # C compilation
     c_compile:
@@ -22,9 +40,9 @@ toolchain:
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
+        common: []
+        debug: []
+        release: []
       supports:
         defines: true
         define_flag: "-D"
@@ -40,9 +58,9 @@ toolchain:
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".o"
       flags:
-        common: ["-Wall", "-Wextra"]
-        debug: ["-g", "-O0"]
-        release: ["-O3", "-DNDEBUG"]
+        common: []
+        debug: []
+        release: []
       supports:
         defines: true
         define_flag: "-D"

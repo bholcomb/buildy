@@ -59,14 +59,14 @@ project:
 environment:
   compile:
     cpp_standard: "c++20"
-    warnings: ["-Wall", "-Wextra"]
+    warnings: extra
   
   configurations:
     debug:
-      optimization: "-O0"
-      flags: ["-g"]
+      optimization: none
+      symbols: true
     release:
-      optimization: "-O3"
+      optimization: full
       defines: ["NDEBUG=1"]
 
 targets:

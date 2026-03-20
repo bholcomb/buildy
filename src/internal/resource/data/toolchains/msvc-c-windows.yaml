@@ -14,6 +14,24 @@ toolchain:
   execution:
     type: native
   
+  flag_mappings:
+    optimization:
+      none: ["/Od"]
+      size: ["/O1"]
+      speed: ["/O2"]
+      full: ["/Ox"]
+    warnings:
+      off: ["/W0"]
+      default: ["/W3"]
+      extra: ["/W4"]
+      everything: ["/Wall"]
+    symbols:
+      "true": ["/Zi"]
+      "false": []
+    runtime:
+      debug: ["/MDd"]
+      release: ["/MD"]
+
   tools:
     # C compilation
     c_compile:
@@ -22,9 +40,9 @@ toolchain:
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
-        common: ["/W3"]
-        debug: ["/Od", "/Zi", "/FS", "/MDd"]
-        release: ["/O2", "/MD", "/DNDEBUG"]
+        common: []
+        debug: ["/FS"]
+        release: []
       supports:
         defines: true
         define_flag: "/D"
