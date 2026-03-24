@@ -411,6 +411,236 @@ func TestFlagPipeline_InvalidKeywordErrors(t *testing.T) {
 	}
 }
 
+// --- compile: and link: section tests ---
+
+func TestFlagPipeline_EnvironmentLinkFlags(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "debug",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"compile": map[string]any{
+				"flags": []any{"-Wall"},
+			},
+			"link": map[string]any{
+				"flags": []any{"-Wl,-rpath,$ORIGIN"},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	compileFlags := ExtractStringList(merged["flags"])
+	if len(compileFlags) != 1 || compileFlags[0] != "-Wall" {
+		t.Errorf("expected compile flags [-Wall], got %v", compileFlags)
+	}
+
+	linkFlags := ExtractStringList(merged["link_flags"])
+	if len(linkFlags) != 1 || linkFlags[0] != "-Wl,-rpath,$ORIGIN" {
+		t.Errorf("expected link flags [-Wl,-rpath,$ORIGIN], got %v", linkFlags)
+	}
+}
+
+func TestFlagPipeline_ConfigurationCompileAndLinkSections(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "release",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"compile": map[string]any{
+				"flags": []any{"-fvisibility=hidden"},
+			},
+			"link": map[string]any{
+				"flags": []any{"-Wl,-z,now"},
+			},
+			"configurations": map[string]any{
+				"release": map[string]any{
+					"optimization": "full",
+					"compile": map[string]any{
+						"flags": []any{"-flto", "-march=native"},
+					},
+					"link": map[string]any{
+						"flags": []any{"-flto", "-Wl,-O1"},
+					},
+				},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	compileFlags := ExtractStringList(merged["flags"])
+	compileFlagSet := make(map[string]bool)
+	for _, f := range compileFlags {
+		compileFlagSet[f] = true
+	}
+	for _, expected := range []string{"-fvisibility=hidden", "-flto", "-march=native", "-O3"} {
+		if !compileFlagSet[expected] {
+			t.Errorf("expected compile flag %q in %v", expected, compileFlags)
+		}
+	}
+
+	linkFlags := ExtractStringList(merged["link_flags"])
+	linkFlagSet := make(map[string]bool)
+	for _, f := range linkFlags {
+		linkFlagSet[f] = true
+	}
+	for _, expected := range []string{"-Wl,-z,now", "-flto", "-Wl,-O1"} {
+		if !linkFlagSet[expected] {
+			t.Errorf("expected link flag %q in %v", expected, linkFlags)
+		}
+	}
+}
+
+func TestFlagPipeline_ConfigurationRemoveFlagsInSections(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "release",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"compile": map[string]any{
+				"flags": []any{"-Wall", "-Wextra", "-Werror"},
+			},
+			"link": map[string]any{
+				"flags": []any{"-Wl,-z,now", "-s"},
+			},
+			"configurations": map[string]any{
+				"release": map[string]any{
+					"compile": map[string]any{
+						"remove_flags": []any{"-Werror"},
+					},
+					"link": map[string]any{
+						"remove_flags": []any{"-s"},
+					},
+				},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	compileFlags := ExtractStringList(merged["flags"])
+	for _, f := range compileFlags {
+		if f == "-Werror" {
+			t.Errorf("-Werror should have been removed from compile flags %v", compileFlags)
+		}
+	}
+	compileFlagSet := make(map[string]bool)
+	for _, f := range compileFlags {
+		compileFlagSet[f] = true
+	}
+	if !compileFlagSet["-Wall"] || !compileFlagSet["-Wextra"] {
+		t.Errorf("non-removed compile flags missing from %v", compileFlags)
+	}
+
+	linkFlags := ExtractStringList(merged["link_flags"])
+	for _, f := range linkFlags {
+		if f == "-s" {
+			t.Errorf("-s should have been removed from link flags %v", linkFlags)
+		}
+	}
+	if len(linkFlags) != 1 || linkFlags[0] != "-Wl,-z,now" {
+		t.Errorf("expected link flags [-Wl,-z,now], got %v", linkFlags)
+	}
+}
+
+func TestFlagPipeline_CompileAndLinkFlagsSeparate(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "debug",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"compile": map[string]any{
+				"flags": []any{"-fPIC"},
+			},
+			"link": map[string]any{
+				"flags": []any{"-shared"},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	compileFlags := ExtractStringList(merged["flags"])
+	linkFlags := ExtractStringList(merged["link_flags"])
+
+	for _, f := range compileFlags {
+		if f == "-shared" {
+			t.Errorf("link flag -shared leaked into compile flags %v", compileFlags)
+		}
+	}
+	for _, f := range linkFlags {
+		if f == "-fPIC" {
+			t.Errorf("compile flag -fPIC leaked into link flags %v", linkFlags)
+		}
+	}
+}
+
+func TestFlagPipeline_EnvironmentLinkRemoveFlags(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "debug",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"link": map[string]any{
+				"flags":        []any{"-Wl,-z,now", "-s", "-Wl,-O1"},
+				"remove_flags": []any{"-s"},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	linkFlags := ExtractStringList(merged["link_flags"])
+	for _, f := range linkFlags {
+		if f == "-s" {
+			t.Errorf("-s should have been removed from link flags %v", linkFlags)
+		}
+	}
+	linkFlagSet := make(map[string]bool)
+	for _, f := range linkFlags {
+		linkFlagSet[f] = true
+	}
+	if !linkFlagSet["-Wl,-z,now"] || !linkFlagSet["-Wl,-O1"] {
+		t.Errorf("non-removed link flags missing from %v", linkFlags)
+	}
+}
+
 func containsString(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && contains(s, sub))
 }

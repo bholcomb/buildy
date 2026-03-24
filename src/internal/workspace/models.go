@@ -78,6 +78,7 @@ type BuildTask struct {
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
 	Toolchain            string               `json:"toolchain"`              // Toolchain identifier (e.g., "gcc-linux-13.2")
+	ConfigHash           string               `json:"config_hash"`            // Hash of buildy.yaml to invalidate cache on config changes
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -123,7 +124,8 @@ func (t *BuildTask) CalculateCacheKey() string {
 		"platform":      t.Platform,
 		"architecture":  t.Architecture,
 		"configuration": t.Configuration,
-		"toolchain":     t.Toolchain, // Include toolchain to invalidate cache on compiler changes
+		"toolchain":     t.Toolchain,
+		"config_hash":   t.ConfigHash,
 	}
 
 	// Serialize to JSON (Go's json.Marshal sorts keys by default)

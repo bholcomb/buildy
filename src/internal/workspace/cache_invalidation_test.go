@@ -482,3 +482,78 @@ func TestWindowsPathCaseInsensitiveHashing(t *testing.T) {
 			path1, path2)
 	}
 }
+
+// TestConfigHashInvalidatesCache verifies that changing the config hash
+// produces a different cache key, even when all other inputs are identical.
+func TestConfigHashInvalidatesCache(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "buildy-confighash-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	inputFile := filepath.Join(tmpDir, "input.cpp")
+	if err := os.WriteFile(inputFile, []byte("int main() {}"), 0644); err != nil {
+		t.Fatalf("Failed to write input file: %v", err)
+	}
+
+	createTask := func(configHash string) *BuildTask {
+		task := NewBuildTask(
+			"compile_mylib_001",
+			"compile",
+			[]TaskInput{NewTaskInput(inputFile)},
+			[]string{filepath.Join(tmpDir, "output.o")},
+			[]string{},
+			"g++ -c input.cpp -o output.o",
+		)
+		task.Platform = "linux"
+		task.Architecture = "x86_64"
+		task.Configuration = "debug"
+		task.Toolchain = "gcc"
+		task.ConfigHash = configHash
+		task.CacheKey = task.CalculateCacheKey()
+		return &task
+	}
+
+	task1 := createTask("aabbccdd")
+	task2 := createTask("aabbccdd")
+	task3 := createTask("11223344")
+
+	if task1.CacheKey != task2.CacheKey {
+		t.Error("Same config hash should produce same cache key")
+	}
+
+	if task1.CacheKey == task3.CacheKey {
+		t.Error("Different config hash should produce different cache key")
+	}
+}
+
+// TestConfigHashEmptyDoesNotPanic verifies that an empty config hash
+// still produces a valid cache key.
+func TestConfigHashEmptyDoesNotPanic(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "buildy-confighash-empty-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	inputFile := filepath.Join(tmpDir, "input.cpp")
+	if err := os.WriteFile(inputFile, []byte("int main() {}"), 0644); err != nil {
+		t.Fatalf("Failed to write input file: %v", err)
+	}
+
+	task := NewBuildTask(
+		"compile_test_001",
+		"compile",
+		[]TaskInput{NewTaskInput(inputFile)},
+		[]string{filepath.Join(tmpDir, "output.o")},
+		[]string{},
+		"g++ -c input.cpp -o output.o",
+	)
+	task.ConfigHash = ""
+	task.CacheKey = task.CalculateCacheKey()
+
+	if task.CacheKey == "" {
+		t.Error("Cache key should not be empty even with empty config hash")
+	}
+}
