@@ -77,16 +77,27 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 		configPlatformSettings,
 	)
 
+	// Resolve filtered lists before flattening compile:/link: sections,
+	// so platform/arch/config/toolchain filters work inside all sections.
+	ctx := tg.getBuildContext()
+	resolveFilters := func(v any) []string {
+		if list, ok := v.([]any); ok {
+			return ResolveFilteredList(list, ctx)
+		}
+		return ExtractStringList(v)
+	}
+
 	// Flatten any compile: or link: sub-sections that came from configuration
 	// blocks (e.g., configurations.release.compile.flags) into top-level keys,
 	// mirroring how environment.compile and environment.link are handled above.
 	if compile, ok := merged["compile"].(map[string]any); ok {
 		for k, v := range compile {
 			if k == "flags" || k == "defines" || k == "remove_flags" || k == "remove_defines" {
+				resolved := resolveFilters(v)
 				if existingList := ExtractStringList(merged[k]); len(existingList) > 0 {
-					merged[k] = append(existingList, ExtractStringList(v)...)
+					merged[k] = append(existingList, resolved...)
 				} else {
-					merged[k] = v
+					merged[k] = resolved
 				}
 			} else {
 				merged[k] = v
@@ -97,18 +108,17 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 	if link, ok := merged["link"].(map[string]any); ok {
 		for k, v := range link {
 			targetKey := "link_" + k
+			resolved := resolveFilters(v)
 			if existingList := ExtractStringList(merged[targetKey]); len(existingList) > 0 {
-				merged[targetKey] = append(existingList, ExtractStringList(v)...)
+				merged[targetKey] = append(existingList, resolved...)
 			} else {
-				merged[targetKey] = v
+				merged[targetKey] = resolved
 			}
 		}
 		delete(merged, "link")
 	}
 
-	// Resolve filtered lists at the environment level so platform/arch/config/
-	// toolchain filters work inside environment and configuration sections.
-	ctx := tg.getBuildContext()
+	// Resolve filtered lists on remaining top-level keys
 	for key, val := range merged {
 		if _, ok := val.([]any); ok {
 			merged[key] = ResolveFilteredList(val, ctx)

@@ -641,6 +641,128 @@ func TestFlagPipeline_EnvironmentLinkRemoveFlags(t *testing.T) {
 	}
 }
 
+// --- filter tests inside compile: and link: sections ---
+
+func TestFlagPipeline_FiltersInEnvironmentCompileSection(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "debug",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"compile": map[string]any{
+				"flags": []any{
+					"-Wall",
+					map[string]any{"linux": []any{"-pthread"}},
+					map[string]any{"windows": []any{"/utf-8"}},
+				},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	flags := ExtractStringList(merged["flags"])
+	flagSet := make(map[string]bool)
+	for _, f := range flags {
+		flagSet[f] = true
+	}
+	if !flagSet["-Wall"] || !flagSet["-pthread"] {
+		t.Errorf("expected [-Wall, -pthread] in %v", flags)
+	}
+	if flagSet["/utf-8"] {
+		t.Errorf("windows flag /utf-8 should not appear on linux, got %v", flags)
+	}
+}
+
+func TestFlagPipeline_FiltersInConfigurationLinkSection(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "release",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"configurations": map[string]any{
+				"release": map[string]any{
+					"link": map[string]any{
+						"flags": []any{
+							"-flto",
+							map[string]any{"linux": []any{"-Wl,-z,relro"}},
+							map[string]any{"windows": []any{"/LTCG"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	linkFlags := ExtractStringList(merged["link_flags"])
+	linkFlagSet := make(map[string]bool)
+	for _, f := range linkFlags {
+		linkFlagSet[f] = true
+	}
+	if !linkFlagSet["-flto"] || !linkFlagSet["-Wl,-z,relro"] {
+		t.Errorf("expected [-flto, -Wl,-z,relro] in %v", linkFlags)
+	}
+	if linkFlagSet["/LTCG"] {
+		t.Errorf("windows flag /LTCG should not appear on linux, got %v", linkFlags)
+	}
+}
+
+func TestFlagPipeline_FiltersInConfigurationCompileSection(t *testing.T) {
+	tg := &TaskGenerator{
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "release",
+	}
+	tg.CurrentToolchain = makeTestToolchain(gccFlagMappings())
+
+	config := map[string]any{
+		"environment": map[string]any{
+			"configurations": map[string]any{
+				"release": map[string]any{
+					"compile": map[string]any{
+						"flags": []any{
+							"-flto",
+							map[string]any{
+								"linux": []any{"-march=native"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	merged, err := tg.getMergedConfig(config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	flags := ExtractStringList(merged["flags"])
+	flagSet := make(map[string]bool)
+	for _, f := range flags {
+		flagSet[f] = true
+	}
+	if !flagSet["-flto"] || !flagSet["-march=native"] {
+		t.Errorf("expected [-flto, -march=native] in %v", flags)
+	}
+}
+
 func containsString(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && contains(s, sub))
 }

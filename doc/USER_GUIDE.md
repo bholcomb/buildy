@@ -227,26 +227,37 @@ environment:
     output_prefix: ""         # No lib prefix for any library in this project
 ```
 
-### Custom Linker Flags
+### Separate Compile and Link Flags
 
-You can pass custom flags to the linker using the `link:` section, available at both the environment level (all targets) and per-target:
+Use the `compile:` and `link:` sections to pass flags specifically to the compiler or linker. Both support `flags` and `remove_flags`, and work at the environment, configuration, and target level:
 
 ```yaml
 environment:
+  compile:
+    flags: ["-fvisibility=hidden"]
   link:
-    flags: ["-Wl,-z,now"]          # Applied to all link commands
-    remove_flags: ["-s"]           # Remove specific linker flags
+    flags: ["-Wl,-z,now"]
+
+  configurations:
+    release:
+      compile:
+        flags: ["-flto", "-march=native"]
+      link:
+        flags: ["-flto", "-Wl,-O1"]
 
 targets:
   shared_libraries:
     - name: mylib
       language: cpp
       sources: ["src/*.cpp"]
+      compile:
+        flags: ["-ffast-math"]
+        remove_flags: ["-Werror"]       # This target has warnings we can't fix
       link:
-        flags: ["-Wl,--version-script=mylib.map"]   # Per-target linker flags
+        flags: ["-Wl,--version-script=mylib.map"]
 ```
 
-This works identically to the compile flag system — environment flags are merged first, then target-level flags are appended. Use `remove_flags` to strip flags inherited from the environment or toolchain.
+Compile flags and link flags are completely separate — a flag in `compile:` never reaches the linker, and vice versa. Use `remove_flags` within either section to strip flags inherited from higher levels.
 
 ### Generated Sources
 
@@ -382,7 +393,7 @@ On GCC/Clang, `optimization: full` resolves to `-O3`. On MSVC, it resolves to `/
 
 ### Raw Flags
 
-Use the `flags` key to pass literal compiler flags. These are applied at every level of the configuration hierarchy and concatenated:
+Use the `flags` key to pass literal compiler flags. These are applied at every level of the configuration hierarchy and concatenated. For flags that need to go specifically to the compiler or linker, use the `compile:` and `link:` sections (see "Separate Compile and Link Flags" above).
 
 ```yaml
 environment:
@@ -390,19 +401,28 @@ environment:
     flags: ["-fpermissive"]
   configurations:
     debug:
-      flags: ["-fsanitize=address"]
+      compile:
+        flags: ["-fsanitize=address"]
+      link:
+        flags: ["-fsanitize=address"]    # ASan needs both compile and link
     release:
-      flags: ["-flto"]
+      compile:
+        flags: ["-flto"]
+      link:
+        flags: ["-flto"]
 
 targets:
   executables:
     - name: myapp
       language: cpp
       sources: ["src/*.cpp"]
-      flags: ["-fno-rtti"]
+      compile:
+        flags: ["-fno-rtti"]
 ```
 
-In a debug build, `myapp` would receive: `[resolved abstract keywords] + [-fpermissive] + [-fsanitize=address] + [-fno-rtti]`.
+In a debug build, `myapp` would receive compile flags: `[resolved abstract keywords] + [-fpermissive] + [-fsanitize=address] + [-fno-rtti]`, and link flags: `[-fsanitize=address]`.
+
+Note: Top-level `flags:` at the environment or configuration level is a shorthand for compile flags. For clarity, prefer using the explicit `compile:` section.
 
 ### Flag Removal
 
