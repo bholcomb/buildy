@@ -597,6 +597,10 @@ environment:
     c_standard: "c17"
     warnings: everything
     
+  link:
+    flags: ["-Wl,-rpath,'$ORIGIN'"]       # Extra linker flags for all targets
+    remove_flags: ["-s"]                   # Remove specific linker flags
+    
   configurations:
     debug:
       optimization: none
@@ -641,6 +645,10 @@ targets:
         standard: "c++20"
         defines: ["ENGINE_EXPORTS"]
         flags: ["-ffast-math"]
+      
+      link:
+        flags: ["-Wl,--version-script=engine.map"]
+        remove_flags: []
 ```
 
 ### Shared Libraries
@@ -655,7 +663,87 @@ targets:
       
       # libs: Libraries this shared library links against (also establishes build order)
       libs: ["engine_core"]
+      
+      # output_prefix: Override the library filename prefix (default: "lib" on Linux/macOS, "" on Windows)
+      # output_prefix: ""    # Produces engine_renderer.so instead of libengine_renderer.so
 ```
+
+#### Output Prefix
+
+The `output_prefix` field controls the filename prefix for shared and static library outputs. The default value is defined by the toolchain (e.g., `"lib"` for GCC/Clang on Linux/macOS, `""` for MSVC on Windows).
+
+The resolution order for `output_prefix` is:
+1. **Target-level** — `output_prefix` on the target definition (highest priority)
+2. **Environment/config-level** — `output_prefix` in the merged configuration (inheritable)
+3. **Toolchain default** — `output_prefix` from the toolchain YAML
+
+To override the default prefix, set `output_prefix` on the target or at the environment level:
+
+```yaml
+# Per-target override
+targets:
+  shared_libraries:
+    - name: myplugin
+      language: cpp
+      sources: ["src/*.cpp"]
+      output_prefix: ""       # Produces myplugin.so instead of libmyplugin.so
+```
+
+```yaml
+# Environment-level (applies to all library targets)
+environment:
+  compile:
+    output_prefix: ""         # No lib prefix for any library in this project
+```
+
+| Platform | Toolchain default | Example output |
+|----------|-------------------|----------------|
+| Linux    | `lib`             | `libfoo.so`, `libfoo.a` |
+| macOS    | `lib`             | `libfoo.dylib`, `libfoo.a` |
+| Windows  | `""`              | `foo.dll`, `foo.lib` |
+
+Custom toolchains can define their own default by setting `output_prefix` at the toolchain level:
+
+```yaml
+toolchain:
+  name: "my-custom-toolchain"
+  output_prefix: "my_"       # Libraries will be named my_foo.so
+  tools:
+    ...
+```
+
+#### Link Settings
+
+The `link:` section controls linker flags. It is available at the environment level (applies to all targets) and at the target level (per-target overrides). It supports `flags` and `remove_flags` sub-keys, symmetric with the compile flag system.
+
+**Environment-level** (applies to all targets):
+
+```yaml
+environment:
+  link:
+    flags: ["-Wl,-z,now"]
+    remove_flags: ["-s"]
+```
+
+**Target-level** (per-target):
+
+```yaml
+targets:
+  shared_libraries:
+    - name: mylib
+      language: cpp
+      sources: ["src/*.cpp"]
+      link:
+        flags: ["-Wl,--version-script=mylib.map"]
+        remove_flags: []
+```
+
+The resolution order for link flags is:
+1. **Toolchain** — common and configuration-specific link tool flags
+2. **Environment-level** — `environment.link.flags` (merged in, `remove_flags` applied)
+3. **Target-level** — `target.link.flags` (appended, `remove_flags` applied)
+
+This mirrors the compile flag pipeline: toolchain mechanical flags, then environment policy flags, then target-specific flags.
 
 ### Source Patterns
 
@@ -1261,6 +1349,7 @@ toolchain:
 | `target` | Target platform and architecture |
 | `host` | Host platform requirements |
 | `variables` | Toolchain-specific variables |
+| `output_prefix` | Default library filename prefix (e.g., `"lib"` or `""`) |
 | `execution` | Execution configuration (native or docker) |
 | `tools` | Map of tool definitions |
 
@@ -1308,7 +1397,7 @@ tools:
 | `command` | Command template with variable substitution |
 | `input_extensions` | File extensions this tool accepts |
 | `output_extension` | Extension for output files |
-| `output_pattern` | Pattern for output filename (supports `${name}`) |
+| `output_pattern` | Pattern for output filename (supports `${name}`, `${output_prefix}`) |
 | `flags` | Configuration-specific flags (common, debug, release) |
 | `supports` | Capability flags and flag formats |
 | `command_params` | Data-driven parameter definitions (for `build` action) |
@@ -1690,7 +1779,8 @@ Templates can reference variables from multiple sources:
 | `${source}` | Current source file (in `for_each` loops) |
 | `${source_stem}` | Source filename without extension |
 | `${tool.output_ext}` | Tool's output extension (e.g., `.o`) |
-| `${tool.output_pattern}` | Tool's output pattern (e.g., `${name}`) |
+| `${tool.output_pattern}` | Tool's resolved output pattern (e.g., `libfoo.so`) |
+| `${output_prefix}` | Library filename prefix (from target's `output_prefix` or platform default) |
 | `${item.X}` | Target configuration field |
 | `${config.X}` | Build configuration field |
 | `${compile.outputs}` | Outputs from previous step |

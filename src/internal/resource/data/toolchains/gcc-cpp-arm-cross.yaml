@@ -32,6 +32,8 @@ toolchain:
       debug: []
       release: []
 
+  output_prefix: "lib"
+
   tools:
     # C compilation
     c_compile:
@@ -78,11 +80,11 @@ toolchain:
       command: "arm-linux-gnueabihf-g++ -shared ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
       input_extensions: [".o"]
       output_extension: ".so"
-      output_pattern: "lib${name}.so"
+      output_pattern: "${output_prefix}${name}.so"
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "shared_library"
         lib_dirs: true
@@ -96,7 +98,7 @@ toolchain:
       command: "arm-linux-gnueabihf-ar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib${name}.a"
+      output_pattern: "${output_prefix}${name}.a"
       flags:
         common: []
         debug: []
@@ -116,7 +118,7 @@ toolchain:
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "executable"
         lib_dirs: true

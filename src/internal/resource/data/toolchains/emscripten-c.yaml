@@ -29,6 +29,8 @@ toolchain:
       "true": ["-g"]
       "false": []
 
+  output_prefix: "lib"
+
   tools:
     # C compilation
     c_compile:
@@ -55,7 +57,7 @@ toolchain:
       command: "emar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib${name}.a"
+      output_pattern: "${output_prefix}${name}.a"
       flags:
         common: []
         debug: []

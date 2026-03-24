@@ -11,7 +11,7 @@ mkdir -p bin
 
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-LDFLAGS="-X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -s -w"
+LDFLAGS="-X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -X main.BuildConfig=release -s -w"
 
 echo "Building buildy for Linux x64..."
 (cd src && go build -o ../bin/buildy -ldflags "$LDFLAGS" .)

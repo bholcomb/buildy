@@ -244,6 +244,7 @@ type ToolchainConfig struct {
 	ExecutionConfig    map[string]any                      `yaml:"-"`
 	Tools              map[string]*Tool                    `yaml:"-"`
 	Variables          map[string]string                   `yaml:"-"`
+	OutputPrefix       string                              `yaml:"-"` // Default library filename prefix (e.g., "lib" on Unix, "" on Windows)
 	FlagMappings       map[string]map[string][]string      `yaml:"-"` // abstract keyword -> value -> concrete flags
 }
 

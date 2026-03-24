@@ -32,6 +32,8 @@ toolchain:
       debug: ["/MDd"]
       release: ["/MD"]
 
+  output_prefix: ""
+
   tools:
     # C compilation
     c_compile:

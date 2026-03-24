@@ -80,6 +80,11 @@ func LoadToolchainConfig(toolchainFile string) (*ToolchainConfig, error) {
 		}
 	}
 
+	// Parse output_prefix
+	if prefix, ok := tcData["output_prefix"].(string); ok {
+		tc.OutputPrefix = prefix
+	}
+
 	// Parse flag_mappings
 	tc.FlagMappings = parseFlagMappings(tcData)
 
@@ -167,6 +172,11 @@ func LoadToolchainConfigFromData(data []byte, sourceName string) (*ToolchainConf
 		}
 	}
 
+	// Parse output_prefix
+	if prefix, ok := tcData["output_prefix"].(string); ok {
+		tc.OutputPrefix = prefix
+	}
+
 	// Parse flag_mappings
 	tc.FlagMappings = parseFlagMappings(tcData)
 
@@ -231,6 +241,10 @@ func LoadToolchainConfigFromDict(configDict map[string]any) (*ToolchainConfig, e
 	}
 
 	tc.ExecutionConfig = map[string]any{"type": tc.ExecutionType}
+
+	if prefix, ok := configDict["output_prefix"].(string); ok {
+		tc.OutputPrefix = prefix
+	}
 
 	// Parse tools from list format
 	if toolsList, ok := configDict["tools"].([]any); ok {

@@ -24,6 +24,8 @@ toolchain:
       "true": ["-g"]
       "false": []
 
+  output_prefix: ""
+
   tools:
     # GLSL shader compilation
     compile:
