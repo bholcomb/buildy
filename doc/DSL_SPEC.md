@@ -609,7 +609,10 @@ environment:
     release:
       optimization: full
       defines: ["NDEBUG=1"]
-      flags: ["-flto"]
+      compile:
+        flags: ["-flto", "-march=native"]
+      link:
+        flags: ["-flto", "-Wl,-O1"]
 ```
 
 ---
@@ -712,20 +715,37 @@ toolchain:
     ...
 ```
 
-#### Link Settings
+#### Compile and Link Sections
 
-The `link:` section controls linker flags. It is available at the environment level (applies to all targets) and at the target level (per-target overrides). It supports `flags` and `remove_flags` sub-keys, symmetric with the compile flag system.
+The `compile:` and `link:` sections provide separate control over compiler and linker flags. Both support `flags` and `remove_flags` sub-keys, and are available at four levels: environment, configuration, platform, and target.
 
 **Environment-level** (applies to all targets):
 
 ```yaml
 environment:
+  compile:
+    flags: ["-fvisibility=hidden"]
+    # Also supports: cpp_standard, c_standard, warnings, defines, remove_flags
   link:
     flags: ["-Wl,-z,now"]
     remove_flags: ["-s"]
 ```
 
-**Target-level** (per-target):
+**Configuration-level** (per debug/release):
+
+```yaml
+environment:
+  configurations:
+    release:
+      optimization: full
+      compile:
+        flags: ["-flto", "-march=native"]
+        remove_flags: ["-Wextra"]       # Remove a flag inherited from environment
+      link:
+        flags: ["-flto", "-Wl,-O1"]
+```
+
+**Target-level** (per-target overrides):
 
 ```yaml
 targets:
@@ -733,17 +753,21 @@ targets:
     - name: mylib
       language: cpp
       sources: ["src/*.cpp"]
+      compile:
+        flags: ["-ffast-math"]
+        defines: ["ENGINE_EXPORTS"]
+        remove_flags: ["-Werror"]       # This target has warnings we can't fix
       link:
         flags: ["-Wl,--version-script=mylib.map"]
-        remove_flags: []
 ```
 
-The resolution order for link flags is:
-1. **Toolchain** — common and configuration-specific link tool flags
-2. **Environment-level** — `environment.link.flags` (merged in, `remove_flags` applied)
-3. **Target-level** — `target.link.flags` (appended, `remove_flags` applied)
+The resolution order for both compile and link flags is:
+1. **Toolchain** — common and configuration-specific tool flags
+2. **Environment-level** — `environment.compile/link.flags` (merged in, `remove_flags` applied)
+3. **Configuration-level** — `configurations.<name>.compile/link.flags` (appended, `remove_flags` applied)
+4. **Target-level** — `target.compile/link.flags` (appended, `remove_flags` applied)
 
-This mirrors the compile flag pipeline: toolchain mechanical flags, then environment policy flags, then target-specific flags.
+Compile flags and link flags are completely separate — a flag in `compile.flags` never reaches the linker, and a flag in `link.flags` never reaches the compiler.
 
 ### Source Patterns
 

@@ -313,16 +313,32 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
+	// Resolve filters within target-level compile/link sections
+	filterCtx := BuildContext{
+		Platform:      tg.Platform,
+		Architecture:  tg.Architecture,
+		Configuration: tg.Configuration,
+	}
+	if tg.CurrentToolchain != nil {
+		filterCtx.Toolchain = tg.CurrentToolchain.Name
+	}
+	resolveTargetFilters := func(v any) []string {
+		if list, ok := v.([]any); ok {
+			return ResolveFilteredList(list, filterCtx)
+		}
+		return ExtractStringList(v)
+	}
+
 	// Merge target-level compile section into mergedConfig
 	if compileSection, ok := targetConfig["compile"].(map[string]any); ok {
-		if compileFlags := ExtractStringList(compileSection["flags"]); len(compileFlags) > 0 {
+		if compileFlags := resolveTargetFilters(compileSection["flags"]); len(compileFlags) > 0 {
 			existingFlags := ExtractStringList(mergedConfig["flags"])
 			mergedConfig["flags"] = append(existingFlags, compileFlags...)
 		}
-		if removals := ExtractStringList(compileSection["remove_flags"]); len(removals) > 0 {
+		if removals := resolveTargetFilters(compileSection["remove_flags"]); len(removals) > 0 {
 			mergedConfig["flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["flags"]), removals)
 		}
-		if compileDefines := ExtractStringList(compileSection["defines"]); len(compileDefines) > 0 {
+		if compileDefines := resolveTargetFilters(compileSection["defines"]); len(compileDefines) > 0 {
 			existingDefines := ExtractStringList(mergedConfig["defines"])
 			mergedConfig["defines"] = append(existingDefines, compileDefines...)
 		}
@@ -330,11 +346,11 @@ func (tg *TaskGenerator) generateTargetTasks(
 
 	// Merge target-level link section into mergedConfig
 	if linkSection, ok := targetConfig["link"].(map[string]any); ok {
-		if linkFlags := ExtractStringList(linkSection["flags"]); len(linkFlags) > 0 {
+		if linkFlags := resolveTargetFilters(linkSection["flags"]); len(linkFlags) > 0 {
 			existingLinkFlags := ExtractStringList(mergedConfig["link_flags"])
 			mergedConfig["link_flags"] = append(existingLinkFlags, linkFlags...)
 		}
-		if removals := ExtractStringList(linkSection["remove_flags"]); len(removals) > 0 {
+		if removals := resolveTargetFilters(linkSection["remove_flags"]); len(removals) > 0 {
 			mergedConfig["link_flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["link_flags"]), removals)
 		}
 	}
