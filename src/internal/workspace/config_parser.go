@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,15 @@ import (
 	"buildy/internal/resource"
 	"buildy/pkg/util"
 )
+
+func hashConfig(config map[string]any) string {
+	data, err := json.Marshal(config)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h[:])
+}
 
 // ConfigParser orchestrates configuration parsing and task generation
 // It delegates to specialized components for parsing, path resolution, and task generation
@@ -352,6 +363,7 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) 
 	)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
 	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir)
+	tg.ConfigHash = hashConfig(rootConfig)
 	if cp.CurrentToolchain != nil {
 		tg.SetToolchain(cp.CurrentToolchain)
 	}
@@ -512,6 +524,7 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.TargetRegistry = cp.TargetRegistry
+	taskGen.ConfigHash = hashConfig(config)
 
 	// Generate tasks - pass raw config, resolution happens during task generation
 	return taskGen.GenerateTasks(config, outputDir)

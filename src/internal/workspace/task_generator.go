@@ -29,6 +29,7 @@ type TaskGenerator struct {
 	Platform           string
 	Architecture       string
 	Configuration      string
+	ConfigHash         string // Hash of buildy.yaml content, stamped on every task for cache invalidation
 	ToolchainManager   *resource.ToolchainManager
 	TemplateEngine     *BuildTemplateEngine
 	CurrentToolchain   *resource.ToolchainConfig
@@ -154,6 +155,7 @@ func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string, estimat
 	task.Architecture = tg.Architecture
 	task.Configuration = tg.Configuration
 	task.Toolchain = toolchain
+	task.ConfigHash = tg.ConfigHash
 	task.EstimatedTime = estimatedTime
 	task.ResourceRequirements = resources
 	task.CacheKey = task.CalculateCacheKey()
@@ -311,7 +313,22 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
-	// Merge target-level link flags into mergedConfig
+	// Merge target-level compile section into mergedConfig
+	if compileSection, ok := targetConfig["compile"].(map[string]any); ok {
+		if compileFlags := ExtractStringList(compileSection["flags"]); len(compileFlags) > 0 {
+			existingFlags := ExtractStringList(mergedConfig["flags"])
+			mergedConfig["flags"] = append(existingFlags, compileFlags...)
+		}
+		if removals := ExtractStringList(compileSection["remove_flags"]); len(removals) > 0 {
+			mergedConfig["flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["flags"]), removals)
+		}
+		if compileDefines := ExtractStringList(compileSection["defines"]); len(compileDefines) > 0 {
+			existingDefines := ExtractStringList(mergedConfig["defines"])
+			mergedConfig["defines"] = append(existingDefines, compileDefines...)
+		}
+	}
+
+	// Merge target-level link section into mergedConfig
 	if linkSection, ok := targetConfig["link"].(map[string]any); ok {
 		if linkFlags := ExtractStringList(linkSection["flags"]); len(linkFlags) > 0 {
 			existingLinkFlags := ExtractStringList(mergedConfig["link_flags"])
@@ -344,6 +361,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.Architecture,
 		tg.Configuration,
 		toolchainName,
+		tg.ConfigHash,
 		existingTasks,
 		tg.VarEnv,
 	)
@@ -623,6 +641,7 @@ func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
 	task.Platform = tg.Platform
 	task.Architecture = tg.Architecture
 	task.Configuration = tg.Configuration
+	task.ConfigHash = tg.ConfigHash
 	if tg.CurrentToolchain != nil {
 		task.Toolchain = tg.CurrentToolchain.Name
 	}
@@ -1695,6 +1714,7 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(
 	task.Platform = tg.Platform
 	task.Architecture = tg.Architecture
 	task.Configuration = tg.Configuration
+	task.ConfigHash = tg.ConfigHash
 	task.EstimatedTime = 0.1
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
 	task.CacheKey = task.CalculateCacheKey()
@@ -1848,6 +1868,7 @@ func (tg *TaskGenerator) generateInstallTasks(
 		task.Platform = tg.Platform
 		task.Architecture = tg.Architecture
 		task.Configuration = tg.Configuration
+		task.ConfigHash = tg.ConfigHash
 		task.EstimatedTime = 5.0
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 512, DiskMB: 500}
 		task.CacheKey = task.CalculateCacheKey()
@@ -1997,6 +2018,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 					task.Platform = tg.Platform
 					task.Architecture = tg.Architecture
 					task.Configuration = tg.Configuration
+					task.ConfigHash = tg.ConfigHash
 					task.EstimatedTime = 0.1
 					task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
 					task.CacheKey = task.CalculateCacheKey()
@@ -2127,6 +2149,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		task.Platform = tg.Platform
 		task.Architecture = tg.Architecture
 		task.Configuration = tg.Configuration
+		task.ConfigHash = tg.ConfigHash
 		task.Toolchain = ""
 		task.EstimatedTime = 0.1
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}

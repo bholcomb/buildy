@@ -395,6 +395,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
+	configHash string,
 	existingTasks []*BuildTask,
 	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
@@ -543,6 +544,12 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 				"outputs":  stepTask.Outputs,
 			}
 		}
+	}
+
+	// Stamp config hash on all generated tasks and recalculate cache keys
+	for _, task := range tasks {
+		task.ConfigHash = configHash
+		task.CacheKey = task.CalculateCacheKey()
 	}
 
 	return tasks, nil

@@ -77,6 +77,35 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 		configPlatformSettings,
 	)
 
+	// Flatten any compile: or link: sub-sections that came from configuration
+	// blocks (e.g., configurations.release.compile.flags) into top-level keys,
+	// mirroring how environment.compile and environment.link are handled above.
+	if compile, ok := merged["compile"].(map[string]any); ok {
+		for k, v := range compile {
+			if k == "flags" || k == "defines" || k == "remove_flags" || k == "remove_defines" {
+				if existingList := ExtractStringList(merged[k]); len(existingList) > 0 {
+					merged[k] = append(existingList, ExtractStringList(v)...)
+				} else {
+					merged[k] = v
+				}
+			} else {
+				merged[k] = v
+			}
+		}
+		delete(merged, "compile")
+	}
+	if link, ok := merged["link"].(map[string]any); ok {
+		for k, v := range link {
+			targetKey := "link_" + k
+			if existingList := ExtractStringList(merged[targetKey]); len(existingList) > 0 {
+				merged[targetKey] = append(existingList, ExtractStringList(v)...)
+			} else {
+				merged[targetKey] = v
+			}
+		}
+		delete(merged, "link")
+	}
+
 	// Resolve filtered lists at the environment level so platform/arch/config/
 	// toolchain filters work inside environment and configuration sections.
 	ctx := tg.getBuildContext()
@@ -103,9 +132,9 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 		merged["defines"] = applyFlagRemovals(ExtractStringList(merged["defines"]), removals)
 		delete(merged, "remove_defines")
 	}
-	if removals := ExtractStringList(merged["remove_link_flags"]); len(removals) > 0 {
+	if removals := ExtractStringList(merged["link_remove_flags"]); len(removals) > 0 {
 		merged["link_flags"] = applyFlagRemovals(ExtractStringList(merged["link_flags"]), removals)
-		delete(merged, "remove_link_flags")
+		delete(merged, "link_remove_flags")
 	}
 
 	return tg.resolveConfigMap(merged), nil
