@@ -42,6 +42,7 @@ templates:
           lib_dirs: "${item.lib_dirs}"
           libs: "${item.libs}"
           frameworks: "${item.frameworks}"
+          extra_flags: "${config.link_flags}"
   
   # C Static library: compile sources, archive into static library
   c_static_library:
@@ -81,6 +82,7 @@ templates:
         tool_params:
           lib_dirs: []
           libs: []
+          extra_flags: "${config.link_flags}"
   
   # C Executable: compile sources, link with libraries into executable
   c_executable:
@@ -121,3 +123,4 @@ templates:
           lib_dirs: ["${output_dir}/lib", "${output_dir}/bin", "${item.lib_dirs}"]
           libs: "${item.libs}"
           frameworks: "${item.frameworks}"
+          extra_flags: "${config.link_flags}"

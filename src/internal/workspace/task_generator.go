@@ -311,6 +311,17 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
+	// Merge target-level link flags into mergedConfig
+	if linkSection, ok := targetConfig["link"].(map[string]any); ok {
+		if linkFlags := ExtractStringList(linkSection["flags"]); len(linkFlags) > 0 {
+			existingLinkFlags := ExtractStringList(mergedConfig["link_flags"])
+			mergedConfig["link_flags"] = append(existingLinkFlags, linkFlags...)
+		}
+		if removals := ExtractStringList(linkSection["remove_flags"]); len(removals) > 0 {
+			mergedConfig["link_flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["link_flags"]), removals)
+		}
+	}
+
 	// Apply target-level flag/define removals
 	if removals := ExtractStringList(targetConfig["remove_flags"]); len(removals) > 0 {
 		mergedConfig["flags"] = applyFlagRemovals(ExtractStringList(mergedConfig["flags"]), removals)
@@ -535,7 +546,13 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 			if target, ok := targetRaw.(map[string]any); ok {
 				// Set the type based on which section this target came from
 				target["type"] = ts.defaultType
-				targetTasks, err := tg.generateTargetTasks(target, mergedConfig, outputDir, setupTask.TaskID, tasks)
+				// Copy mergedConfig so target-level mutations (appended defines/flags)
+				// don't leak into subsequent targets.
+				targetMergedConfig := make(map[string]any, len(mergedConfig))
+				for k, v := range mergedConfig {
+					targetMergedConfig[k] = v
+				}
+				targetTasks, err := tg.generateTargetTasks(target, targetMergedConfig, outputDir, setupTask.TaskID, tasks)
 				if err != nil {
 					return nil, err
 				}
@@ -1575,10 +1592,15 @@ func (tg *TaskGenerator) createTargetStagingTask(
 			// Executable paths
 			filepath.Join(outputDir, "bin", targetName),
 			filepath.Join(outputDir, "bin", targetName+".exe"),
-			// Library paths
+			// Library paths (with lib prefix)
 			filepath.Join(outputDir, "lib", "lib"+targetName+".so"),
 			filepath.Join(outputDir, "lib", "lib"+targetName+".a"),
 			filepath.Join(outputDir, "lib", "lib"+targetName+".dylib"),
+			// Library paths (without lib prefix)
+			filepath.Join(outputDir, "lib", targetName+".so"),
+			filepath.Join(outputDir, "lib", targetName+".a"),
+			filepath.Join(outputDir, "lib", targetName+".dylib"),
+			// Windows library paths
 			filepath.Join(outputDir, "lib", targetName+".dll"),
 			filepath.Join(outputDir, "lib", targetName+".lib"),
 		}

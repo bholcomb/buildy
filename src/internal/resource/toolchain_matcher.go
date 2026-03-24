@@ -102,3 +102,8 @@ func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
 	util.BuildWarning("toolchain", "No link tool found for output_type='%s'", outputType)
 	return nil
 }
+
+// GetOutputPrefix returns the toolchain's default output prefix for library filenames
+func (tm *ToolMatcher) GetOutputPrefix() string {
+	return tm.toolchain.OutputPrefix
+}

@@ -208,6 +208,46 @@ sources:
   - {pattern: "src/plugins/*.cpp", optional: true}  # Optional
 ```
 
+### Library Output Prefix
+
+The default library filename prefix is defined by the toolchain (e.g., `"lib"` for GCC/Clang, `""` for MSVC). You can override it per-target or at the environment level:
+
+```yaml
+# Per-target override
+targets:
+  shared_libraries:
+    - name: myplugin
+      language: cpp
+      sources: ["src/*.cpp"]
+      output_prefix: ""       # Produces myplugin.so instead of libmyplugin.so
+
+# Or globally in the environment section
+environment:
+  compile:
+    output_prefix: ""         # No lib prefix for any library in this project
+```
+
+### Custom Linker Flags
+
+You can pass custom flags to the linker using the `link:` section, available at both the environment level (all targets) and per-target:
+
+```yaml
+environment:
+  link:
+    flags: ["-Wl,-z,now"]          # Applied to all link commands
+    remove_flags: ["-s"]           # Remove specific linker flags
+
+targets:
+  shared_libraries:
+    - name: mylib
+      language: cpp
+      sources: ["src/*.cpp"]
+      link:
+        flags: ["-Wl,--version-script=mylib.map"]   # Per-target linker flags
+```
+
+This works identically to the compile flag system — environment flags are merged first, then target-level flags are appended. Use `remove_flags` to strip flags inherited from the environment or toolchain.
+
 ### Generated Sources
 
 For source files created by code generators (protobuf, etc.), use `depends_on.artifacts` to create a dependency on the artifact. Buildy will automatically include the artifact's outputs in your source globs, even though those files don't exist yet:

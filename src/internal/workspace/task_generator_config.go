@@ -38,6 +38,11 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 				globalConfig[k] = v
 			}
 		}
+		if link, ok := env["link"].(map[string]any); ok {
+			for k, v := range link {
+				globalConfig["link_"+k] = v
+			}
+		}
 		if envConfigs, ok := env["configurations"].(map[string]any); ok {
 			for configName, configData := range envConfigs {
 				if configMap, ok := configData.(map[string]any); ok {
@@ -97,6 +102,10 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 	if removals := ExtractStringList(merged["remove_defines"]); len(removals) > 0 {
 		merged["defines"] = applyFlagRemovals(ExtractStringList(merged["defines"]), removals)
 		delete(merged, "remove_defines")
+	}
+	if removals := ExtractStringList(merged["remove_link_flags"]); len(removals) > 0 {
+		merged["link_flags"] = applyFlagRemovals(ExtractStringList(merged["link_flags"]), removals)
+		delete(merged, "remove_link_flags")
 	}
 
 	return tg.resolveConfigMap(merged), nil
@@ -308,6 +317,35 @@ func (tg *TaskGenerator) mergeTargetConfig(base, override map[string]any) map[st
 						}
 					}
 					result[k] = mergedCompile
+				} else {
+					result[k] = v
+				}
+			} else {
+				result[k] = v
+			}
+
+		case "link":
+			// Link settings: deep merge (same pattern as compile)
+			if baseLink, ok := base["link"].(map[string]any); ok {
+				if overrideLink, ok := v.(map[string]any); ok {
+					mergedLink := make(map[string]any)
+					for lk, lv := range baseLink {
+						mergedLink[lk] = lv
+					}
+					for lk, lv := range overrideLink {
+						if lk == "flags" {
+							if baseFlags, ok := mergedLink["flags"].([]any); ok {
+								if overrideFlags, ok := lv.([]any); ok {
+									mergedLink["flags"] = append(baseFlags, overrideFlags...)
+								}
+							} else {
+								mergedLink[lk] = lv
+							}
+						} else {
+							mergedLink[lk] = lv
+						}
+					}
+					result[k] = mergedLink
 				} else {
 					result[k] = v
 				}

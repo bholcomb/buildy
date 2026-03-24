@@ -17,7 +17,9 @@ toolchain:
     type: native
     env:
       CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: "x86_64-w64-mingw32-gcc"
-  
+
+  output_prefix: ""
+
   tools:
     cargo_build:
       action: build

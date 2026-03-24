@@ -32,6 +32,8 @@ toolchain:
       debug: []
       release: []
 
+  output_prefix: "lib"
+
   tools:
     # C compilation
     c_compile:
@@ -62,7 +64,7 @@ toolchain:
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "shared_library"
         lib_dirs: true
@@ -76,7 +78,7 @@ toolchain:
       command: "x86_64-w64-mingw32-ar rcs ${output} ${objects}"
       input_extensions: [".o"]
       output_extension: ".a"
-      output_pattern: "lib${name}.a"
+      output_pattern: "${output_prefix}${name}.a"
       flags:
         common: []
         debug: []
@@ -96,7 +98,7 @@ toolchain:
       flags:
         common: []
         debug: []
-        release: ["-s"]
+        release: []
       supports:
         output_type: "executable"
         lib_dirs: true

@@ -18,7 +18,9 @@ toolchain:
     env:
       GOOS: windows
       GOARCH: amd64
-  
+
+  output_prefix: ""
+
   tools:
     go_build:
       action: build

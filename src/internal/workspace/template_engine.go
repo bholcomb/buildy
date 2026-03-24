@@ -730,9 +730,10 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
-	// Resolve output pattern using VarEnv (set name temporarily for resolution)
+	// Resolve output pattern using VarEnv (set name and output_prefix for resolution)
 	patternVarEnv := varEnv.CreateChild()
 	patternVarEnv.SetVariable("name", itemName, "output-pattern")
+	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
 	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
 
 	// Create step context with tool info
@@ -923,6 +924,11 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		frameworksParam = f
 	}
 
+	extraFlagsParam := []string{}
+	if e, ok := resolvedParams["extra_flags"].([]string); ok {
+		extraFlagsParam = e
+	}
+
 	// Build command
 	command, implib, err := commandBuilder.BuildLinkCommand(
 		tool,
@@ -931,39 +937,10 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		libDirsParam,
 		libsParam,
 		frameworksParam,
+		extraFlagsParam,
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	// Apply target-specific link flags from itemConfig["link"]["flags"]
-	if linkConfig, ok := itemConfig["link"].(map[string]any); ok {
-		if flagsConfig, ok := linkConfig["flags"].(map[string]any); ok {
-			// Check for platform-specific flags
-			platformKey := platform
-			if flags, ok := flagsConfig[platformKey].([]any); ok {
-				for _, f := range flags {
-					if flagStr, ok := f.(string); ok {
-						command = command + " " + flagStr
-					}
-				}
-			}
-			// Also check for "common" flags
-			if flags, ok := flagsConfig["common"].([]any); ok {
-				for _, f := range flags {
-					if flagStr, ok := f.(string); ok {
-						command = command + " " + flagStr
-					}
-				}
-			}
-		} else if flags, ok := linkConfig["flags"].([]any); ok {
-			// Flat array of flags (not platform-specific)
-			for _, f := range flags {
-				if flagStr, ok := f.(string); ok {
-					command = command + " " + flagStr
-				}
-			}
-		}
 	}
 
 	// Build outputs list - primary output plus any secondary outputs (like import libraries)
@@ -1028,9 +1005,10 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	if name, ok := itemConfig["name"].(string); ok {
 		itemName = name
 	}
-	// Resolve output pattern using VarEnv (set name temporarily for resolution)
+	// Resolve output pattern using VarEnv (set name and output_prefix for resolution)
 	patternVarEnv := varEnv.CreateChild()
 	patternVarEnv.SetVariable("name", itemName, "output-pattern")
+	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
 	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
 
 	// Create step context with tool info
@@ -1160,4 +1138,14 @@ func computeSourceStem(source, moduleDir string) string {
 	stem := strings.TrimSuffix(relPath, ext)
 
 	return stem
+}
+
+func resolveOutputPrefix(itemConfig, mergedConfig map[string]any, toolMatcher *resource.ToolMatcher) string {
+	if prefix, ok := itemConfig["output_prefix"].(string); ok {
+		return prefix
+	}
+	if prefix, ok := mergedConfig["output_prefix"].(string); ok {
+		return prefix
+	}
+	return toolMatcher.GetOutputPrefix()
 }

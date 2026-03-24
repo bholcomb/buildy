@@ -55,13 +55,13 @@ var knownTargetKeys = map[string]bool{
 var knownLibraryKeys = map[string]bool{
 	"name": true, "type": true, "language": true, "sources": true,
 	"include_dirs": true, "deps": true, "libs": true, "depends_on": true,
-	"compile": true, "toolchain": true, "defines": true, "flags": true,
+	"compile": true, "link": true, "toolchain": true, "defines": true, "flags": true,
 }
 
 var knownExecutableKeys = map[string]bool{
 	"name": true, "language": true, "sources": true, "include_dirs": true,
 	"deps": true, "libs": true, "depends_on": true,
-	"compile": true, "toolchain": true, "defines": true, "flags": true,
+	"compile": true, "link": true, "toolchain": true, "defines": true, "flags": true,
 	// Go-specific keys (when language: go)
 	"path": true, "output": true, "build_tags": true, "ldflags": true,
 	// Rust-specific keys (when language: rust)

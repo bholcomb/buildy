@@ -15,7 +15,9 @@ toolchain:
   
   execution:
     type: native
-  
+
+  output_prefix: ""
+
   tools:
     cargo_build:
       action: build

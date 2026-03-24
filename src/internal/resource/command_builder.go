@@ -146,7 +146,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	tool *Tool,
 	objects []string,
 	output string,
-	libDirs, libs, frameworks []string,
+	libDirs, libs, frameworks, extraFlags []string,
 ) (string, string, error) {
 	if libDirs == nil {
 		libDirs = []string{}
@@ -156,6 +156,9 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	}
 	if frameworks == nil {
 		frameworks = []string{}
+	}
+	if extraFlags == nil {
+		extraFlags = []string{}
 	}
 
 	// Build template variables
@@ -247,6 +250,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	configFlags := tool.Flags[cb.configType]
 	allFlags := append([]string{}, commonFlags...)
 	allFlags = append(allFlags, configFlags...)
+	allFlags = append(allFlags, extraFlags...)
 	templateVars["flags"] = strings.Join(allFlags, " ")
 
 	// Build command
