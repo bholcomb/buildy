@@ -285,6 +285,11 @@ func (bc *BuildCache) CacheTaskResult(task *workspace.BuildTask, executionTime f
 
 	if depFile != "" && task.TaskType == "compile" {
 		rawHeaderDeps := bc.parseDependencyFile(depFile)
+		// Mark that we successfully parsed the dep file, even if no headers were found.
+		// A non-nil empty slice distinguishes "parsed, zero headers" (e.g. sqlite3
+		// amalgamation) from "never parsed" (nil), so the cache validator won't
+		// force a rebuild on files that legitimately have no header dependencies.
+		headerDeps = make([]string, 0, len(rawHeaderDeps))
 		// Calculate and store hashes for all header dependencies
 		// Normalize paths for consistent lookup on case-insensitive filesystems (Windows)
 		for _, headerPath := range rawHeaderDeps {

@@ -78,11 +78,12 @@ func (cd *ChangeDetector) IsCachedResultValid(task *workspace.BuildTask) bool {
 		}
 	}
 
-	// For compile tasks, we require header dependency information to be present
-	// If no header hashes are recorded, this is a first-time build and we must
-	// rebuild to capture header dependencies (Option C)
+	// For compile tasks, we require header dependency information to be present.
+	// A nil HeaderDependencies means the .d file was never parsed (true first build).
+	// A non-nil but empty slice means the dep file was parsed and found zero headers
+	// (e.g. the sqlite3 amalgamation), which is a valid cached state.
 	if task.TaskType == "compile" {
-		if len(cacheEntry.HeaderHashes) == 0 && len(cacheEntry.HeaderDependencies) == 0 {
+		if cacheEntry.HeaderDependencies == nil && len(cacheEntry.HeaderHashes) == 0 {
 			util.LogInfo("Cache miss for %s: no header dependencies recorded (first build)", task.TaskID)
 			return false
 		}

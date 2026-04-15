@@ -470,7 +470,7 @@ func main() {
 
 	// Generate and save build report
 	if result != nil {
-		reportPath := filepath.Join(workspaceCacheDir, "build_report.json")
+		reportPath := filepath.Join(workspaceCacheDir, fmt.Sprintf("build_report_%s.json", *configuration))
 		if err := result.SaveReport(reportPath); err != nil {
 			util.LogWarning("Failed to save build report: %v", err)
 		}
