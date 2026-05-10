@@ -1,4 +1,4 @@
-# Buildy
+# Buildy McBuildface
 
 A modern, data-driven build system for multi-language projects.
 
