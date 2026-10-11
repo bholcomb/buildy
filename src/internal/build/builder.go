@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,17 +37,20 @@ func NewBuilder(cacheDir string, maxWorkers int) (*Builder, error) {
 }
 
 // BuildWorkspace performs build for entire workspace
+//
+// ctx is the run's: when it is done (an interrupt), the running tasks are killed and no more start.
 func (b *Builder) BuildWorkspace(
+	ctx context.Context,
 	ws *workspace.Workspace,
 	configParser *workspace.ConfigParser,
 	targets []string,
 	options BuildOptions,
 ) (*BuildResult, error) {
 	util.LogProgress("Starting workspace build...")
-	
+
 	// Reset error collector for clean state
 	util.ResetErrorCollector()
-	
+
 	// Initialize build result
 	result := NewBuildResult()
 	result.Platform = configParser.Platform
@@ -133,6 +137,7 @@ func (b *Builder) BuildWorkspace(
 	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, ws.RootDir, options.Force)
 	executor.BuildResult = result // Pass result for tracking
 	executor.Timeout = options.Timeout
+	executor.Context = ctx
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
 	// Compact the cache: what the finished tasks recorded goes into its index
@@ -163,13 +168,13 @@ func (b *Builder) collectCompileCommands(allTasks []*workspace.BuildTask, result
 		if task.TaskType == "compile" && len(task.Inputs) > 0 {
 			// Get the source file (first input)
 			sourceFile := task.Inputs[0].Path
-			
+
 			// Make source file path absolute
 			absSource := sourceFile
 			if !filepath.IsAbs(sourceFile) {
 				absSource = filepath.Join(workspaceRoot, sourceFile)
 			}
-			
+
 			// Get output file (first output, typically .o file)
 			var outputFile string
 			for _, out := range task.Outputs {
@@ -178,11 +183,11 @@ func (b *Builder) collectCompileCommands(allTasks []*workspace.BuildTask, result
 					break
 				}
 			}
-			
+
 			result.AddCompileCommand(workspaceRoot, task.Command, absSource, outputFile)
 		}
 	}
-	
+
 	util.LogInfo("Collected %d compile commands for compile_commands.json", len(result.CompileTasks))
 }
 

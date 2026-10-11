@@ -72,11 +72,19 @@ func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
 	return dirs
 }
 
+// exitIfInterrupted exits with 130 if the run was interrupted.
+func exitIfInterrupted(ctx context.Context) {
+	if build.Interrupted(ctx) {
+		util.LogProgress("Build interrupted")
+		os.Exit(build.ExitInterrupted)
+	}
+}
+
 func main() {
-	// Initialize shutdown manager for graceful signal handling
-	shutdownManager := build.InitShutdownManager()
-	defer shutdownManager.Shutdown()
-	
+	// The first Ctrl-C cancels ctx: running commands are killed, and buildy stops and exits with
+	// 130; a second one exits at once
+	ctx := build.HandleInterrupts()
+
 	// Get the directory where the buildy executable is located
 	buildyDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
@@ -388,7 +396,8 @@ func main() {
 		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
 		// builds nothing, and uses what is already on disk.
 		depResolver.Timeout = *timeout
-		if err := depResolver.ResolveAll(context.Background(), *dryRun); err != nil {
+		if err := depResolver.ResolveAll(ctx, *dryRun); err != nil {
+			exitIfInterrupted(ctx)
 			util.LogFatal("Failed to resolve dependencies: %v", err)
 		}
 	}
@@ -423,18 +432,15 @@ func main() {
 	// Generate, validate, select (--target) and execute (or, with --dry-run, print the plan).
 	// The dependencies (cmake, make, meson, buildy) were built by ResolveAll.
 	result, err := builder.BuildWorkspace(
+		ctx,
 		ws,
 		configParser,
 		targets,
 		buildOptions,
 	)
 	
-	// Check if we were interrupted
-	if shutdownManager.IsShuttingDown() {
-		util.LogWarning("Build interrupted by signal")
-		os.Exit(130) // Standard exit code for SIGINT
-	}
-	
+	exitIfInterrupted(ctx)
+
 	if err != nil {
 		util.LogFatal("Build failed: %v", err)
 	}

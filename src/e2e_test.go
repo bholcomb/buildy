@@ -12,12 +12,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // buildyBinary is the binary under test, built by TestMain.
@@ -923,5 +929,204 @@ targets:
 		if !found {
 			t.Errorf("the warning of %s.c isn't shown under its task:\n%s", name, out)
 		}
+	}
+}
+
+// lockedBuffer is a buffer two goroutines can use.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// interrupt starts buildy in dir, waits until ready says it is where it should be interrupted,
+// sends it SIGINT, and returns its exit code and output. buildy must exit within 10 s.
+func interrupt(t *testing.T, dir string, ready func(output string) bool, args ...string) (int, string) {
+	t.Helper()
+	var output lockedBuffer
+	cmd := exec.Command(buildyBinary, args...)
+	cmd.Dir = dir
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	deadline := time.Now().Add(20 * time.Second)
+	for !ready(output.String()) {
+		select {
+		case <-exited:
+			t.Fatalf("buildy exited before it was interrupted:\n%s", output.String())
+		case <-time.After(50 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			<-exited
+			t.Fatalf("buildy never got ready to interrupt:\n%s", output.String())
+		}
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		cmd.Process.Kill()
+		<-exited
+		t.Fatalf("buildy didn't stop within 10 s of SIGINT:\n%s", output.String())
+	}
+	return cmd.ProcessState.ExitCode(), output.String()
+}
+
+// processGone waits up to 3 s for the process whose pid is in file to be gone.
+func processGone(t *testing.T, file string) bool {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("no pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 30 {
+		if p, err := os.FindProcess(pid); err != nil || p.Signal(syscall.Signal(0)) != nil {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if p, err := os.FindProcess(pid); err == nil {
+		p.Kill()
+	}
+	return false
+}
+
+// Findings 3.1 and 3.2: Ctrl-C stops buildy while a task runs: its process group is killed, its
+// partial output removed, and buildy exits with 130; the tasks that finished keep their cache
+// entries.
+func TestE2EInterruptATask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the case uses sh and SIGINT")
+	}
+	needTools(t, "gcc", "sh")
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), `project:
+  name: interrupt
+environment:
+  compile:
+    c_standard: c11
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: [main.c]
+artifacts:
+  generate:
+    - name: slow
+      tool: slowgen
+      inputs: [slow.in]
+      outputs: ["${gen_dir}/${basename}.out"]
+`)
+	writeFile(t, filepath.Join(dir, "main.c"), "int main(void) { return 0; }\n")
+	writeFile(t, filepath.Join(dir, "slow.in"), "x\n")
+	// The tool writes part of its output, then waits in a child process
+	writeFile(t, filepath.Join(dir, "buildy_config", "toolchains", "slowgen.yaml"), `toolchain:
+  name: slowgen
+  target: {platform: any, architecture: any}
+  host: {platform: any, architecture: any}
+  tools:
+    gen:
+      action: generate
+      command: "sh -c 'echo partial > \"$1\"; sleep 30 & echo $! > \"$0.pid\"; wait' ${input} ${output}"
+      input_extensions: [".in"]
+`)
+	pidFile := filepath.Join(dir, "slow.in.pid")
+	ready := func(out string) bool {
+		_, err := os.Stat(pidFile)
+		return err == nil && strings.Contains(out, "link_app_001__root (")
+	}
+	code, out := interrupt(t, dir, ready)
+	if code != 130 {
+		t.Errorf("exit code %d, want 130:\n%s", code, out)
+	}
+	if !processGone(t, pidFile) {
+		t.Error("the task's child survived the interrupt")
+	}
+	partial := filepath.Join(outDir(dir, "debug"), "gen", "slow.out")
+	if _, err := os.Stat(partial); err == nil {
+		t.Error("the interrupted task's partial output was left")
+	}
+	// The app's tasks finished before the interrupt: their entries were kept
+	if out := mustBuildy(t, dir, "--target", "app"); !strings.Contains(out, "2 cache hits, 0 executed") {
+		t.Errorf("the finished tasks lost their cache entries:\n%s", tail(out, 20))
+	}
+}
+
+// Finding 3.1: Ctrl-C stops a download from a server that never answers.
+func TestE2EInterruptAFetch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the case uses SIGINT")
+	}
+	stop := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(stop)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: fetch\n")
+	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
+		fmt.Sprintf("slowdep:\n  url: %q\n", server.URL+"/slowdep-1.0.tar.gz"))
+	code, out := interrupt(t, dir, func(out string) bool { return strings.Contains(out, "Fetching URL") })
+	if code != 130 {
+		t.Errorf("exit code %d, want 130:\n%s", code, out)
+	}
+}
+
+// Finding 3.1: Ctrl-C stops a dependency's build, killing its processes.
+func TestE2EInterruptADependencyBuild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the case uses make and SIGINT")
+	}
+	needTools(t, "git", "make", "sh")
+	repo := filepath.Join(t.TempDir(), "dep")
+	writeFile(t, filepath.Join(repo, "Makefile"), "all:\n\tsleep 30 & echo $$! > \"$(CURDIR)/sleep.pid\"; wait\n")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "add", "."},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "dep"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: depbuild\n")
+	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
+		fmt.Sprintf("slowdep:\n  git: %q\n  build: {system: make}\n", repo))
+	pidFile := filepath.Join(dir, ".buildy_cache", "deps", "slowdep", "sleep.pid")
+	code, out := interrupt(t, dir, func(string) bool { _, err := os.Stat(pidFile); return err == nil })
+	if code != 130 {
+		t.Errorf("exit code %d, want 130:\n%s", code, out)
+	}
+	if !processGone(t, pidFile) {
+		t.Error("the dependency build's child survived the interrupt")
 	}
 }

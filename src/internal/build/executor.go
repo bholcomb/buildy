@@ -25,21 +25,19 @@ import (
 // exists afterwards came from this run; after it exits 0, every declared output exists and a
 // declared dependency file parses, or the task fails. Only then is a cache entry written.
 type TaskExecutor struct {
-	Cache           *cache.BuildCache
-	MaxWorkers      int
-	Timeout         time.Duration   // How long a task may run (0: no limit)
-	Context         context.Context // Done when the build is interrupted: running tasks are killed
-	WorkDir         string          // The workspace root: commands run here; relative dependency-file paths are relative to it
-	DockerMounts    []string        // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
-	DisableCache    bool
-	ExecutionStats  ExecutionStats
-	BuildResult     *BuildResult     // Optional: for tracking execution in build report
-	ShutdownManager *ShutdownManager // For graceful shutdown handling
-	mu              sync.Mutex
-	pendingOutputs  map[string][]string // Track outputs of in-progress tasks for cleanup
-	totalTaskCount  int                 // Total number of tasks for logging
-	producers       map[string]string   // Normalized output path -> task ID that produces it
-	tools           *toolIdentities     // What each program is, for cache keys
+	Cache          *cache.BuildCache
+	MaxWorkers     int
+	Timeout        time.Duration   // How long a task may run (0: no limit)
+	Context        context.Context // Done when the build is interrupted: running tasks are killed
+	WorkDir        string          // The workspace root: commands run here; relative dependency-file paths are relative to it
+	DockerMounts   []string        // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
+	DisableCache   bool
+	ExecutionStats ExecutionStats
+	BuildResult    *BuildResult // Optional: for tracking execution in build report
+	mu             sync.Mutex
+	totalTaskCount int               // Total number of tasks for logging
+	producers      map[string]string // Normalized output path -> task ID that produces it
+	tools          *toolIdentities   // What each program is, for cache keys
 
 	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
 	runCommand func(ctx context.Context, spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeout time.Duration) (*util.ExecutionResult, error)
@@ -57,37 +55,17 @@ type ExecutionStats struct {
 // NewTaskExecutor creates a new TaskExecutor
 func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers int, workDir string, disableCache bool) *TaskExecutor {
 	te := &TaskExecutor{
-		Cache:           buildCache,
-		MaxWorkers:      maxWorkers,
-		WorkDir:         workDir,
-		DockerMounts:    resource.DockerMounts(workDir, buildCache.CacheDir()),
-		DisableCache:    disableCache,
-		ShutdownManager: GetShutdownManager(),
-		pendingOutputs:  make(map[string][]string),
-		producers:       make(map[string]string),
-		runCommand:      util.Run,
-		Context:         context.Background(),
+		Cache:        buildCache,
+		MaxWorkers:   maxWorkers,
+		WorkDir:      workDir,
+		DockerMounts: resource.DockerMounts(workDir, buildCache.CacheDir()),
+		DisableCache: disableCache,
+		producers:    make(map[string]string),
+		runCommand:   util.Run,
+		Context:      context.Background(),
 	}
 	te.tools = newToolIdentities(buildCache.HashFile)
-
-	// Register cleanup for pending outputs on shutdown
-	if te.ShutdownManager != nil {
-		te.ShutdownManager.RegisterCleanup(te.cleanupPendingOutputs)
-	}
-
 	return te
-}
-
-// cleanupPendingOutputs removes partial outputs from interrupted tasks
-func (te *TaskExecutor) cleanupPendingOutputs() {
-	te.mu.Lock()
-	defer te.mu.Unlock()
-
-	for taskID, outputs := range te.pendingOutputs {
-		util.LogInfo("Cleaning up partial outputs for interrupted task: %s", taskID)
-		CleanupPartialOutputs(outputs)
-	}
-	te.pendingOutputs = make(map[string][]string)
 }
 
 // ExecuteTaskGraph runs the graph's tasks, each as soon as its dependencies have finished, up to
@@ -184,7 +162,7 @@ func (te *TaskExecutor) schedule(graph *workspace.TaskGraph) (int, bool) {
 
 // stopping reports whether the build was interrupted.
 func (te *TaskExecutor) stopping() bool {
-	return te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown()
+	return te.Context.Err() != nil
 }
 
 // executeSingleTask runs one task under the task contract, or skips it on a valid cache hit.
@@ -236,24 +214,8 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 		return te.fail(task, 0, err)
 	}
 
-	// Track this task's outputs for cleanup on interruption
-	te.mu.Lock()
-	te.pendingOutputs[task.TaskID] = task.Outputs
-	te.mu.Unlock()
-
-	// Track task in shutdown manager
-	if te.ShutdownManager != nil {
-		te.ShutdownManager.TrackTask()
-		defer te.ShutdownManager.TaskDone()
-	}
-
 	output, runErr := te.run(task)
 	executionTime := time.Since(startTime).Seconds()
-
-	// Remove from pending outputs tracking
-	te.mu.Lock()
-	delete(te.pendingOutputs, task.TaskID)
-	te.mu.Unlock()
 
 	if runErr == nil {
 		runErr = checkOutputs(task)
@@ -262,7 +224,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 		runErr = te.Cache.Record(task, te.WorkDir)
 	}
 	if runErr != nil {
-		// Clean up partial outputs on failure
+		// A failed or interrupted (killed) task leaves no partial outputs
 		CleanupPartialOutputs(task.Outputs)
 		return te.fail(task, executionTime, runErr)
 	}
@@ -284,7 +246,11 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 
 // fail reports a failed task and records it.
 func (te *TaskExecutor) fail(task *workspace.BuildTask, executionTime float64, err error) bool {
-	util.LogProgress("[%d/%d] %s - FAILED: %v", task.TaskNumber, te.totalTaskCount, task.TaskID, err)
+	if te.stopping() {
+		util.LogProgress("[%d/%d] %s - interrupted", task.TaskNumber, te.totalTaskCount, task.TaskID)
+	} else {
+		util.LogProgress("[%d/%d] %s - FAILED: %v", task.TaskNumber, te.totalTaskCount, task.TaskID, err)
+	}
 	te.mu.Lock()
 	te.ExecutionStats.FailedTasks++
 	if te.BuildResult != nil {

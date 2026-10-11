@@ -2,155 +2,49 @@ package build
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"buildy/pkg/util"
 )
 
-// ShutdownManager handles graceful shutdown on signals
-type ShutdownManager struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	cleanupFns []func()
-	mu         sync.Mutex
-	shutdownCh chan struct{}
-	once       sync.Once
-}
+// ExitInterrupted is buildy's exit code when it was interrupted (128 + SIGINT, as shells report).
+const ExitInterrupted = 130
 
-// NewShutdownManager creates a new ShutdownManager that listens for interrupt signals
-func NewShutdownManager() *ShutdownManager {
-	ctx, cancel := context.WithCancel(context.Background())
-	
-	sm := &ShutdownManager{
-		ctx:        ctx,
-		cancel:     cancel,
-		cleanupFns: []func(){},
-		shutdownCh: make(chan struct{}),
-	}
-	
-	// Set up signal handling
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	
+// HandleInterrupts returns a context the first interrupt (Ctrl-C, SIGINT or SIGTERM) cancels:
+// everything that runs commands or fetches takes it, so the running commands' process groups are
+// killed, their partial outputs removed, nothing new starts, and the cache keeps what finished.
+// A second interrupt exits at once with ExitInterrupted.
+func HandleInterrupts() context.Context {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		select {
-		case sig := <-sigCh:
-			util.LogInfo("\nReceived signal: %v, initiating graceful shutdown...", sig)
-			sm.initiateShutdown()
-			
-			// Wait for second signal for force quit
-			select {
-			case <-sigCh:
-				util.LogInfo("Received second signal, forcing exit...")
-				os.Exit(1)
-			case <-sm.shutdownCh:
-				// Normal shutdown completed
-			}
-		case <-sm.ctx.Done():
-			// Context cancelled normally
-		}
+		sig := <-signals
+		util.LogProgress("Received %v: stopping the build (interrupt again to exit at once)", sig)
+		cancel(errInterrupted)
+		<-signals
+		util.LogProgress("Received a second interrupt: exiting")
+		os.Exit(ExitInterrupted)
 	}()
-	
-	return sm
+	return ctx
 }
 
-// Context returns the shutdown context
-func (sm *ShutdownManager) Context() context.Context {
-	return sm.ctx
+var errInterrupted = errors.New("interrupted")
+
+// Interrupted reports whether ctx was cancelled by an interrupt.
+func Interrupted(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errInterrupted)
 }
 
-// IsShuttingDown returns true if shutdown has been initiated
-func (sm *ShutdownManager) IsShuttingDown() bool {
-	select {
-	case <-sm.ctx.Done():
-		return true
-	default:
-		return false
-	}
-}
-
-// RegisterCleanup registers a cleanup function to be called on shutdown
-func (sm *ShutdownManager) RegisterCleanup(fn func()) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.cleanupFns = append(sm.cleanupFns, fn)
-}
-
-// TrackTask increments the wait group for an in-progress task
-func (sm *ShutdownManager) TrackTask() {
-	sm.wg.Add(1)
-}
-
-// TaskDone decrements the wait group when a task completes
-func (sm *ShutdownManager) TaskDone() {
-	sm.wg.Done()
-}
-
-// initiateShutdown begins the graceful shutdown process
-func (sm *ShutdownManager) initiateShutdown() {
-	sm.once.Do(func() {
-		// Cancel context to stop new work
-		sm.cancel()
-		
-		// Wait for in-progress tasks with a timeout
-		done := make(chan struct{})
-		go func() {
-			sm.wg.Wait()
-			close(done)
-		}()
-		
-		select {
-		case <-done:
-			util.LogInfo("All tasks completed gracefully")
-		default:
-			util.LogInfo("Waiting for in-progress tasks to complete...")
-			<-done
-		}
-		
-		// Run cleanup functions in reverse order
-		sm.mu.Lock()
-		cleanups := sm.cleanupFns
-		sm.mu.Unlock()
-		
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			cleanups[i]()
-		}
-		
-		close(sm.shutdownCh)
-	})
-}
-
-// Shutdown initiates a clean shutdown (for normal exit)
-func (sm *ShutdownManager) Shutdown() {
-	sm.initiateShutdown()
-}
-
-// CleanupPartialOutputs removes partial output files from interrupted tasks
+// CleanupPartialOutputs removes what a task that failed or was interrupted left of its outputs
 func CleanupPartialOutputs(outputs []string) {
 	for _, output := range outputs {
-		if _, err := os.Stat(output); err == nil {
-			util.LogInfo("Cleaning up partial output: %s", output)
-			if err := os.Remove(output); err != nil {
-				util.LogInfo("WARNING: Failed to remove partial output %s: %v", output, err)
-			}
+		if err := os.Remove(output); err != nil && !errors.Is(err, os.ErrNotExist) {
+			util.LogWarning("%v", fmt.Errorf("failed to remove the partial output %s: %w", output, err))
 		}
 	}
-}
-
-// Global shutdown manager instance
-var globalShutdownManager *ShutdownManager
-
-// InitShutdownManager initializes the global shutdown manager
-func InitShutdownManager() *ShutdownManager {
-	globalShutdownManager = NewShutdownManager()
-	return globalShutdownManager
-}
-
-// GetShutdownManager returns the global shutdown manager
-func GetShutdownManager() *ShutdownManager {
-	return globalShutdownManager
 }
