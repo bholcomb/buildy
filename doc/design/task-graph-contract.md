@@ -322,8 +322,9 @@ readability (S1), and the extraction is recorded against that key.
 `GOTOOLCHAIN=auto` fetches it, and CI's `setup-go` follows `go-version-file: src/go.mod`). The
 extraction root is opened as an `os.Root`, which confines every operation, including following
 symlinks, to the temporary directory; `Root.MkdirAll`, `Root.Symlink` and `Root.Link` (new in 1.25)
-create the tree. The checks in steps 1 to 4 stay for clear error messages and for symlink targets,
-which `Root.Symlink` does not validate.
+create the tree. That replaces the parent walk of step 2. Steps 1, 3 and 4 stay: they give clear
+errors, and `Root.Symlink` does not validate link targets. The extraction is recorded in a marker
+file next to `dest` (URL and archive SHA-256); `dest` is reused only when the marker matches.
 
 A dependency's own build scripts run with full user rights anyway, so extraction safety is about
 not clobbering files during unpacking, not about sandboxing the dependency.

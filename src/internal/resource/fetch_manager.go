@@ -124,7 +124,12 @@ func (fm *FetchManager) GetGitCommit(dest string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// FetchURL downloads and extracts an archive from a URL
+// FetchURL downloads an archive from a URL and extracts it into dest.
+//
+// Downloads are cached under downloads/ by a hash of the full URL (plus its basename, for
+// readability), so two URLs with the same file name never share a download. The extraction is
+// recorded in dest's marker file against the URL and the archive's SHA-256; dest is reused only
+// when the marker matches, so a partial or stale extraction is never accepted.
 func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 	util.LogProgress("Fetching URL: %s -> %s", url, dest)
 
@@ -139,18 +144,11 @@ func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 		return fmt.Errorf("failed to create download directory: %w", err)
 	}
 
-	// Generate filename from URL
-	filename := filepath.Base(url)
-	if filename == "" || filename == "." {
-		// Use hash of URL as filename
-		hash := sha256.Sum256([]byte(url))
-		filename = hex.EncodeToString(hash[:8])
-	}
-	downloadPath := filepath.Join(downloadDir, filename)
+	filename := urlBasename(url)
+	downloadPath := fm.downloadPath(url)
 	metadataPath := downloadPath + ".meta.json"
 
-	// Check if we can skip: archive exists in cache, is valid, and dest has files
-	canSkip := false
+	// A cached archive is reused only if it still verifies.
 	if _, err := os.Stat(downloadPath); err == nil {
 		archiveValid := true
 
@@ -158,48 +156,25 @@ func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 		if checksum != "" {
 			if err := fm.verifyChecksum(downloadPath, checksum); err != nil {
 				util.LogProgress("Cached archive checksum mismatch, re-downloading")
-				os.Remove(downloadPath)
-				os.Remove(metadataPath)
 				archiveValid = false
 			}
-		} else {
-			// No config checksum - try to verify against stored metadata
-			if err := fm.verifyAgainstMetadata(downloadPath, metadataPath); err != nil {
-				util.LogProgress("Cached archive failed metadata verification: %v", err)
-				os.Remove(downloadPath)
-				os.Remove(metadataPath)
-				archiveValid = false
-			}
+		} else if err := fm.verifyAgainstMetadata(downloadPath, metadataPath); err != nil {
+			util.LogProgress("Cached archive failed metadata verification: %v", err)
+			archiveValid = false
 		}
 
 		// Verify archive integrity (can we open/read it?)
 		if archiveValid {
 			if err := fm.verifyArchiveIntegrity(downloadPath, filename); err != nil {
 				util.LogProgress("Cached archive appears corrupted, re-downloading: %v", err)
-				os.Remove(downloadPath)
-				os.Remove(metadataPath)
 				archiveValid = false
 			}
 		}
 
-		if archiveValid {
-			// Check if destination exists and has content
-			if fm.isValidExtraction(dest) {
-				util.LogProgress("Using cached archive, destination exists: %s", dest)
-				canSkip = true
-			}
-			// If archive is valid but dest doesn't exist, we fall through to extraction
+		if !archiveValid {
+			os.Remove(downloadPath)
+			os.Remove(metadataPath)
 		}
-	}
-
-	if canSkip {
-		return nil
-	}
-
-	// Clean up any partial extraction before re-extracting
-	if _, err := os.Stat(dest); err == nil {
-		util.LogProgress("Cleaning up incomplete extraction: %s", dest)
-		os.RemoveAll(dest)
 	}
 
 	// Download if not already cached (or was removed due to corruption/checksum mismatch)
@@ -235,22 +210,94 @@ func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 
 		// Save metadata
 		if err := fm.saveDownloadMetadata(metadataPath, url, checksum, downloadPath); err != nil {
-			util.LogWarning("Failed to save download metadata: %v", err)
+			return fmt.Errorf("failed to save download metadata: %w", err)
 		}
 	}
 
-	// Create destination directory
-	if err := os.MkdirAll(dest, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+	archiveHash, err := fm.computeFileHash(downloadPath)
+	if err != nil {
+		return fmt.Errorf("failed to hash %s: %w", downloadPath, err)
+	}
+	marker := extractionMarker{URL: url, SHA256: archiveHash}
+	if fm.hasExtraction(dest, marker) {
+		util.LogProgress("Using cached archive, destination exists: %s", dest)
+		return nil
 	}
 
-	// Extract archive
-	if err := fm.extractArchive(downloadPath, dest); err != nil {
-		os.RemoveAll(dest)
-		return fmt.Errorf("extraction failed: %w", err)
+	// Drop the old marker first: if this run dies mid-extraction, dest stays unmarked.
+	os.Remove(extractionMarkerPath(dest))
+	if err := extractArchive(downloadPath, filename, dest); err != nil {
+		return fmt.Errorf("extraction of %s failed: %w", url, err)
+	}
+	if err := writeExtractionMarker(dest, marker); err != nil {
+		return err
 	}
 
 	util.LogProgress("Successfully fetched and extracted %s", url)
+	return nil
+}
+
+// urlBasename returns the file name at the end of a URL, for archive format detection and
+// readable cache names.
+func urlBasename(url string) string {
+	name := url
+	if i := strings.IndexAny(name, "?#"); i >= 0 {
+		name = name[:i]
+	}
+	name = name[strings.LastIndex(name, "/")+1:]
+	safe := strings.Map(func(r rune) rune {
+		if r == '.' || r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+	if safe == "" || safe == "." || safe == ".." {
+		return "download"
+	}
+	return safe
+}
+
+// downloadPath returns where the archive for url is cached: a hash of the whole URL, so that
+// URLs sharing a basename don't share a file, then the basename.
+func (fm *FetchManager) downloadPath(url string) string {
+	hash := sha256.Sum256([]byte(url))
+	return filepath.Join(fm.cacheDir, "downloads", hex.EncodeToString(hash[:8])+"-"+urlBasename(url))
+}
+
+// extractionMarker records what an extraction directory was extracted from.
+type extractionMarker struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+}
+
+// extractionMarkerPath is the marker file next to an extraction directory (not inside it, so the
+// fetched tree stays as the archive made it).
+func extractionMarkerPath(dest string) string {
+	return dest + ".extracted.json"
+}
+
+// hasExtraction reports whether dest holds a complete extraction of the archive in marker.
+func (fm *FetchManager) hasExtraction(dest string, marker extractionMarker) bool {
+	data, err := os.ReadFile(extractionMarkerPath(dest))
+	if err != nil {
+		return false
+	}
+	var recorded extractionMarker
+	if json.Unmarshal(data, &recorded) != nil || recorded != marker {
+		return false
+	}
+	info, err := os.Stat(dest)
+	return err == nil && info.IsDir()
+}
+
+func writeExtractionMarker(dest string, marker extractionMarker) error {
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(extractionMarkerPath(dest), data, 0o644); err != nil {
+		return fmt.Errorf("failed to record the extraction of %s: %w", dest, err)
+	}
 	return nil
 }
 
@@ -449,45 +496,7 @@ func (fm *FetchManager) loadDownloadMetadata(metadataPath string) (*DownloadMeta
 // GetDownloadMetadata returns the metadata for a cached download by URL
 // This is useful for lockfile generation to get the SHA256 hash
 func (fm *FetchManager) GetDownloadMetadata(url string) (*DownloadMetadata, error) {
-	downloadDir := filepath.Join(fm.cacheDir, "downloads")
-
-	// Generate filename from URL (same logic as FetchURL)
-	filename := filepath.Base(url)
-	if filename == "" || filename == "." {
-		hash := sha256.Sum256([]byte(url))
-		filename = hex.EncodeToString(hash[:8])
-	}
-	metadataPath := filepath.Join(downloadDir, filename+".meta.json")
-
-	return fm.loadDownloadMetadata(metadataPath)
-}
-
-// isValidExtraction checks if a destination directory exists and contains files
-// This helps detect incomplete extractions without using marker files
-func (fm *FetchManager) isValidExtraction(dest string) bool {
-	info, err := os.Stat(dest)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-
-	// Check that directory is not empty - read first few entries
-	entries, err := os.ReadDir(dest)
-	if err != nil || len(entries) == 0 {
-		return false
-	}
-
-	// For extra validation, check that at least one entry is a directory or file
-	// (not just a symlink or empty structure)
-	for _, entry := range entries {
-		entryPath := filepath.Join(dest, entry.Name())
-		if info, err := os.Stat(entryPath); err == nil {
-			if info.IsDir() || info.Size() > 0 {
-				return true
-			}
-		}
-	}
-
-	return false
+	return fm.loadDownloadMetadata(fm.downloadPath(url) + ".meta.json")
 }
 
 // downloadFile downloads a file from a URL with progress reporting
@@ -583,189 +592,6 @@ func (fm *FetchManager) verifyChecksum(filePath, expected string) error {
 	actualHash := hex.EncodeToString(hash.Sum(nil))
 	if actualHash != expectedHash {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
-	}
-
-	return nil
-}
-
-// extractArchive extracts an archive to a destination directory
-func (fm *FetchManager) extractArchive(archivePath, dest string) error {
-	ext := strings.ToLower(filepath.Ext(archivePath))
-
-	// Handle double extensions like .tar.gz
-	if strings.HasSuffix(strings.ToLower(archivePath), ".tar.gz") || strings.HasSuffix(strings.ToLower(archivePath), ".tgz") {
-		return fm.extractTarGz(archivePath, dest)
-	}
-
-	switch ext {
-	case ".zip":
-		return fm.extractZip(archivePath, dest)
-	case ".tar":
-		return fm.extractTar(archivePath, dest)
-	case ".gz":
-		// Check if it's a tar.gz
-		if strings.HasSuffix(strings.ToLower(archivePath), ".tar.gz") {
-			return fm.extractTarGz(archivePath, dest)
-		}
-		return fmt.Errorf("unsupported archive format: %s", ext)
-	default:
-		return fmt.Errorf("unsupported archive format: %s", ext)
-	}
-}
-
-// extractTarGz extracts a .tar.gz archive
-func (fm *FetchManager) extractTarGz(archivePath, dest string) error {
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	gzr, err := gzip.NewReader(file)
-	if err != nil {
-		return err
-	}
-	defer gzr.Close()
-
-	return fm.extractTarReader(tar.NewReader(gzr), dest)
-}
-
-// extractTar extracts a .tar archive
-func (fm *FetchManager) extractTar(archivePath, dest string) error {
-	file, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	return fm.extractTarReader(tar.NewReader(file), dest)
-}
-
-// extractTarReader extracts from a tar reader
-func (fm *FetchManager) extractTarReader(tr *tar.Reader, dest string) error {
-	// Track the common prefix to strip (e.g., "project-1.0.0/")
-	var commonPrefix string
-	firstEntry := true
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		// Determine common prefix from first entry
-		if firstEntry {
-			parts := strings.SplitN(header.Name, "/", 2)
-			if len(parts) > 1 {
-				commonPrefix = parts[0] + "/"
-			}
-			firstEntry = false
-		}
-
-		// Strip common prefix
-		name := header.Name
-		if commonPrefix != "" && strings.HasPrefix(name, commonPrefix) {
-			name = strings.TrimPrefix(name, commonPrefix)
-		}
-
-		if name == "" {
-			continue
-		}
-
-		target := filepath.Join(dest, name)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			outFile, err := os.Create(target)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
-				return err
-			}
-			outFile.Close()
-			os.Chmod(target, os.FileMode(header.Mode))
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			os.Symlink(header.Linkname, target)
-		}
-	}
-
-	return nil
-}
-
-// extractZip extracts a .zip archive
-func (fm *FetchManager) extractZip(archivePath, dest string) error {
-	r, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	// Track the common prefix to strip
-	var commonPrefix string
-	if len(r.File) > 0 {
-		parts := strings.SplitN(r.File[0].Name, "/", 2)
-		if len(parts) > 1 {
-			commonPrefix = parts[0] + "/"
-		}
-	}
-
-	for _, f := range r.File {
-		// Strip common prefix
-		name := f.Name
-		if commonPrefix != "" && strings.HasPrefix(name, commonPrefix) {
-			name = strings.TrimPrefix(name, commonPrefix)
-		}
-
-		if name == "" {
-			continue
-		}
-
-		target := filepath.Join(dest, name)
-
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, f.Mode())
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
-		}
-
-		outFile, err := os.Create(target)
-		if err != nil {
-			return err
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return err
-		}
-
-		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
-
-		if err != nil {
-			return err
-		}
-
-		os.Chmod(target, f.Mode())
 	}
 
 	return nil

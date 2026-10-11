@@ -70,10 +70,11 @@ project/
 └── .buildy_cache/                 # Build cache (git-ignored)
     ├── cache_index.json           # Content-addressable cache index
     ├── deps/                      # Fetched dependency sources
-    │   └── glfw3/                 # Extracted dependency
-    ├── downloads/                 # Cached archive downloads
-    │   ├── glfw-3.4.zip           # Downloaded archive
-    │   └── glfw-3.4.zip.meta.json # Download metadata (SHA256, etc.)
+    │   ├── glfw3/                 # Extracted dependency
+    │   └── glfw3.extracted.json   # What glfw3/ was extracted from (URL, SHA256)
+    ├── downloads/                 # Cached archive downloads, keyed by a hash of the URL
+    │   ├── 3f2a…-glfw-3.4.zip           # Downloaded archive
+    │   └── 3f2a…-glfw-3.4.zip.meta.json # Download metadata (SHA256, etc.)
     ├── objects/                   # Compiled object files
     └── response_files/            # Compiler response files
 ```
@@ -446,13 +447,15 @@ When fetching URL dependencies, buildy uses a robust caching and validation proc
 1. **Temp file downloads** - Archives are downloaded to a temporary file first, then moved to the cache only after validation passes
 2. **Checksum verification** - If a `checksum` is provided, the archive is verified against it
 3. **Archive integrity** - The archive is opened and verified to be readable (not corrupted/truncated)
-4. **Metadata storage** - A `.meta.json` file is stored alongside each cached archive containing:
+4. **Cache key** - The cached file is named by a hash of the whole URL plus its basename
+   (`<hash>-glfw-3.4.zip`), so two URLs ending in the same file name never share a download
+5. **Metadata storage** - A `.meta.json` file is stored alongside each cached archive containing:
    - Original URL
    - SHA256 hash (computed from the downloaded file)
    - File size
    - Download timestamp
 
-Example metadata file (`.buildy_cache/downloads/glfw-3.4.zip.meta.json`):
+Example metadata file (`.buildy_cache/downloads/<hash>-glfw-3.4.zip.meta.json`):
 ```json
 {
   "url": "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
@@ -466,6 +469,14 @@ Example metadata file (`.buildy_cache/downloads/glfw-3.4.zip.meta.json`):
 The stored SHA256 hash is used for:
 - **Re-extraction validation** - If the extracted directory is deleted but the archive remains, the archive is verified against its stored hash before re-extracting
 - **Lockfile generation** - The hash is included in `dependencies.lock` for reproducible builds
+
+**Safe extraction:** an archive is extracted into a new temporary directory next to `deps/<name>/`
+and renamed into place only when every entry was written, so an interrupted extraction is never
+mistaken for a complete one. The extracted directory is reused only while `deps/<name>.extracted.json`
+names the same URL and archive SHA256. Every entry is confined to the extraction directory: names
+that are absolute or contain `..`, and symlinks or hard links pointing outside it, fail the fetch
+with an error naming the entry. Setuid, setgid and sticky bits are dropped. If every entry sits under
+one top-level directory (`glfw-3.4/`), that directory is stripped.
 
 **Warning:** If no `checksum` is provided in the dependency configuration, buildy will log a warning encouraging you to add one for reproducible builds.
 
