@@ -133,11 +133,12 @@ func kwargValues(value any) []string {
 	return []string{fmt.Sprint(value)}
 }
 
-func orDefault(value, def string) string {
-	if value == "" {
+// orDefault returns a flag's spelling: the tool's, or def if the tool doesn't set it.
+func orDefault(flag *string, def string) string {
+	if flag == nil {
 		return def
 	}
-	return value
+	return *flag
 }
 
 // BuildLinkCommand builds a link command from the tool's template. It also returns the import

@@ -135,24 +135,26 @@ func (t *Tool) Expand(platform string, exec util.ExecSpec, values Values) (util.
 	return util.Command{Args: args, ResponseFile: t.ResponseFile}, nil
 }
 
-// Supports is what a tool supports and how it spells it.
+// Supports is what a tool supports and how it spells it. A *_flag that is not set has a
+// default (-D, -I, -fPIC, -L, -l, "-framework "); one set to "" is no flag at all (MSVC's
+// libraries are named as they are).
 type Supports struct {
 	Defines       bool            `yaml:"defines" json:"defines"`
-	DefineFlag    string          `yaml:"define_flag" json:"define_flag"`
+	DefineFlag    *string         `yaml:"define_flag" json:"define_flag"`
 	Includes      bool            `yaml:"includes" json:"includes"`
-	IncludeFlag   string          `yaml:"include_flag" json:"include_flag"`
+	IncludeFlag   *string         `yaml:"include_flag" json:"include_flag"`
 	PIC           bool            `yaml:"pic" json:"pic"`
-	PICFlag       string          `yaml:"pic_flag" json:"pic_flag"`
+	PICFlag       *string         `yaml:"pic_flag" json:"pic_flag"`
 	Std           bool            `yaml:"std" json:"std"`
 	Dependencies  CommandTemplate `yaml:"dependencies" json:"dependencies"` // dependency file arguments, with ${dep_file}
 	OutputType    string          `yaml:"output_type" json:"output_type"`   // link tools: what they produce
 	LibDirs       bool            `yaml:"lib_dirs" json:"lib_dirs"`
-	LibDirFlag    string          `yaml:"lib_dir_flag" json:"lib_dir_flag"`
+	LibDirFlag    *string         `yaml:"lib_dir_flag" json:"lib_dir_flag"`
 	Libs          bool            `yaml:"libs" json:"libs"`
-	LibFlag       string          `yaml:"lib_flag" json:"lib_flag"`
+	LibFlag       *string         `yaml:"lib_flag" json:"lib_flag"`
 	LibSuffix     string          `yaml:"lib_suffix" json:"lib_suffix"`
 	Frameworks    bool            `yaml:"frameworks" json:"frameworks"`
-	FrameworkFlag string          `yaml:"framework_flag" json:"framework_flag"`
+	FrameworkFlag *string         `yaml:"framework_flag" json:"framework_flag"`
 	Implib        bool            `yaml:"implib" json:"implib"`
 
 	// Documented for Go and Rust build tools. Their command_params do the work; buildy doesn't

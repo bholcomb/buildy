@@ -84,6 +84,21 @@ func TestBuildCommandWordsAndSeparateFlags(t *testing.T) {
 		t.Errorf("cl command\n  %s\nwant\n  %s", got, want)
 	}
 
+	var link *Tool
+	for _, l := range msvc.ToolsWithAction("link") {
+		if l.Supports.OutputType == "executable" {
+			link = l
+		}
+	}
+	cmd, _, err = cb.BuildLinkCommand(link, []string{`C:\ws\a.obj`}, `C:\ws\bin\app.exe`, []string{`C:\my libs`}, []string{"glfw3", "user32.lib"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `link.exe | /nologo | C:\ws\a.obj | /LIBPATH:C:\my libs | glfw3.lib | user32.lib | /OUT:C:\ws\bin\app.exe`
+	if got := argv(cmd.Args); got != want {
+		t.Errorf("link command\n  %s\nwant\n  %s", got, want)
+	}
+
 	clang := builtinToolchain(t, "clang-c-macos-arm64")
 	var exe *Tool
 	for _, l := range clang.ToolsWithAction("link") {
