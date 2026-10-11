@@ -24,8 +24,8 @@ toolchain:
       output_extension: ".dds"
       flags:
         common: ["-f", "BC7_UNORM"]
-        debug: ["-f", "BC7_UNORM"]
-        release: ["-f", "BC7_UNORM"]
+        debug: []
+        release: []
       supports:
         defines: false
         includes: false

@@ -23,7 +23,8 @@ toolchain:
       input_extensions: [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"]
       output_extension: ".png"
       flags:
-        common: ["-quality", "95"]
+        # A configuration's flags follow the common ones
+        common: []
         debug: ["-quality", "100"]
         release: ["-quality", "95", "-strip"]
       supports:

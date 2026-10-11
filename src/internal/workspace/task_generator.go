@@ -519,12 +519,12 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 	}
 
 	// Artifacts first, so targets can depend on them (depends_on.artifacts)
-	generateTasks, err := tg.generateGenerateTasks(file.Artifacts.Generate, outputDir)
+	generateTasks, err := tg.generateGenerateTasks(file, outputDir)
 	if err != nil {
 		return nil, err
 	}
 	tasks = append(tasks, generateTasks...)
-	transformTasks, err := tg.generateTransformTasks(file.Artifacts.Transform, outputDir)
+	transformTasks, err := tg.generateTransformTasks(file, outputDir)
 	if err != nil {
 		return nil, err
 	}
@@ -711,10 +711,23 @@ func setToolchainVariables(env *util.VariableEnvironment, toolchain *resource.To
 	}
 }
 
+// toolFlags are the flags a transform or generate tool gets, as a compile tool does: the module's
+// abstract keywords as the tool's toolchain maps them, then the tool's common flags, then those
+// of the configuration.
+func (tg *TaskGenerator) toolFlags(file *config.File, toolchain *resource.ToolchainConfig, tool *resource.Tool, env *util.VariableEnvironment, what string) ([]string, error) {
+	flags, err := file.KeywordFlags(tg.getBuildContext(), toolchain.FlagMappings)
+	if err != nil {
+		return nil, fmt.Errorf("%s with toolchain %s: %w", what, toolchain.Name, err)
+	}
+	flags = append(flags, tool.Flags["common"]...)
+	flags = append(flags, tool.Flags[tg.Configuration]...)
+	return resolveAll(env, flags, "the flags of tool "+tool.Name)
+}
+
 // generateTransformTasks generates a task per input file of each artifacts.transform
-func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, outputDir string) ([]*BuildTask, error) {
+func (tg *TaskGenerator) generateTransformTasks(file *config.File, outputDir string) ([]*BuildTask, error) {
 	var tasks []*BuildTask
-	for _, t := range transforms {
+	for _, t := range file.Artifacts.Transform {
 		what := fmt.Sprintf("artifacts.transform '%s'", t.Name)
 		toolchain, execSpec, err := tg.toolchainFor(t.Tool, what)
 		if err != nil {
@@ -750,12 +763,8 @@ func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, 
 			}
 			env.SetVariable("output", output, "transform")
 			setToolchainVariables(env, toolchain)
-			flags := tool.Flags["common"]
-			if configFlags, ok := tool.Flags[tg.Configuration]; ok {
-				flags = configFlags
-			}
 			values := map[string][]string{"input": {inputFile}, "output": {output}, "defines": nil, "includes": nil}
-			if values["flags"], err = resolveAll(env, flags, "the flags of tool "+tool.Name); err != nil {
+			if values["flags"], err = tg.toolFlags(file, toolchain, tool, env, what); err != nil {
 				return nil, err
 			}
 			if values["args"], err = resolveAll(env, t.Args, "the args of "+what); err != nil {
@@ -787,11 +796,11 @@ func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, 
 
 // generateGenerateTasks generates the tasks of artifacts.generate: a template file filled in
 // with variables, or a tool run on each input file
-func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, outputDir string) ([]*BuildTask, error) {
+func (tg *TaskGenerator) generateGenerateTasks(file *config.File, outputDir string) ([]*BuildTask, error) {
 	var tasks []*BuildTask
 	genDir := filepath.Join(outputDir, "gen")
 
-	for _, g := range generates {
+	for _, g := range file.Artifacts.Generate {
 		what := fmt.Sprintf("artifacts.generate '%s'", g.Name)
 		if g.Template != "" {
 			task, err := tg.generateFromTemplate(g, outputDir, genDir, what)
@@ -844,7 +853,11 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 			if err != nil {
 				return nil, err
 			}
-			values := map[string][]string{"input": {inputFile}, "output": {resolvedOutputs[0]}, "args": args, "flags": nil, "defines": nil, "includes": nil}
+			flags, err := tg.toolFlags(file, toolchain, tool, env, what)
+			if err != nil {
+				return nil, err
+			}
+			values := map[string][]string{"input": {inputFile}, "output": {resolvedOutputs[0]}, "args": args, "flags": flags, "defines": nil, "includes": nil}
 			command, err := tool.Expand(tg.Platform, execSpec, envValues(values, env))
 			if err != nil {
 				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)

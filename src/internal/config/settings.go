@@ -70,11 +70,33 @@ func (f *File) Settings(ctx Context, mappings Ordered[Ordered[[]string]]) (Setti
 		LinkFlags:    m.Link.Flags.Resolve(ctx),
 	}
 
+	keywordFlags, err := keywordFlags(m.Compile.Keywords, mappings)
+	if err != nil {
+		return Settings{}, err
+	}
+	s.Flags = append(keywordFlags, s.Flags...)
+
+	s.Flags = Remove(s.Flags, m.Compile.RemoveFlags.Resolve(ctx))
+	s.Defines = Remove(s.Defines, m.Compile.RemoveDefines.Resolve(ctx))
+	s.LinkFlags = Remove(s.LinkFlags, m.Link.RemoveFlags.Resolve(ctx))
+	return s, nil
+}
+
+// KeywordFlags returns the flags of the config's abstract keywords for a build as a toolchain's
+// flag_mappings map them: those of a transform or generate tool's toolchain (optimization: speed
+// is -O for glslc). Keywords the mappings don't have are skipped.
+func (f *File) KeywordFlags(ctx Context, mappings Ordered[Ordered[[]string]]) ([]string, error) {
+	return keywordFlags(f.merged(ctx).Compile.Keywords, mappings)
+}
+
+// keywordFlags maps keywords through mappings, sorted by keyword. A value the mappings don't have
+// for a keyword they map is an error.
+func keywordFlags(set map[string]Keyword, mappings Ordered[Ordered[[]string]]) ([]string, error) {
 	keywords := append([]string{}, mappings.Keys...)
 	sort.Strings(keywords)
-	var keywordFlags []string
+	var result []string
 	for _, keyword := range keywords {
-		value, ok := m.Compile.Keywords[keyword]
+		value, ok := set[keyword]
 		if !ok {
 			continue
 		}
@@ -83,17 +105,12 @@ func (f *File) Settings(ctx Context, mappings Ordered[Ordered[[]string]]) (Setti
 		if !ok {
 			valid := append([]string{}, values.Keys...)
 			sort.Strings(valid)
-			return Settings{}, fmt.Errorf("abstract keyword %q has unresolvable value %q; valid values: [%s]",
+			return nil, fmt.Errorf("abstract keyword %q has unresolvable value %q; valid values: [%s]",
 				keyword, value, strings.Join(valid, ", "))
 		}
-		keywordFlags = append(keywordFlags, flags...)
+		result = append(result, flags...)
 	}
-	s.Flags = append(keywordFlags, s.Flags...)
-
-	s.Flags = Remove(s.Flags, m.Compile.RemoveFlags.Resolve(ctx))
-	s.Defines = Remove(s.Defines, m.Compile.RemoveDefines.Resolve(ctx))
-	s.LinkFlags = Remove(s.LinkFlags, m.Link.RemoveFlags.Resolve(ctx))
-	return s, nil
+	return result, nil
 }
 
 // Remove returns list without the items in removals.

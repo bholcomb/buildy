@@ -23,9 +23,10 @@ toolchain:
       input_extensions: [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr", ".hdr"]
       output_extension: ".dds"
       flags:
+        # A configuration's flags follow the common ones
         common: ["-fd", "BC7"]
-        debug: ["-fd", "BC7", "-Quality", "1.0"]
-        release: ["-fd", "BC7", "-Quality", "0.8"]
+        debug: ["-Quality", "1.0"]
+        release: ["-Quality", "0.8"]
       supports:
         defines: false
         includes: false
