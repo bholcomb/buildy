@@ -88,10 +88,8 @@ type BuildTask struct {
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
-	Toolchain            string               `json:"toolchain"`      // Name of the toolchain that produced the task
-	ToolchainHash        string               `json:"toolchain_hash"` // Content hash of that toolchain's config
-	Exec                 util.ExecSpec        `json:"exec"`           // Where the command runs (native or docker), from that toolchain
-	ConfigHash           string               `json:"config_hash"`    // Hash of buildy.yaml to invalidate cache on config changes
+	Toolchain            string               `json:"toolchain"` // Name of the toolchain that produced the task
+	Exec                 util.ExecSpec        `json:"exec"`      // Where the command runs (native or docker), from that toolchain
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -133,45 +131,40 @@ func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string,
 	}
 }
 
+// cacheKeyContent is what a task's cache key is a hash of: exactly what determines its outputs.
+// The configuration reaches a task only through these (its flags, defines, include and library
+// directories, standard and output paths are in its command and outputs), so a change to one
+// target's config reruns that target's tasks and no others.
+type cacheKeyContent struct {
+	Inputs  [][2]string   `json:"inputs"`  // each declared input's path and content hash
+	Outputs []string      `json:"outputs"` // where the outputs go
+	Command util.Command  `json:"command"` // the arguments (or script) and directory
+	Native  *NativeOp     `json:"native"`  // or the native operation
+	Exec    util.ExecSpec `json:"exec"`    // natively or in which image, with which environment
+}
+
 // CalculateCacheKey calculates the content-addressable cache key from the task's definition and
 // its input hashes. Call HashInputs first.
 func (t *BuildTask) CalculateCacheKey() string {
-	// Build input tuples with normalized paths for consistent cache keys
-	// On Windows, paths are case-insensitive, so we normalize to lowercase
-	inputTuples := make([][2]string, len(t.Inputs))
+	// Paths are normalized: on Windows they are case-insensitive
+	content := cacheKeyContent{
+		Inputs:  make([][2]string, len(t.Inputs)),
+		Outputs: make([]string, len(t.Outputs)),
+		Command: t.Command,
+		Native:  t.Native,
+		Exec:    t.Exec,
+	}
 	for i, inp := range t.Inputs {
-		normalizedPath := util.NormalizePathForCache(inp.Path)
-		inputTuples[i] = [2]string{normalizedPath, inp.Hash}
+		content.Inputs[i] = [2]string{util.NormalizePathForCache(inp.Path), inp.Hash}
 	}
-	outputs := make([]string, len(t.Outputs))
 	for i, out := range t.Outputs {
-		outputs[i] = util.NormalizePathForCache(out)
+		content.Outputs[i] = util.NormalizePathForCache(out)
 	}
-
-	// Create content structure for hashing
-	// Includes all factors that affect build output
-	content := map[string]interface{}{
-		"task_type":      t.TaskType,
-		"inputs":         inputTuples,
-		"outputs":        outputs,
-		"command":        t.Command,
-		"native":         t.Native,
-		"platform":       t.Platform,
-		"architecture":   t.Architecture,
-		"configuration":  t.Configuration,
-		"toolchain_hash": t.ToolchainHash,
-		"exec":           t.Exec,
-		"config_hash":    t.ConfigHash,
-	}
-
-	// Serialize to JSON (Go's json.Marshal sorts keys by default)
-	jsonBytes, err := json.Marshal(content)
+	data, err := json.Marshal(content)
 	if err != nil {
 		panic(fmt.Sprintf("task %s: cannot marshal its cache key: %v", t.TaskID, err))
 	}
-
-	// Calculate SHA-256 hash
-	hash := sha256.Sum256(jsonBytes)
+	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash[:])
 }
 

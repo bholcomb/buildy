@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,15 +13,6 @@ import (
 )
 
 // hashConfig hashes a module's (inherited) config, stamped on its tasks.
-func hashConfig(file *config.File) string {
-	data, err := json.Marshal(file)
-	if err != nil {
-		panic(fmt.Sprintf("hashing %s: %v", file.Path, err))
-	}
-	h := sha256.Sum256(data)
-	return fmt.Sprintf("%x", h[:])
-}
-
 // ConfigParser generates the tasks of a workspace from its typed configuration
 type ConfigParser struct {
 	Platform           string
@@ -292,7 +281,6 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
 	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir)
-	tg.ConfigHash = hashConfig(root)
 	if cp.CurrentToolchain != nil {
 		if err := tg.SetToolchain(cp.CurrentToolchain); err != nil {
 			return nil, err
@@ -420,7 +408,6 @@ func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGen
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.TargetRegistry = cp.TargetRegistry
-	taskGen.ConfigHash = hashConfig(file)
 
 	tasks, err := taskGen.GenerateTargetTasks(file, outputDir)
 	return tasks, taskGen, err

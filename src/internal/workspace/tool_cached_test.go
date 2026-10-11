@@ -117,8 +117,5 @@ func TestDockerToolchainTasksRunInDocker(t *testing.T) {
 		if !task.Exec.IsDocker() || task.Exec.Image != "gcc:13" {
 			t.Errorf("%s runs %+v, want docker gcc:13", task.TaskID, task.Exec)
 		}
-		if task.ToolchainHash != resource.HashToolchainConfig(toolchains.GetToolchain("docker-cpp-linux")) {
-			t.Errorf("%s: toolchain hash %q", task.TaskID, task.ToolchainHash)
-		}
 	}
 }

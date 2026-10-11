@@ -110,11 +110,3 @@ func lookupSource(t *Tool, source string, toolParams, itemConfig map[string]any)
 	}
 	return nil, false
 }
-
-// HashToolchainConfig is a hash of the toolchain's whole content, for cache keys.
-func HashToolchainConfig(tc *ToolchainConfig) string {
-	if tc == nil {
-		return ""
-	}
-	return tc.Hash()
-}

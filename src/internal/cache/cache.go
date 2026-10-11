@@ -192,8 +192,12 @@ func (bc *BuildCache) Close() error {
 	}
 
 	snap := snapshot{Version: indexVersion, Entries: make([]CacheEntry, 0, len(bc.newest))}
+	added := make(map[string]bool, len(bc.newest))
 	for _, key := range bc.newest {
-		snap.Entries = append(snap.Entries, bc.entries[key])
+		if !added[key] {
+			added[key] = true
+			snap.Entries = append(snap.Entries, bc.entries[key])
+		}
 	}
 	sort.Slice(snap.Entries, func(i, j int) bool {
 		a, b := snap.Entries[i], snap.Entries[j]

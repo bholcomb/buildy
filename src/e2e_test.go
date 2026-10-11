@@ -771,3 +771,46 @@ func tail(text string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Finding 4.2: adding a target, or changing another target's define, reruns only that target's
+// tasks.
+func TestE2EEditingATargetRerunsOnlyIt(t *testing.T) {
+	needTools(t, "gcc")
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the C cases run on Linux and macOS")
+	}
+	dir := t.TempDir()
+	config := `project:
+  name: edits
+environment:
+  compile:
+    c_standard: c11
+targets:
+  executables:
+    - name: one
+      language: c
+      sources: [one.c]
+    - name: two
+      language: c
+      sources: [two.c]
+`
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), config)
+	writeFile(t, filepath.Join(dir, "one.c"), "int main(void) { return 0; }\n")
+	writeFile(t, filepath.Join(dir, "two.c"), "int main(void) { return 0; }\n")
+	writeFile(t, filepath.Join(dir, "three.c"), "int main(void) { return 0; }\n")
+	mustBuildy(t, dir)
+
+	config += `    - name: three
+      language: c
+      sources: [three.c]
+`
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), config)
+	if out := mustBuildy(t, dir); !strings.Contains(out, "Tasks: 6 total, 4 cache hits, 2 executed") {
+		t.Errorf("adding a target reran others:\n%s", tail(out, 20))
+	}
+	config = strings.Replace(config, "sources: [two.c]", "sources: [two.c]\n      defines: [TWO=2]", 1)
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), config)
+	if out := mustBuildy(t, dir); !strings.Contains(out, "Tasks: 6 total, 5 cache hits, 1 executed") {
+		t.Errorf("a define on two reran other tasks:\n%s", tail(out, 20))
+	}
+}

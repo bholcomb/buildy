@@ -209,8 +209,8 @@ func TestCacheKeyIncludesOutputs(t *testing.T) {
 	}
 }
 
-// S11: the key covers where a task runs and its toolchain's content, not just its name.
-func TestCacheKeyIncludesExecAndToolchainHash(t *testing.T) {
+// S11: the key covers where a task runs, not just its toolchain's name.
+func TestCacheKeyIncludesExec(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "main.cpp"), "int main() {}")
 	key := func(mutate func(*workspace.BuildTask)) string {
@@ -224,9 +224,9 @@ func TestCacheKeyIncludesExecAndToolchainHash(t *testing.T) {
 	native := key(func(*workspace.BuildTask) {})
 	docker := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "gcc:13"} })
 	otherImage := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "gcc:14"} })
-	otherToolchain := key(func(task *workspace.BuildTask) { task.ToolchainHash = "changed" })
-	keys := map[string]bool{native: true, docker: true, otherImage: true, otherToolchain: true}
+	otherEnv := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Env: map[string]string{"A": "1"}} })
+	keys := map[string]bool{native: true, docker: true, otherImage: true, otherEnv: true}
 	if len(keys) != 4 {
-		t.Errorf("keys collide: native %s, docker %s, gcc:14 %s, changed toolchain %s", native, docker, otherImage, otherToolchain)
+		t.Errorf("keys collide: native %s, docker %s, gcc:14 %s, environment %s", native, docker, otherImage, otherEnv)
 	}
 }

@@ -227,7 +227,6 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
-	configHash string,
 	existingTasks []*BuildTask,
 	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
@@ -357,11 +356,6 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 				"outputs":  stepTask.Outputs,
 			}
 		}
-	}
-
-	// Stamp config hash on all generated tasks
-	for _, task := range tasks {
-		task.ConfigHash = configHash
 	}
 
 	return tasks, nil

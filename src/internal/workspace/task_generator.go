@@ -37,11 +37,9 @@ type TaskGenerator struct {
 	Platform           string
 	Architecture       string
 	Configuration      string
-	ConfigHash         string // Hash of the module's config, stamped on every task for cache invalidation
 	ToolchainManager   *resource.ToolchainManager
 	TemplateEngine     *BuildTemplateEngine
 	CurrentToolchain   *resource.ToolchainConfig
-	ToolchainHash      string
 	ToolMatcher        *resource.ToolMatcher
 	CommandBuilder     *resource.CommandBuilder
 	DependencyResolver *resource.DependencyResolver
@@ -101,7 +99,6 @@ func (tg *TaskGenerator) SetPathResolver(pr *PathResolver) {
 // SetToolchain sets up the toolchain for task generation
 func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 	tg.CurrentToolchain = tc
-	tg.ToolchainHash = resource.HashToolchainConfig(tc)
 
 	toolMatcher, err := resource.NewToolMatcher(tc)
 	if err != nil {
@@ -150,7 +147,6 @@ func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string, estimat
 	task.Architecture = tg.Architecture
 	task.Configuration = tg.Configuration
 	task.Toolchain = toolchain
-	task.ConfigHash = tg.ConfigHash
 	task.EstimatedTime = estimatedTime
 	task.ResourceRequirements = resources
 }
@@ -377,26 +373,22 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.Architecture,
 		tg.Configuration,
 		targetToolchain.Name,
-		tg.ConfigHash,
 		existingTasks,
 		templateVarEnv,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
-	// The tasks run where their toolchain says (natively or in Docker), and the toolchain's
-	// content is part of their cache key
+	// The tasks run where their toolchain says (natively or in Docker)
 	execSpec, err := resource.ExecSpecFromToolchain(targetToolchain)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
-	toolchainHash := resource.HashToolchainConfig(targetToolchain)
 
 	for _, task := range tasks {
 		task.Module = tg.CurrentModule
 		task.Target = targetName
 		task.Exec = execSpec
-		task.ToolchainHash = toolchainHash
 		if len(task.LinkLibs) > 0 {
 			for _, file := range depLibFiles {
 				task.Inputs = append(task.Inputs, NewTaskInput(file))
@@ -781,7 +773,6 @@ func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, 
 			tg.finalizeTask(&task, t.Tool, 1.0, ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50})
 			task.Target = t.Name
 			task.Exec = execSpec
-			task.ToolchainHash = resource.HashToolchainConfig(toolchain)
 
 			tasks = append(tasks, &task)
 			outputs = append(outputs, output)
@@ -872,7 +863,6 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 			tg.finalizeTask(&task, g.Tool, 0.5, ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10})
 			task.Target = g.Name
 			task.Exec = execSpec
-			task.ToolchainHash = resource.HashToolchainConfig(toolchain)
 
 			tasks = append(tasks, &task)
 			outputs = append(outputs, resolvedOutputs...)

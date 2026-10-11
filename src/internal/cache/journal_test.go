@@ -72,9 +72,11 @@ func TestCloseKeepsTheNewestEntryPerTaskAndContext(t *testing.T) {
 		t.Fatal("the key didn't change")
 	}
 	// The same task in another configuration is another task
-	release := compileTask(t, dir)
+	releaseDir := filepath.Join(dir, "release")
+	write(t, filepath.Join(releaseDir, "main.cpp"), "int main() {}")
+	release := compileTask(t, releaseDir)
 	release.Configuration = "release"
-	ran(t, bc, release, dir)
+	ran(t, bc, release, releaseDir)
 
 	if err := bc.Close(); err != nil {
 		t.Fatal(err)

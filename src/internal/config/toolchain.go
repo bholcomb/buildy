@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -303,17 +301,6 @@ func (tc *Toolchain) validate(d *decoder) {
 			}
 		}
 	}
-}
-
-// Hash is a hash of the toolchain's whole content: a task's cache key includes its toolchain's,
-// so changing a toolchain file reruns its tasks.
-func (tc *Toolchain) Hash() string {
-	data, err := json.Marshal(tc)
-	if err != nil {
-		panic(fmt.Sprintf("hashing toolchain %s: %v", tc.Name, err))
-	}
-	sum := sha256.Sum256(data)
-	return fmt.Sprintf("%x", sum[:])
 }
 
 // Keywords returns the abstract keywords the toolchain maps to flags.
