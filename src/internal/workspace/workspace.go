@@ -90,6 +90,10 @@ func NewWorkspace(rootDir string) (*Workspace, error) {
 		}
 		rootDir = foundRoot
 	}
+	rootDir, err := filepath.Abs(rootDir)
+	if err != nil {
+		return nil, err
+	}
 
 	ws := &Workspace{
 		RootDir:    rootDir,
@@ -109,6 +113,14 @@ func NewWorkspace(rootDir string) (*Workspace, error) {
 // NewWorkspaceWithConfig creates a new Workspace with a custom config file path
 // This is used when building dependencies with override config files
 func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, error) {
+	// Every path buildy derives is absolute, so the result never depends on the current directory
+	rootDir, err := filepath.Abs(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	if configPath, err = filepath.Abs(configPath); err != nil {
+		return nil, err
+	}
 	ws := &Workspace{
 		RootDir:    rootDir,
 		ConfigPath: configPath, // Store explicit config path

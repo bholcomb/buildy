@@ -201,3 +201,58 @@ func TestE2EExtensionlessHeader(t *testing.T) {
 		t.Errorf("a no-op build executed tasks:\n%s", out)
 	}
 }
+
+// Finding 2: two targets built from one source keep their own objects.
+func TestE2ESharedSource(t *testing.T) {
+	needCpp(t)
+	dir := fixture(t, "shared_source")
+	mustBuildy(t, dir)
+	bin := filepath.Join(outDir(dir, "debug"), "bin")
+	if got := run(t, filepath.Join(bin, "one")); got != "1" {
+		t.Errorf("one printed %q, want 1", got)
+	}
+	if got := run(t, filepath.Join(bin, "two")); got != "2" {
+		t.Errorf("two printed %q, want 2", got)
+	}
+}
+
+// S5: "buildy ." and "cd sub && buildy .." build the same objects in the same places.
+func TestE2ECwdIndependent(t *testing.T) {
+	needCpp(t)
+	dir := fixture(t, "cwd_independent")
+	objects := func() []string {
+		var files []string
+		filepath.WalkDir(filepath.Join(dir, "build"), func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel, _ := filepath.Rel(dir, path)
+				files = append(files, rel)
+			}
+			return nil
+		})
+		return files
+	}
+
+	mustBuildy(t, dir, ".")
+	fromRoot := objects()
+	for _, generated := range []string{"build", ".buildy_cache"} {
+		if err := os.RemoveAll(filepath.Join(dir, generated)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mustBuildy(t, filepath.Join(dir, "sub"), "..")
+	fromSub := objects()
+	if strings.Join(fromRoot, "\n") != strings.Join(fromSub, "\n") {
+		t.Errorf("outputs differ:\nbuildy .:\n  %s\ncd sub && buildy ..:\n  %s",
+			strings.Join(fromRoot, "\n  "), strings.Join(fromSub, "\n  "))
+	}
+	for _, stray := range []string{"build", ".buildy_cache"} {
+		if _, err := os.Stat(filepath.Join(dir, "sub", stray)); err == nil {
+			t.Errorf("buildy .. created sub/%s", stray)
+		}
+	}
+	want := filepath.Join("build", fmt.Sprintf("%s-%s-debug", detectPlatform(), detectArchitecture()), "obj", ".", "app", "src", "main.o")
+	if !strings.Contains(strings.Join(fromRoot, "\n"), filepath.Clean(want)) {
+		t.Errorf("no object at %s:\n  %s", filepath.Clean(want), strings.Join(fromRoot, "\n  "))
+	}
+}

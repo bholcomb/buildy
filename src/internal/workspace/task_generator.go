@@ -199,6 +199,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 	if targetConfig["module"] == "" {
 		targetConfig["module"] = "workspace"
 	}
+	// Object paths are relative to the module directory
+	targetConfig["module_dir"] = tg.PathResolver.ConfigFileDir
 
 	// Select toolchain based on metadata
 	toolMatcher := tg.ToolMatcher

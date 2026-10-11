@@ -1,0 +1,17 @@
+project:
+  name: shared_source
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+targets:
+  executables:
+    - name: one
+      language: cpp
+      sources: ["main.cpp"]
+      defines: ["VALUE=1"]
+    - name: two
+      language: cpp
+      sources: ["main.cpp"]
+      defines: ["VALUE=2"]

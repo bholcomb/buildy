@@ -231,15 +231,19 @@ build/
     ├── lib/
     │   └── libmathcore.a
     └── obj/
-        ├── main.o
-        └── math.o
+        ├── calculator/
+        │   └── appsrc/
+        │       └── main.o
+        └── mathcore/
+            └── libsrc/
+                └── math.o
 ```
 
 The output directory structure is:
 - `build/<platform>-<arch>-<config>/`
 - `bin/` for executables
 - `lib/` for libraries
-- `obj/` for intermediate object files
+- `obj/<module>/<target>/` for intermediate object files, by source path within the module
 
 ## Step 5: Run the Application
 

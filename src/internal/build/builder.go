@@ -110,13 +110,9 @@ func (b *Builder) BuildWorkspace(
 	util.LogProgress("Phase 2: Task Execution")
 	execStart := time.Now()
 
-	// Execute all tasks (cache will handle skipping unchanged tasks)
-	workDir, err := os.Getwd()
-	if err != nil {
-		result.Finish(false)
-		return result, err
-	}
-	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, 8192, nil, workDir, options.Force)
+	// Execute all tasks (cache will handle skipping unchanged tasks). Commands run in the
+	// workspace root; every path in them is absolute.
+	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, 8192, nil, ws.RootDir, options.Force)
 	executor.BuildResult = result // Pass result for tracking
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 

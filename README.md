@@ -34,7 +34,7 @@ Or download a release (see [Releases](#releases)) and put `buildy` on your `PATH
 # Build with default settings (debug, auto-detected platform)
 buildy
 
-# Build a specific directory
+# Build a specific directory (the same build as running buildy in it)
 buildy path/to/project/
 
 # Build a specific config file (standalone mode)

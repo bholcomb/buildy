@@ -1720,7 +1720,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${output_dir}/obj/${module}/${source_stem}${tool.output_ext}"
+        output: "${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${config.defines}"
@@ -1783,7 +1783,7 @@ steps:
   - name: compile
     action: compile
     for_each: source      # Expands to one task per source file
-    output: "${output_dir}/obj/${source_stem}.o"
+    output: "${output_dir}/obj/${module}/${target}/${source_rel}.o"
     
   - name: link
     action: link
@@ -1804,6 +1804,15 @@ steps:
       build_tags: "${item.build_tags}"
 ```
 
+### Output Paths
+
+Every output path is a function of the output directory (which already contains
+`<platform>-<arch>-<config>`), the module, the target, and the source's path relative to the
+module: object files go to `${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}`.
+Two targets compiling the same source get separate objects, and nothing depends on the directory
+buildy was started from: sources, include directories and outputs are absolute paths, and every
+command runs in the workspace root.
+
 ### Template Variables
 
 Templates can reference variables from multiple sources:
@@ -1812,8 +1821,9 @@ Templates can reference variables from multiple sources:
 |----------|--------|
 | `${output_dir}` | Build output directory |
 | `${module}` | Current module name |
-| `${source}` | Current source file (in `for_each` loops) |
-| `${source_stem}` | Source filename without extension |
+| `${target}` | Current target name |
+| `${source}` | Current source file (in `for_each` loops), an absolute path |
+| `${source_rel}` | Source path relative to the module directory, without extension (`src/widgets/window`); each `..` becomes `_up` |
 | `${tool.output_ext}` | Tool's output extension (e.g., `.o`) |
 | `${tool.output_pattern}` | Tool's resolved output pattern (e.g., `libfoo.so`) |
 | `${output_prefix}` | Library filename prefix (from target's `output_prefix` or platform default) |

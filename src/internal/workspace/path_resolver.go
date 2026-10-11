@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -136,19 +135,12 @@ func (pr *PathResolver) ResolveSourcesWithContext(itemConfig map[string]any, ctx
 	return allSources, nil
 }
 
-// expandGlob expands a glob pattern to sorted file list
-// Returns an error if the pattern matches no files and optional is false
-// Also includes virtual files (from artifact outputs) that match the pattern
+// expandGlob expands a glob pattern, relative to the config file directory, to a sorted list of
+// absolute paths. Returns an error if the pattern matches no files and optional is false.
+// Also includes virtual files (from artifact outputs) that match the pattern.
 func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, error) {
-	var searchPattern string
-	if pr.ConfigFileDir == "" {
-		util.LogWarning("Config file directory not set, using current directory for pattern '%s'", pattern)
-		searchPattern = pattern
-	} else {
-		// Make pattern relative to config file directory
-		searchPattern = filepath.Join(pr.ConfigFileDir, pattern)
-		util.LogInfo("Expanding pattern '%s' as '%s'", pattern, searchPattern)
-	}
+	searchPattern := pr.absolute(pattern)
+	util.LogInfo("Expanding pattern '%s' as '%s'", pattern, searchPattern)
 
 	results, err := filepath.Glob(searchPattern)
 	if err != nil {
@@ -171,30 +163,31 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 			"Use {pattern: \"%s\", optional: true} if this is intentional", pattern, searchPattern, pattern)
 	}
 
-	// Convert absolute paths back to relative paths from current directory
-	cwd, _ := os.Getwd()
-	relativeResults := []string{}
+	absResults := []string{}
 	seen := make(map[string]bool) // deduplicate
 	for _, result := range results {
-		relPath, err := filepath.Rel(cwd, result)
-		if err != nil {
-			// If it's not relative to cwd, use absolute path
-			absPath, _ := filepath.Abs(result)
-			if !seen[absPath] {
-				relativeResults = append(relativeResults, absPath)
-				seen[absPath] = true
-			}
-		} else {
-			if !seen[relPath] {
-				relativeResults = append(relativeResults, relPath)
-				seen[relPath] = true
-			}
+		result = filepath.Clean(result)
+		if !seen[result] {
+			absResults = append(absResults, result)
+			seen[result] = true
 		}
 	}
 
-	sort.Strings(relativeResults)
-	util.LogInfo("Pattern '%s' matched %d files: %v", pattern, len(relativeResults), relativeResults)
-	return relativeResults, nil
+	sort.Strings(absResults)
+	util.LogInfo("Pattern '%s' matched %d files: %v", pattern, len(absResults), absResults)
+	return absResults, nil
+}
+
+// absolute resolves a path against the config file directory. Every path buildy derives from
+// configuration is absolute, so nothing depends on the directory it was started from.
+func (pr *PathResolver) absolute(p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	if !filepath.IsAbs(pr.ConfigFileDir) {
+		panic(fmt.Sprintf("internal error: path resolver needs an absolute config directory, has %q", pr.ConfigFileDir))
+	}
+	return filepath.Join(pr.ConfigFileDir, p)
 }
 
 // matchVirtualFiles returns virtual files that match the given glob pattern
@@ -218,22 +211,7 @@ func (pr *PathResolver) ResolveIncludeDirs(itemConfig map[string]any) ([]string,
 
 	var includeDirs []string
 
-	// Helper to resolve a single path
-	resolvePath := func(inc string) string {
-		if filepath.IsAbs(inc) {
-			return inc
-		}
-		if pr.ConfigFileDir != "" && pr.ConfigFileDir != "." {
-			absIncPath := filepath.Join(pr.ConfigFileDir, inc)
-			cwd, _ := os.Getwd()
-			relIncPath, err := filepath.Rel(cwd, absIncPath)
-			if err != nil {
-				return absIncPath
-			}
-			return relIncPath
-		}
-		return inc
-	}
+	resolvePath := pr.absolute
 
 	switch v := includeDirsRaw.(type) {
 	case string:
@@ -267,21 +245,7 @@ func (pr *PathResolver) ResolveLibDirs(itemConfig map[string]any) ([]string, err
 func (pr *PathResolver) resolvePathList(pathsRaw any) ([]string, error) {
 	var paths []string
 
-	resolvePath := func(p string) string {
-		if filepath.IsAbs(p) {
-			return p
-		}
-		if pr.ConfigFileDir != "" && pr.ConfigFileDir != "." {
-			absPath := filepath.Join(pr.ConfigFileDir, p)
-			cwd, _ := os.Getwd()
-			relPath, err := filepath.Rel(cwd, absPath)
-			if err != nil {
-				return absPath
-			}
-			return relPath
-		}
-		return p
-	}
+	resolvePath := pr.absolute
 
 	switch v := pathsRaw.(type) {
 	case string:
@@ -301,21 +265,9 @@ func (pr *PathResolver) resolvePathList(pathsRaw any) ([]string, error) {
 	return paths, nil
 }
 
-// ResolveRelativePath resolves a path relative to the config file directory
+// ResolveRelativePath resolves a path relative to the config file directory to an absolute path
 func (pr *PathResolver) ResolveRelativePath(path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	if pr.ConfigFileDir != "" {
-		absPath := filepath.Join(pr.ConfigFileDir, path)
-		cwd, _ := os.Getwd()
-		relPath, err := filepath.Rel(cwd, absPath)
-		if err != nil {
-			return absPath
-		}
-		return relPath
-	}
-	return path
+	return pr.absolute(path)
 }
 
 // ExtractStringList extracts a string slice from various input types

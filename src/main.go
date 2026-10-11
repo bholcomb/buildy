@@ -293,44 +293,33 @@ func main() {
 			util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
 		}
 	} else {
-		// Config file or directory specified - treat as workspace root
+		if len(configFiles) > 1 {
+			util.LogFatal("Only one path may be given, got %d: %v", len(configFiles), configFiles)
+		}
 		argPath := configFiles[0]
-		var workspaceRoot string
-		var configPath string
-
-		// Check if it's a file or directory
 		info, err := os.Stat(argPath)
 		if err != nil {
 			util.LogFatal("Path not found: %s", argPath)
 		}
 
 		if info.IsDir() {
-			// Directory provided - use it as workspace root, look for buildy.yaml
-			workspaceRoot = argPath
-			configPath = filepath.Join(workspaceRoot, "buildy.yaml")
-			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				util.LogFatal("No buildy.yaml found in: %s", workspaceRoot)
+			// A directory is a workspace root: the same build as running buildy inside it
+			ws, err = workspace.NewWorkspace(argPath)
+			if err != nil {
+				util.LogFatal("Failed to load workspace from %s: %v", argPath, err)
 			}
+			util.LogVerbose("Loaded workspace from: %s", ws.RootDir)
 		} else {
-			// File provided - use file as config, current directory as workspace root
-			configPath = argPath
-			// Use current working directory as workspace root for dependency builds
-			workspaceRoot, err = os.Getwd()
+			// A file is a standalone config, built with the current directory as workspace root
+			cwd, err := os.Getwd()
 			if err != nil {
 				util.LogFatal("Failed to get current directory: %v", err)
 			}
-		}
-
-		// Load as workspace with explicit config path
-		ws, err = workspace.NewWorkspaceWithConfig(workspaceRoot, configPath)
-		if err != nil {
-			util.LogFatal("Failed to load workspace from %s: %v", workspaceRoot, err)
-		}
-		util.LogVerbose("Loaded workspace from: %s (config: %s)", ws.RootDir, configPath)
-
-		// Warn about multiple paths (not yet supported)
-		if len(configFiles) > 1 {
-			util.LogWarning("Multiple paths not yet supported, using first one")
+			ws, err = workspace.NewWorkspaceWithConfig(cwd, argPath)
+			if err != nil {
+				util.LogFatal("Failed to load %s: %v", argPath, err)
+			}
+			util.LogVerbose("Loaded standalone config %s (workspace root %s)", ws.ConfigPath, ws.RootDir)
 		}
 	}
 

@@ -9,7 +9,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${item.output_dir}/${source_stem}${tool.output_ext}"
+        output: "${item.output_dir}/${source_rel}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${item.defines}"

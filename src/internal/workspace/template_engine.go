@@ -3,6 +3,7 @@ package workspace
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -439,6 +440,9 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		module = m
 	}
 	templateEnv.SetVariable("module", module, "template")
+	if name, ok := itemConfig["name"].(string); ok {
+		templateEnv.SetVariable("target", name, "template")
+	}
 	
 	// Add template metadata variables (accessible as ${template.<field_name>}, etc.)
 	// Uses reflection to auto-register all string fields from TemplateMetadata
@@ -448,7 +452,9 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	
 	// Keep legacy context map for step reference resolution (compile.outputs, etc.)
 	// This is structural, not variable resolution
+	moduleDir, _ := itemConfig["module_dir"].(string)
 	context := map[string]any{
+		"module_dir":    moduleDir,
 		"item":          itemConfig,
 		"config":        mergedConfig,
 		"output_dir":    outputDir,
@@ -602,11 +608,8 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		action = a
 	}
 
-	// Get the module directory to compute relative paths for unique object file names
-	moduleDir := ""
-	if m, ok := context["module"].(string); ok {
-		moduleDir = m
-	}
+	// Object paths are built from the source's path relative to the module directory
+	moduleDir, _ := context["module_dir"].(string)
 
 	for _, source := range sources {
 		// Find appropriate tool for this source file
@@ -617,11 +620,13 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 				action, source, filepath.Ext(source))
 		}
 
-		// Compute source_stem preserving subdirectory structure to avoid collisions.
-		// For source "src/widgets/window.cpp" with module "src", this produces
-		// "widgets/window" instead of just "window", preventing two files with the
-		// same name in different directories from clobbering each other's object files.
-		sourceStem := computeSourceStem(source, moduleDir)
+		// source_rel is the source's path relative to the module, without its extension:
+		// "src/widgets/window.cpp" in module dir M gives "src/widgets/window", whatever the
+		// directory buildy was started from.
+		sourceRel, err := computeSourceRel(source, moduleDir)
+		if err != nil {
+			return nil, err
+		}
 
 		sc := newStepContext(context, varEnv, "for_each", struct {
 			OutputExt     string
@@ -630,9 +635,9 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		
 		// Add source-specific variables
 		sc.VarEnv.SetVariable("source", source, "for_each")
-		sc.VarEnv.SetVariable("source_stem", sourceStem, "for_each")
+		sc.VarEnv.SetVariable("source_rel", sourceRel, "for_each")
 		sc.Context["source"] = source
-		sc.Context["source_stem"] = sourceStem
+		sc.Context["source_rel"] = sourceRel
 
 		// Resolve output path using VarEnv
 		outputTemplate := ""
@@ -672,7 +677,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 			taskName = name
 		}
 
-		taskID := idGen.Next(action, fmt.Sprintf("%s_%s", taskName, source))
+		taskID := idGen.Next(action, fmt.Sprintf("%s_%s%s", taskName, sourceRel, filepath.Ext(source)))
 		task := NewBuildTask(
 			taskID,
 			action,
@@ -1116,34 +1121,29 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	return &task, nil
 }
 
-// computeSourceStem computes a source stem that preserves subdirectory structure
-// relative to the module directory. This prevents object file collisions when
-// multiple source files have the same name in different directories.
+// computeSourceRel returns a source's path relative to the module directory, with forward
+// slashes and without its extension. Each ".." becomes "_up", so a source outside the module
+// still lands under the object directory. Both paths must be absolute: the result never depends
+// on the directory buildy was started from.
 //
-// Examples (moduleDir="src"):
-//
-//	"src/window.cpp"         -> "window"
-//	"src/widgets/window.cpp" -> "widgets/window"
-//	"main.cpp"               -> "main"
-func computeSourceStem(source, moduleDir string) string {
-	// Normalize all separators to forward slashes for consistent processing
-	source = strings.ReplaceAll(source, "\\", "/")
-	moduleDir = strings.ReplaceAll(moduleDir, "\\", "/")
-
-	// Try to strip the module directory prefix to get the relative path
-	relPath := source
-	if moduleDir != "" && moduleDir != "workspace" {
-		prefix := moduleDir + "/"
-		if strings.HasPrefix(source, prefix) {
-			relPath = source[len(prefix):]
+//	"/ws/core/src/window.cpp", "/ws/core" -> "src/window"
+//	"/ws/shared/util.cpp",     "/ws/core" -> "_up/shared/util"
+func computeSourceRel(source, moduleDir string) (string, error) {
+	if !filepath.IsAbs(source) || !filepath.IsAbs(moduleDir) {
+		return "", fmt.Errorf("internal error: object path for source %q needs absolute paths (module dir %q)", source, moduleDir)
+	}
+	rel, err := filepath.Rel(moduleDir, source)
+	if err != nil {
+		return "", fmt.Errorf("source %s: no path from module directory %s: %w", source, moduleDir, err)
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i, part := range parts {
+		if part == ".." {
+			parts[i] = "_up"
 		}
 	}
-
-	// Strip the extension to get the stem
-	ext := filepath.Ext(relPath)
-	stem := strings.TrimSuffix(relPath, ext)
-
-	return stem
+	rel = strings.Join(parts, "/")
+	return strings.TrimSuffix(rel, path.Ext(rel)), nil
 }
 
 func resolveOutputPrefix(itemConfig, mergedConfig map[string]any, toolMatcher *resource.ToolMatcher) string {

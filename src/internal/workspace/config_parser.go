@@ -183,6 +183,9 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 		return nil, fmt.Errorf("no workspace configured. Use GenerateTasks() for single-file builds")
 	}
 
+	// Start from an empty task registry: it maps this generation's targets to their tasks
+	globalTaskRegistry.Clear()
+
 	// Initialize target registry
 	cp.TargetRegistry = NewTargetRegistry(cp.Workspace)
 	if err := cp.TargetRegistry.Initialize(); err != nil {
