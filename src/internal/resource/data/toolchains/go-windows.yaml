@@ -54,9 +54,6 @@ toolchain:
           format: "-gcflags=${value}"
           optional: true
       
-      manifest_files:
-        - "go.mod"
-        - "go.sum"
       
       supports:
         build_tags: true

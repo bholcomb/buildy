@@ -26,6 +26,12 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 // the built-in templates and toolchains, as a build would before executing anything.
 func generateTasks(t *testing.T, root string) ([]*BuildTask, error) {
 	t.Helper()
+	return generateTasksFor(t, root, "linux", "x86_64", "debug")
+}
+
+// generateTasksFor is generateTasks for another platform, architecture or configuration.
+func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*BuildTask, error) {
+	t.Helper()
 	ws, err := NewWorkspace(root)
 	if err != nil {
 		return nil, err
@@ -41,7 +47,7 @@ func generateTasks(t *testing.T, root string) ([]*BuildTask, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp := NewConfigParser("linux", "x86_64", "debug", nil, toolchains, "", templates, ws, nil, nil)
+	cp := NewConfigParser(platform, arch, config, nil, toolchains, "", templates, ws, nil, nil)
 	return cp.GenerateWorkspaceTasks(nil)
 }
 

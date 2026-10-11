@@ -16,7 +16,6 @@ templates:
         resolve_include_dirs: true
         resolve_path: false
       post_processing:
-        scan_sources_pattern: ""
         register_target: true
     steps:
       - name: compile
@@ -56,7 +55,6 @@ templates:
         resolve_include_dirs: true
         resolve_path: false
       post_processing:
-        scan_sources_pattern: ""
         register_target: true
     steps:
       - name: compile
@@ -95,7 +93,6 @@ templates:
         resolve_include_dirs: true
         resolve_path: false
       post_processing:
-        scan_sources_pattern: ""
         register_target: true
     steps:
       - name: compile

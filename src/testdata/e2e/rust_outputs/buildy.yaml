@@ -1,0 +1,13 @@
+project:
+  name: rust_outputs
+
+targets:
+  executables:
+    - name: hello
+      language: rust
+      path: hello
+
+  static_libraries:
+    - name: calc
+      language: rust
+      path: calc

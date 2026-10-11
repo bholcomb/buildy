@@ -961,6 +961,10 @@ targets:
       bin: "myapp"            # Binary name if multiple binaries in crate
 ```
 
+The binary is built to `build/<platform>-<arch>-<config>/cargo/<profile>/myapp` (`debug`, or
+`release` for configurations whose flags pass `--release`). Go and Rust builds run their own tool on
+every build; see [Tool-Cached Builds](#tool-cached-builds-go-and-rust).
+
 ### deps vs libs vs depends_on
 
 These are **intentionally separate** concepts:
@@ -1448,7 +1452,6 @@ tools:
 | `flags` | Configuration-specific flags (common, debug, release) |
 | `supports` | Capability flags and flag formats |
 | `command_params` | Data-driven parameter definitions (for `build` action) |
-| `manifest_files` | Files that trigger cache invalidation |
 
 ### Tool Supports Fields
 
@@ -1542,6 +1545,7 @@ tools:
 | `join` | Separator for array values (default: space) |
 | `optional` | If true, empty values produce empty string (not an error) |
 | `match` | Only use value if it matches this string |
+| `default` | Value when no source gives one, or `match` matches nothing (used as is) |
 | `quote_if_spaces` | Wrap value in quotes if it contains spaces |
 | `resolve_variables` | Resolve `${var}` references in the value |
 
@@ -1555,33 +1559,28 @@ Sources are dot-separated paths into the build context:
 | `item.X` | Field from the target configuration |
 | `tool.flags.${config}` | Tool flags for current configuration (debug/release) |
 
-### Manifest Files
+The parameters of a `build` tool are variables of the template step's `output` path too: the Rust
+toolchains define `profile` (`release` when the configuration's flags pass `--release`, else
+`debug`) and `bin_name` (`bin:` if set, else the target name).
 
-For cache invalidation, tools can declare which files should trigger rebuilds:
+### Tool-Cached Builds (Go and Rust)
 
-```yaml
-tools:
-  go_build:
-    action: build
-    command: "go build -o ${output} ${input}"
-    
-    manifest_files:
-      - "go.mod"
-      - "go.sum"
-```
+`go build` and `cargo build` keep correct, content-based caches of their own that account for
+imports outside the target directory, `go.mod`/`go.sum`, `go.work`, `vendor/`, `//go:embed`, cgo,
+`build.rs`, Cargo path dependencies, environment variables and compiler versions. The Go and Rust
+templates set `tool_cached: true` in their metadata, so buildy runs these tools on every build
+(a no-op build takes tens of milliseconds) and reports them as executed, never as cache hits. Their
+declared outputs must still exist when they finish, and tasks downstream of them (a staging copy,
+a C++ link against a Rust static library) hash those outputs, so they still hit when nothing
+changed.
 
-```yaml
-tools:
-  cargo_build:
-    action: build
-    command: "cargo build ${release_flag} --target-dir ${output_dir}"
-    
-    manifest_files:
-      - "Cargo.toml"
-      - "Cargo.lock"
-```
-
-When these files change, the build task is invalidated and re-executed.
+Cargo gets its own target directory, `${output_dir}/cargo`, and the Rust templates declare the
+files where Cargo writes them: `${output_dir}/cargo/<triple>/<profile>/<name>` for an executable
+(`bin:` if set, else the target name), `lib<name>.a` for a static library, and `lib<name>.so`
+(`.dylib` on macOS, `<name>.dll` on Windows) for a shared library. Each Rust toolchain describes its
+layout with the variables `cargo_triple_dir`, `exe_ext`, `staticlib_name` and `cdylib_name`. If
+Cargo names an artifact differently, for instance a crate whose name differs from the target's, the
+build fails naming the missing file.
 
 ### Execution Configuration
 

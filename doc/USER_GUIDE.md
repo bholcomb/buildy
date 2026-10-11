@@ -1077,6 +1077,12 @@ targets:
       bin: "myapp"               # If multiple binaries
 ```
 
+Cargo builds into `build/<platform>-<arch>-<config>/cargo/`; the binary is
+`cargo/<profile>/myapp` (`debug` or `release`). Go and Rust builds run `go build` and
+`cargo build` every time and let the tool's own cache decide what to rebuild: it knows about
+imports outside the target directory, embedded files, `Cargo.toml`, path dependencies and build
+scripts. They show as executed, never as cache hits.
+
 ### C/C++ Libraries for FFI
 
 Go and Rust can produce C-compatible libraries:

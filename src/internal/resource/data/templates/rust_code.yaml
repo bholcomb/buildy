@@ -14,18 +14,19 @@ templates:
       language: rust
       target_types: [executable]
       toolchain_language: rust
+      # cargo build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
       pre_processing:
         resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
       post_processing:
-        scan_sources_pattern: "*.rs"
         register_target: true
     steps:
       - name: build
         action: build
-        output: "${output_dir}/${config}/bin/${tool.output_pattern}"
+        output: "${output_dir}/cargo/${cargo_triple_dir}${profile}/${bin_name}${exe_ext}"
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:
@@ -40,18 +41,19 @@ templates:
       language: rust
       target_types: [static_library]
       toolchain_language: rust
+      # cargo build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
       pre_processing:
         resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
       post_processing:
-        scan_sources_pattern: "*.rs"
         register_target: true
     steps:
       - name: build
         action: build
-        output: "${output_dir}/${config}/lib/${tool.output_pattern}"
+        output: "${output_dir}/cargo/${cargo_triple_dir}${profile}/${staticlib_name}"
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:
@@ -66,18 +68,19 @@ templates:
       language: rust
       target_types: [shared_library]
       toolchain_language: rust
+      # cargo build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
       pre_processing:
         resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
       post_processing:
-        scan_sources_pattern: "*.rs"
         register_target: true
     steps:
       - name: build
         action: build
-        output: "${output_dir}/${config}/lib/${tool.output_pattern}"
+        output: "${output_dir}/cargo/${cargo_triple_dir}${profile}/${cdylib_name}"
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:

@@ -273,3 +273,67 @@ func TestE2EStaticRelink(t *testing.T) {
 		t.Errorf("after changing add(), app printed %q, want 6: it was not relinked", got)
 	}
 }
+
+// Finding 4 and S6: editing a package imported from outside the target's directory, or a file it
+// embeds, changes the build. Go runs every time and reports "ran", never a cache hit.
+func TestE2EGoOutsideImport(t *testing.T) {
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		t.Skip("skipping: there is no built-in Go toolchain for macOS arm64")
+	}
+	needTools(t, "go")
+	dir := fixture(t, "go_outside_import")
+	app := filepath.Join(outDir(dir, "debug"), "bin", "app"+exeSuffix())
+
+	mustBuildy(t, dir)
+	if got := run(t, app); got != "v1 m1" {
+		t.Fatalf("app printed %q, want %q", got, "v1 m1")
+	}
+
+	greet := filepath.Join(dir, "internal", "greet", "greet.go")
+	data, err := os.ReadFile(greet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, greet, strings.Replace(string(data), `"v1 "`, `"v2 "`, 1))
+	out := mustBuildy(t, dir)
+	if got := run(t, app); got != "v2 m1" {
+		t.Errorf("after editing internal/greet, app printed %q, want %q", got, "v2 m1")
+	}
+	if !strings.Contains(out, "0 cache hits") {
+		t.Errorf("the Go build was a cache hit:\n%s", out)
+	}
+
+	writeFile(t, filepath.Join(dir, "internal", "greet", "message.txt"), "m2")
+	mustBuildy(t, dir)
+	if got := run(t, app); got != "v2 m2" {
+		t.Errorf("after editing the embedded file, app printed %q, want %q", got, "v2 m2")
+	}
+}
+
+// Finding 5 and S7: the declared Rust outputs are where Cargo writes them, and a deleted
+// binary is rebuilt.
+func TestE2ERustOutputs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the built-in Windows Rust toolchain cross-compiles from Linux")
+	}
+	needTools(t, "cargo")
+	dir := fixture(t, "rust_outputs")
+	cargoDir := filepath.Join(outDir(dir, "debug"), "cargo", "debug")
+	hello := filepath.Join(cargoDir, "hello")
+
+	mustBuildy(t, dir)
+	if got := run(t, hello); got != "hello" {
+		t.Fatalf("hello printed %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(cargoDir, "libcalc.a")); err != nil {
+		t.Errorf("static library: %v", err)
+	}
+
+	if err := os.Remove(hello); err != nil {
+		t.Fatal(err)
+	}
+	mustBuildy(t, dir)
+	if _, err := os.Stat(hello); err != nil {
+		t.Errorf("the deleted binary was not rebuilt: %v", err)
+	}
+}

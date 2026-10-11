@@ -26,9 +26,9 @@ type TemplateMetadata struct {
 		ResolvePath        bool // Call PathResolver.ResolveRelativePath() on "path" field
 	}
 	PostProcessing struct {
-		ScanSourcesPattern string // Glob pattern for source file scanning (e.g., "*.go", "*.rs")
-		RegisterTarget     bool   // Register the target in the global registry
+		RegisterTarget bool // Register the target in the global registry
 	}
+	ToolCached        bool   // The build tool keeps its own cache (go build, cargo build): always run it
 	ToolchainLanguage string // Language to use for toolchain selection (if different from Language)
 	LibraryOutputDir  string // Subdirectory under output_dir where libraries are placed (e.g., "bin", "lib")
 }
@@ -268,12 +268,13 @@ func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *Temp
 
 	// Parse post_processing
 	if postProc, ok := metadataRaw["post_processing"].(map[string]any); ok {
-		if v, ok := postProc["scan_sources_pattern"].(string); ok {
-			metadata.PostProcessing.ScanSourcesPattern = v
-		}
 		if v, ok := postProc["register_target"].(bool); ok {
 			metadata.PostProcessing.RegisterTarget = v
 		}
+	}
+
+	if v, ok := metadataRaw["tool_cached"].(bool); ok {
+		metadata.ToolCached = v
 	}
 
 	// Parse library_output_dir (defaults to "bin" if not specified)
@@ -449,6 +450,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	// This is structural, not variable resolution
 	moduleDir, _ := itemConfig["module_dir"].(string)
 	context := map[string]any{
+		"template_name": templateName,
 		"module_dir":    moduleDir,
 		"item":          itemConfig,
 		"config":        mergedConfig,
@@ -1020,16 +1022,6 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		OutputPattern string
 	}{tool.OutputExtension, resolvedOutputPattern})
 
-	// Resolve output path from template using VarEnv
-	outputTemplate := ""
-	if out, ok := step["output"].(string); ok {
-		outputTemplate = out
-	}
-	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
-	if err != nil {
-		return nil, err
-	}
-	output = filepath.Clean(output)
 
 	// Get working directory (module path)
 	workingDir := ""
@@ -1053,6 +1045,22 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		}
 	}
 
+	// Command parameters are variables of the output path too (Cargo's ${profile}, ${bin_name})
+	for paramName, paramValue := range tool.ResolveCommandParams(toolParams, itemConfig, configuration) {
+		sc.VarEnv.SetVariable(paramName, paramValue, "command-param")
+	}
+
+	// Resolve output path from template using VarEnv
+	outputTemplate := ""
+	if out, ok := step["output"].(string); ok {
+		outputTemplate = out
+	}
+	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+	if err != nil {
+		return nil, err
+	}
+	output = filepath.Clean(output)
+
 	// Create a child VarEnv for command resolution with all needed variables
 	cmdVarEnv := sc.VarEnv.CreateChild()
 
@@ -1073,14 +1081,6 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 	cmdVarEnv.SetVariable("flags", strings.Join(flagsList, " "), "build-command")
 
-	// Resolve command parameters using data-driven approach and set them in VarEnv
-	if len(tool.CommandParams) > 0 {
-		resolvedParams := tool.ResolveCommandParams(toolParams, itemConfig, configuration)
-		for paramName, paramValue := range resolvedParams {
-			cmdVarEnv.SetVariable(paramName, paramValue, "command-param")
-		}
-	}
-
 	// Build and resolve the command using VarEnv
 	command, err := resolveStrict(cmdVarEnv, tool.Command, "the command of tool "+tool.Name)
 	if err != nil {
@@ -1095,25 +1095,21 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		command = fmt.Sprintf("cd %s && %s", workingDir, command)
 	}
 
-	// Collect inputs for cache invalidation from manifest_files
-	taskInputs := []TaskInput{}
-	if workingDir != "" && len(tool.ManifestFiles) > 0 {
-		for _, manifestFile := range tool.ManifestFiles {
-			manifestPath := filepath.Join(workingDir, manifestFile)
-			taskInputs = append(taskInputs, NewTaskInput(manifestPath))
-		}
-	}
-
-	// Create task with tool-specific type
+	// The tool tracks its own inputs (imports outside the target directory, go.mod, Cargo.toml,
+	// path dependencies, build scripts, embedded files): a tool-cached task always runs and lets
+	// the tool's cache decide, so it declares no inputs to hash.
 	taskID := idGen.Next("build", itemName)
 	task := NewBuildTask(
 		taskID,
 		tool.Name,
-		taskInputs,
+		nil,
 		[]string{output},
 		[]string{}, // No dependencies - build tools handle internally
 		command,
 	)
+	if metadata := bte.GetTemplateMetadata(fmt.Sprint(context["template_name"])); metadata != nil {
+		task.ToolCached = metadata.ToolCached
+	}
 	task.Platform = platform
 	task.Architecture = architecture
 	task.Configuration = configuration

@@ -1,0 +1,8 @@
+project:
+  name: go_outside_import
+
+targets:
+  executables:
+    - name: app
+      language: go
+      path: cmd/app

@@ -20,10 +20,18 @@ toolchain:
 
   output_prefix: ""
 
+  # Where Cargo puts this toolchain's artifacts, under the --target-dir: the Rust templates'
+  # outputs are ${output_dir}/cargo/${cargo_triple_dir}${profile}/<file>.
+  variables:
+    cargo_triple_dir: "x86_64-pc-windows-gnu/"
+    exe_ext: ".exe"
+    staticlib_name: "lib${item.name}.a"
+    cdylib_name: "${item.name}.dll"
+
   tools:
     cargo_build:
       action: build
-      command: "cargo build ${release_flag} ${lib_flag} --target x86_64-pc-windows-gnu --target-dir ${output_dir} ${features} ${bin_flag}"
+      command: "cargo build ${release_flag} ${lib_flag} --target x86_64-pc-windows-gnu --target-dir ${output_dir}/cargo ${features} ${bin_flag}"
       input_extensions: [".rs"]
       output_extension: ".exe"
       output_pattern: "${name}.exe"
@@ -33,6 +41,16 @@ toolchain:
         release: ["--release"]
       
       command_params:
+        # Cargo's profile directory: release when the configuration's flags pass --release
+        profile:
+          sources: ["tool.flags.${config}"]
+          match: "--release"
+          format: "release"
+          default: "debug"
+        # The executable's name: bin: if set, else the target's name
+        bin_name:
+          sources: ["tool_params.bin", "item.bin", "item.name"]
+          format: "${value}"
         release_flag:
           sources: ["tool.flags.${config}"]
           match: "--release"
@@ -52,9 +70,6 @@ toolchain:
           format: "--bin ${value}"
           optional: true
       
-      manifest_files:
-        - "Cargo.toml"
-        - "Cargo.lock"
       
       supports:
         features: true

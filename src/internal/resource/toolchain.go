@@ -28,6 +28,8 @@ type CommandParam struct {
 	Match string `yaml:"match"`
 	// Optional means empty string if not found (default: true)
 	Optional bool `yaml:"optional"`
+	// Default is the value when no source gives one (or Match matches nothing), used as is
+	Default string `yaml:"default"`
 }
 
 // Tool represents an individual tool within a toolchain
@@ -42,7 +44,6 @@ type Tool struct {
 	Flags              map[string][]string     `yaml:"flags"`
 	Supports           map[string]any          `yaml:"supports"`
 	CommandParams      map[string]CommandParam `yaml:"-"` // Declarative command parameter definitions
-	ManifestFiles      []string                `yaml:"-"` // Files to track for cache invalidation (e.g., go.mod, Cargo.toml)
 }
 
 // GetCommand returns the command for the given platform, falling back to the default Command
@@ -104,10 +105,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 	}
 
 	if !found {
-		if param.Optional {
-			return ""
-		}
-		return ""
+		return param.Default
 	}
 
 	// Convert to string(s)
@@ -115,7 +113,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 	switch v := rawValue.(type) {
 	case string:
 		if v == "" {
-			return ""
+			return param.Default
 		}
 		values = []string{v}
 	case []string:
@@ -129,7 +127,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 	}
 
 	if len(values) == 0 {
-		return ""
+		return param.Default
 	}
 
 	// If Match is specified, filter to matching values
@@ -141,7 +139,7 @@ func (t *Tool) resolveParamValue(param CommandParam, toolParams, itemConfig map[
 			}
 		}
 		if len(matched) == 0 {
-			return ""
+			return param.Default
 		}
 		values = matched
 	}
@@ -227,7 +225,6 @@ func NewTool(name, action, command string, inputExts []string, outputExt string)
 		Flags:           make(map[string][]string),
 		Supports:        make(map[string]any),
 		CommandParams:   make(map[string]CommandParam),
-		ManifestFiles:   []string{},
 	}
 }
 

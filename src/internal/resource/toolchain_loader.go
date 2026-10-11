@@ -353,7 +353,6 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 		Flags:           make(map[string][]string),
 		Supports:        make(map[string]any),
 		CommandParams:   make(map[string]CommandParam),
-		ManifestFiles:   []string{},
 		InputExtensions: []string{},
 	}
 
@@ -430,20 +429,6 @@ func parseToolFromData(toolName string, toolData map[string]any) *Tool {
 			}
 			param := parseCommandParam(paramData)
 			tool.CommandParams[paramName] = param
-		}
-	}
-
-	// Parse manifest_files
-	if manifestData, ok := toolData["manifest_files"]; ok {
-		switch v := manifestData.(type) {
-		case string:
-			tool.ManifestFiles = []string{v}
-		case []any:
-			for _, f := range v {
-				if fStr, ok := f.(string); ok {
-					tool.ManifestFiles = append(tool.ManifestFiles, fStr)
-				}
-			}
 		}
 	}
 
@@ -530,6 +515,11 @@ func parseCommandParam(data map[string]any) CommandParam {
 	// Parse optional (default is true)
 	if optional, ok := data["optional"].(bool); ok {
 		param.Optional = optional
+	}
+
+	// Parse default
+	if def, ok := data["default"].(string); ok {
+		param.Default = def
 	}
 
 	return param

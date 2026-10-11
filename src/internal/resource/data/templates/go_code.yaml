@@ -13,13 +13,14 @@ templates:
       language: go
       target_types: [executable]
       toolchain_language: go
+      # go build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
       pre_processing:
         resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
       post_processing:
-        scan_sources_pattern: "*.go"
         register_target: true
     steps:
       - name: build
@@ -39,13 +40,14 @@ templates:
       language: go
       target_types: [shared_library]
       toolchain_language: go
+      # go build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
       pre_processing:
         resolve_deps: false
         resolve_sources: false
         resolve_include_dirs: false
         resolve_path: true
       post_processing:
-        scan_sources_pattern: "*.go"
         register_target: true
     steps:
       - name: build

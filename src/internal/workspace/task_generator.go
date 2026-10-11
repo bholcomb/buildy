@@ -210,11 +210,13 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	// Check if current toolchain matches the required language
+	targetToolchain := tg.CurrentToolchain
 	if tg.CurrentToolchain != nil && tg.CurrentToolchain.Language == toolchainLanguage {
 		toolchainName = tg.CurrentToolchain.Name
 	} else if tg.ToolchainManager != nil {
 		// Find toolchain by language
 		langToolchain := tg.ToolchainManager.FindByLanguage(toolchainLanguage, tg.Platform, tg.Architecture)
+		targetToolchain = langToolchain
 		if langToolchain != nil {
 			toolchainName = langToolchain.Name
 			var matcherErr error
@@ -369,6 +371,14 @@ func (tg *TaskGenerator) generateTargetTasks(
 		mergedConfig["defines"] = applyFlagRemovals(ExtractStringList(mergedConfig["defines"]), removals)
 	}
 
+	// The toolchain's variables (e.g. where Cargo puts artifacts) are visible to the template
+	templateVarEnv := tg.VarEnv.CreateChild()
+	if targetToolchain != nil {
+		for key, val := range targetToolchain.Variables {
+			templateVarEnv.SetVariable(key, val, "toolchain "+targetToolchain.Name)
+		}
+	}
+
 	// Expand template
 	tasks, err := tg.TemplateEngine.ExpandTemplate(
 		templateName,
@@ -384,7 +394,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 		toolchainName,
 		tg.ConfigHash,
 		existingTasks,
-		tg.VarEnv,
+		templateVarEnv,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("target '%s' in module %s: %w", targetName, tg.moduleName(), err)
@@ -402,27 +412,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 			if !hasString(task.Dependencies, id) {
 				task.Dependencies = append(task.Dependencies, id)
 			}
-		}
-	}
-
-	if metadata.PostProcessing.ScanSourcesPattern != "" {
-		// Get the path to scan (use resolved path if available)
-		scanPath := "."
-		if p, ok := targetConfig["path"].(string); ok {
-			scanPath = p
-		}
-
-		// Scan for source files using the pattern from metadata
-		sourceFiles, scanErr := scanSourceFiles(scanPath, metadata.PostProcessing.ScanSourcesPattern)
-		if scanErr != nil {
-			util.LogWarning("Failed to scan source files in %s: %v", scanPath, scanErr)
-		} else {
-			for _, task := range tasks {
-				for _, srcFile := range sourceFiles {
-					task.Inputs = append(task.Inputs, NewTaskInput(srcFile))
-				}
-			}
-			util.LogInfo("Found %d source files matching '%s' in %s", len(sourceFiles), metadata.PostProcessing.ScanSourcesPattern, scanPath)
 		}
 	}
 
@@ -461,55 +450,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	return tasks, nil
-}
-
-// scanSourceFiles recursively scans a directory for files matching a glob pattern
-// Note: Manifest files (go.mod, Cargo.toml, etc.) are now handled via toolchain's
-// manifest_files field, not hardcoded here.
-func scanSourceFiles(rootDir string, pattern string) ([]string, error) {
-	var files []string
-
-	// Common directories to skip
-	skipDirs := map[string]bool{
-		"vendor":        true,
-		".git":          true,
-		"testdata":      true,
-		".buildy_cache": true,
-		"target":        true, // Rust/Cargo output
-		"node_modules":  true,
-		"build":         true,
-	}
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip common non-source directories
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Check if file matches the pattern
-		matched, matchErr := filepath.Match(pattern, info.Name())
-		if matchErr != nil {
-			return matchErr
-		}
-		if matched {
-			files = append(files, path)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return files, nil
 }
 
 // GenerateTasks generates all tasks for a configuration

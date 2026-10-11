@@ -367,7 +367,11 @@ func (te *TaskExecutor) prepareOutputs(task *workspace.BuildTask) error {
 func checkOutputs(task *workspace.BuildTask) error {
 	for _, output := range task.Outputs {
 		if _, err := os.Stat(output); err != nil {
-			return fmt.Errorf("%s exited 0 but did not produce declared output %s", task.TaskID, output)
+			hint := ""
+			if task.ToolCached {
+				hint = " (the tool named its output differently: check the target's name, or bin: for a Rust executable)"
+			}
+			return fmt.Errorf("%s exited 0 but did not produce declared output %s%s", task.TaskID, output, hint)
 		}
 	}
 	if task.DepFile != nil {
