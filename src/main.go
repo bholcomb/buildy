@@ -346,17 +346,14 @@ func main() {
 		}
 	}
 
-	// Initialize toolchain manager with workspace and built-in paths
-	toolchainDirs := []string{}
-	// 1. Workspace buildy_config/toolchains (highest priority)
-	toolchainDirs = append(toolchainDirs, filepath.Join(ws.RootDir, "buildy_config", "toolchains"))
-	// 2. Additional data directories from CLI
+	// The toolchain directories, lowest priority first: a toolchain in a later directory replaces
+	// one of the same name in an earlier one, and the workspace's replace every other
+	toolchainDirs := []string{filepath.Join(buildyDir, "data", "toolchains")}
 	for _, dataDir := range additionalDataDirs {
 		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
 	}
-	// 3. Built-in toolchains directory
-	toolchainDirs = append(toolchainDirs, filepath.Join(buildyDir, "data", "toolchains"))
-	
+	toolchainDirs = append(toolchainDirs, filepath.Join(ws.RootDir, "buildy_config", "toolchains"))
+
 	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
 	if err != nil {
 		util.LogFatal("Failed to initialize toolchain manager: %v", err)

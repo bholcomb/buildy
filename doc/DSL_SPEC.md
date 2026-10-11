@@ -38,6 +38,17 @@ Buildy is a multi-language build system designed for:
 | **Executable extensions** | Toolchain handles via `output_pattern` (e.g., `{name}.exe` on Windows) |
 | **Shell commands** | Abstract tools preferred; platform subsections when shell is unavoidable |
 
+### Platform and Architecture Names
+
+| | Names | Aliases |
+|---|---|---|
+| Platform | `linux`, `windows`, `macos`, `wasm` | `darwin` is `macos` |
+| Architecture | `x86_64`, `x86`, `arm64`, `arm`, `wasm32` | `amd64` is `x86_64`, `aarch64` is `arm64`, `i686` and `i386` are `x86` |
+
+`--platform` and `--architecture`, filter keys, dependency sections and toolchain targets all use
+these names, and an alias means its name everywhere (`--platform darwin` builds `macos`, and a
+`darwin:` filter matches it). Any other name is an error.
+
 ---
 
 ## File Structure
@@ -115,6 +126,19 @@ Required fields: `project.name` in the root config; `name` and `language` on eve
 `sources` on C and C++ targets; `path` on Go and Rust targets. The old `library:`, `executable:`
 and `tasks:` sections were never built and are rejected. Dependency definitions in
 `buildy_config/` are validated the same way.
+
+Toolchain, template and build system files (built-in or in `buildy_config/`) are read the same
+way, by one loader per kind: an unknown key, a duplicate key or a value of the wrong type is an
+error naming the file, the line and the key path, and a built-in file that fails to load stops
+buildy, never a warning:
+
+```
+FATAL: Failed to initialize toolchain manager: buildy_config/toolchains/mine.yaml is not a valid toolchain:
+  - line 7: unknown key 'toolchain.tools.compile.input_extension' (did you mean 'input_extensions'?)
+```
+
+A string field takes a string: `version: 1.0` is an error (`'project.version' must be a string,
+not a number (quote it: "1.0")`), since YAML reads it as the number 1.
 
 Configuration errors found while generating tasks also stop the build, naming the module and the
 item: an unknown toolchain (from `--toolchain`, `project.toolchain`, `environment.toolchains`, or an
@@ -1342,8 +1366,11 @@ Templates are language-agnostic recipes. Toolchains are platform-specific implem
 ### Search Order
 
 1. `./buildy_config/toolchains/*.yaml` - Project-specific
-2. `~/.buildy/toolchains/*.yaml` - User-shared
+2. `--add-data-dir <dir>`'s `toolchains/*.yaml`
 3. Built-in (embedded in binary)
+
+A toolchain replaces one of the same name lower in the list. Two files in one directory with the
+same toolchain name are an error.
 
 ### Built-in Toolchains
 
@@ -1421,15 +1448,19 @@ toolchain:
 
 | Field | Description |
 |-------|-------------|
-| `name` | Toolchain identifier |
+| `name` | Toolchain identifier (required) |
 | `description` | Human-readable description |
 | `language` | Primary language (c, cpp, go, rust) |
-| `target` | Target platform and architecture |
+| `target` | Target platform and architecture (a [platform name](#platform-and-architecture-names) or `any`) |
 | `host` | Host platform requirements |
 | `variables` | Toolchain-specific variables |
 | `output_prefix` | Default library filename prefix (e.g., `"lib"` or `""`) |
-| `execution` | Execution configuration (native or docker) |
-| `tools` | Map of tool definitions |
+| `execution` | Execution configuration (native, the default, or docker) |
+| `flag_mappings` | Abstract keywords: keyword -> value -> flags |
+| `tools` | Map of tool definitions, in the order written |
+
+A toolchain is unambiguous, or it fails to load: at most one tool per action and input extension,
+one link tool per `supports.output_type` (which every link tool declares), and one `build` tool.
 
 ### Unified Tool Model
 
@@ -1471,8 +1502,8 @@ tools:
 
 | Field | Description |
 |-------|-------------|
-| `action` | Tool action type (compile, link, transform, convert, generate, build) |
-| `command` | Command template with variable substitution |
+| `action` | Tool action type (compile, link, transform, convert, generate, build) (required) |
+| `command` | Command template with variable substitution, or one per platform (required) |
 | `input_extensions` | File extensions this tool accepts |
 | `output_extension` | Extension for output files |
 | `output_pattern` | Pattern for output filename (supports `${name}`, `${output_prefix}`) |
@@ -1509,7 +1540,8 @@ The `supports` section declares tool capabilities and flag formats:
 | `frameworks` | bool | Supports macOS frameworks |
 | `framework_flag` | string | Flag for frameworks (e.g., `-framework`) |
 
-**Go/Rust supports:**
+**Go/Rust supports** (descriptive: the tool's `command_params` do the work, buildy doesn't read
+these):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1717,6 +1749,13 @@ tools:
       macos: "texturetool ${flags} -o ${output} ${input}"
 ```
 
+A tool with per-platform commands has none for the other platforms: using it there is an error
+naming the platforms it has.
+
+A transform or generate artifact runs, for each input file, the toolchain's tool whose
+`input_extensions` takes the file (or the toolchain's only transform, convert or compile tool,
+for a transform; generate or compile, for a generate).
+
 ---
 
 ## 11. Build Templates
@@ -1790,7 +1829,7 @@ The `metadata` section controls how buildy processes the target:
 
 | Field | Description |
 |-------|-------------|
-| `resolve_packages` | Resolve package dependencies and add include_dirs/libs |
+| `resolve_deps` | Resolve the target's `deps` and add their include_dirs, libs and defines |
 | `resolve_sources` | Expand source glob patterns to file lists |
 | `resolve_include_dirs` | Process include directory paths |
 | `resolve_path` | Resolve `item.path` for Go/Rust targets |
@@ -1800,7 +1839,11 @@ The `metadata` section controls how buildy processes the target:
 | Field | Description |
 |-------|-------------|
 | `register_target` | Register target for dependency resolution |
-| `scan_sources_pattern` | Pattern for scanning source files (e.g., `"*.go"`) |
+
+The other metadata fields: `language` and `target_types` (required; each language and target type
+has exactly one template, so two templates claiming the same are an error, and a template replaces
+a built-in one by taking its name), `toolchain_language`, `library_output_dir` (default `bin`) and
+`tool_cached`.
 
 ### Step Fields
 
@@ -1810,8 +1853,7 @@ The `metadata` section controls how buildy processes the target:
 | `action` | Tool action to invoke (compile, link, build, transform, generate) |
 | `for_each` | Iterate over items (`source` expands to one task per source file) |
 | `output` | Output file path template |
-| `outputs` | List of output file paths (for multi-output steps) |
-| `inputs` | Input files (string or array) |
+| `inputs` | Inputs: references to earlier steps' outputs (`${compile.outputs}`) |
 | `depends_on` | Dependencies (string or array of task IDs) |
 | `output_type` | For link action: `executable`, `shared_library`, `static_library` |
 | `working_dir` | Working directory for step execution |
@@ -2022,26 +2064,26 @@ build_system:
       required: false
     
     build:
-      command: "bazel build //... {args}"
-      working_dir: "{source_dir}"
+      command: "bazel build //... ${args}"
+      working_dir: "${source_dir}"
       default_args: []
       required: true
     
     test:
       command: "bazel test //..."
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
     
     clean:
       command: "bazel clean"
-      working_dir: "{source_dir}"
+      working_dir: "${source_dir}"
       required: false
   
   output:
     include_patterns:
-      - "{source_dir}"
+      - "${source_dir}"
     lib_patterns:
-      - "{source_dir}/bazel-bin"
+      - "${source_dir}/bazel-bin"
 ```
 
 ### Build System Fields
@@ -2081,11 +2123,14 @@ Available in command templates:
 
 | Variable | Description |
 |----------|-------------|
-| `{source_dir}` | Source directory of the dependency |
-| `{build_dir}` | Build output directory (usually `{source_dir}/_build`) |
-| `{install_dir}` | Installation prefix directory |
-| `{jobs}` | Number of parallel jobs (auto-detected from CPU count) |
-| `{args}` | Combined default_args and build_args |
+| `${source_dir}` | Source directory of the dependency |
+| `${build_dir}` | Build output directory (usually `${source_dir}/_build`) |
+| `${install_dir}` | Installation prefix directory |
+| `${jobs}` | Number of parallel jobs (auto-detected from CPU count) |
+| `${args}` | Combined default_args and build_args |
+
+A build system has a `build` phase; its phases are `configure`, `build`, `test`, `install` and
+`clean`, and any other is an error.
 
 ---
 

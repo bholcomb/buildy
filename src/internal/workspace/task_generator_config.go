@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
 
@@ -127,7 +128,7 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 
 	// Resolve abstract keywords (optimization, warnings, symbols, runtime, etc.)
 	// via the toolchain's flag_mappings. Resolved flags are prepended to merged["flags"].
-	if tg.CurrentToolchain != nil && len(tg.CurrentToolchain.FlagMappings) > 0 {
+	if tg.CurrentToolchain != nil && tg.CurrentToolchain.FlagMappings.Len() > 0 {
 		if err := resolveAbstractKeywords(merged, tg.CurrentToolchain.FlagMappings); err != nil {
 			return nil, err
 		}
@@ -155,18 +156,15 @@ func (tg *TaskGenerator) getMergedConfig(config map[string]any) (map[string]any,
 // flags. Resolved flags are prepended to merged["flags"]. The consumed
 // keyword key is deleted from merged. Returns an error if a keyword's value
 // cannot be resolved (unknown value for that toolchain).
-func resolveAbstractKeywords(merged map[string]any, mappings map[string]map[string][]string) error {
+func resolveAbstractKeywords(merged map[string]any, mappings config.Ordered[config.Ordered[[]string]]) error {
 	var resolvedFlags []string
 
 	// Sort keywords for deterministic flag ordering across builds.
-	sortedKeywords := make([]string, 0, len(mappings))
-	for keyword := range mappings {
-		sortedKeywords = append(sortedKeywords, keyword)
-	}
+	sortedKeywords := append([]string{}, mappings.Keys...)
 	sort.Strings(sortedKeywords)
 
 	for _, keyword := range sortedKeywords {
-		valueMap := mappings[keyword]
+		valueMap := mappings.Values[keyword].Values
 		rawVal, exists := merged[keyword]
 		if !exists {
 			continue

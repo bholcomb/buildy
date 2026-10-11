@@ -21,11 +21,11 @@ type ExecutionResult struct {
 // ExecSpec says where a command runs: natively on the host, or in a Docker container. It comes
 // from the toolchain that produced a task, and is part of the task's cache key.
 type ExecSpec struct {
-	Type    string            `json:"type,omitempty"`    // "" or "native", or "docker"
-	Image   string            `json:"image,omitempty"`   // Docker image
-	Volumes []string          `json:"volumes,omitempty"` // Extra docker -v mounts (${UID} and ${GID} expand)
-	User    string            `json:"user,omitempty"`    // Docker -u; the invoking user if empty
-	Env     map[string]string `json:"env,omitempty"`     // Environment variables for the command
+	Type    string            `yaml:"type" json:"type,omitempty"`       // "" or "native", or "docker"
+	Image   string            `yaml:"image" json:"image,omitempty"`     // Docker image
+	Volumes []string          `yaml:"volumes" json:"volumes,omitempty"` // Extra docker -v mounts (${UID} and ${GID} expand)
+	User    string            `yaml:"user" json:"user,omitempty"`       // Docker -u; the invoking user if empty
+	Env     map[string]string `yaml:"env" json:"env,omitempty"`         // Environment variables for the command
 }
 
 // IsDocker reports whether the spec runs in Docker.

@@ -3,6 +3,7 @@ package resource
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"buildy/pkg/util"
@@ -12,14 +13,16 @@ import (
 type CommandBuilder struct {
 	toolchain   *ToolchainConfig
 	toolMatcher *ToolMatcher
+	platform    string
 	configType  string
 }
 
 // NewCommandBuilder creates a new CommandBuilder
-func NewCommandBuilder(toolchain *ToolchainConfig, toolMatcher *ToolMatcher, configType string) *CommandBuilder {
+func NewCommandBuilder(toolchain *ToolchainConfig, toolMatcher *ToolMatcher, platform, configType string) *CommandBuilder {
 	return &CommandBuilder{
 		toolchain:   toolchain,
 		toolMatcher: toolMatcher,
+		platform:    platform,
 		configType:  configType,
 	}
 }
@@ -67,11 +70,8 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Add defines if tool supports them
-	if supportsDefines, ok := tool.Supports["defines"].(bool); ok && supportsDefines && len(defines) > 0 {
-		defineFlag := "-D"
-		if df, ok := tool.Supports["define_flag"].(string); ok {
-			defineFlag = df
-		}
+	if tool.Supports.Defines && len(defines) > 0 {
+		defineFlag := orDefault(tool.Supports.DefineFlag, "-D")
 		defineStrs := []string{}
 		for _, d := range defines {
 			defineStrs = append(defineStrs, defineFlag+d)
@@ -82,11 +82,8 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Add includes if tool supports them
-	if supportsIncludes, ok := tool.Supports["includes"].(bool); ok && supportsIncludes && len(includeDirs) > 0 {
-		includeFlag := "-I"
-		if inf, ok := tool.Supports["include_flag"].(string); ok {
-			includeFlag = inf
-		}
+	if tool.Supports.Includes && len(includeDirs) > 0 {
+		includeFlag := orDefault(tool.Supports.IncludeFlag, "-I")
 		includeStrs := []string{}
 		for _, inc := range includeDirs {
 			includeStrs = append(includeStrs, includeFlag+inc)
@@ -97,13 +94,9 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Add PIC flag if tool supports it and requested
-	if supportsPIC, ok := tool.Supports["pic"].(bool); ok && supportsPIC {
+	if tool.Supports.PIC {
 		if isShared, ok := kwargs["is_shared_library"].(bool); ok && isShared {
-			picFlag := "-fPIC"
-			if pf, ok := tool.Supports["pic_flag"].(string); ok {
-				picFlag = pf
-			}
-			templateVars["pic"] = picFlag
+			templateVars["pic"] = orDefault(tool.Supports.PICFlag, "-fPIC")
 		} else {
 			templateVars["pic"] = ""
 		}
@@ -112,7 +105,7 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Handle dependency generation if tool supports it
-	if depTemplate, ok := tool.Supports["dependencies"].(string); ok && depTemplate != "" {
+	if depTemplate := tool.Supports.Dependencies; depTemplate != "" {
 		// Use .json extension for MSVC /sourceDependencies, .d for GCC/Clang
 		if strings.Contains(strings.ToLower(depTemplate), "/sourcedependencies") {
 			depFile = strings.TrimSuffix(output, tool.OutputExtension) + ".json"
@@ -135,19 +128,41 @@ func (cb *CommandBuilder) BuildCommand(
 		}
 	}
 
-	// Build command from template
-	command = tool.Command
-	for key, value := range templateVars {
-		placeholder := "${" + key + "}"
-		command = strings.ReplaceAll(command, placeholder, value)
-	}
-
-	command = strings.TrimSpace(command)
-	if err := checkPlaceholders(tool, command); err != nil {
+	command, err = cb.fill(tool, templateVars)
+	if err != nil {
 		return "", "", "", fmt.Errorf("compiling %s: %w", source, err)
 	}
 
 	return command, depFile, depFormat, nil
+}
+
+// fill returns the tool's command for the build's platform with its placeholders filled, in
+// the order of their names, so the result never depends on map order.
+func (cb *CommandBuilder) fill(tool *Tool, vars map[string]string) (string, error) {
+	command, err := tool.Command.For(cb.platform)
+	if err != nil {
+		return "", fmt.Errorf("tool %s %w", tool.Name, err)
+	}
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		command = strings.ReplaceAll(command, "${"+name+"}", vars[name])
+	}
+	command = strings.TrimSpace(command)
+	if err := checkPlaceholders(tool, command); err != nil {
+		return "", err
+	}
+	return command, nil
+}
+
+func orDefault(value, def string) string {
+	if value == "" {
+		return def
+	}
+	return value
 }
 
 // checkPlaceholders fails if a ${...} placeholder of the tool's command was given no value.
@@ -196,11 +211,8 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	}
 
 	// Add library directories if tool supports them
-	if supportsLibDirs, ok := tool.Supports["lib_dirs"].(bool); ok && supportsLibDirs && len(libDirs) > 0 {
-		libDirFlag := "-L"
-		if ldf, ok := tool.Supports["lib_dir_flag"].(string); ok {
-			libDirFlag = ldf
-		}
+	if tool.Supports.LibDirs && len(libDirs) > 0 {
+		libDirFlag := orDefault(tool.Supports.LibDirFlag, "-L")
 		libDirStrs := []string{}
 		for _, d := range libDirs {
 			libDirStrs = append(libDirStrs, libDirFlag+d)
@@ -211,15 +223,9 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	}
 
 	// Add libraries if tool supports them
-	if supportsLibs, ok := tool.Supports["libs"].(bool); ok && supportsLibs && len(libs) > 0 {
-		libFlag := "-l"
-		if lf, ok := tool.Supports["lib_flag"].(string); ok {
-			libFlag = lf
-		}
-		libSuffix := ""
-		if ls, ok := tool.Supports["lib_suffix"].(string); ok {
-			libSuffix = ls
-		}
+	if tool.Supports.Libs && len(libs) > 0 {
+		libFlag := orDefault(tool.Supports.LibFlag, "-l")
+		libSuffix := tool.Supports.LibSuffix
 
 		libStrs := []string{}
 		for _, lib := range libs {
@@ -236,11 +242,8 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	}
 
 	// Add frameworks if tool supports them (macOS only)
-	if supportsFrameworks, ok := tool.Supports["frameworks"].(bool); ok && supportsFrameworks && len(frameworks) > 0 {
-		frameworkFlag := "-framework "
-		if ff, ok := tool.Supports["framework_flag"].(string); ok {
-			frameworkFlag = ff
-		}
+	if tool.Supports.Frameworks && len(frameworks) > 0 {
+		frameworkFlag := orDefault(tool.Supports.FrameworkFlag, "-framework ")
 		frameworkStrs := []string{}
 		for _, fw := range frameworks {
 			frameworkStrs = append(frameworkStrs, frameworkFlag+fw)
@@ -253,7 +256,7 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	// Add import library path for DLLs (MSVC)
 	// The DLL goes in bin/, but the import library should go in lib/
 	implib := ""
-	if supportsImplib, ok := tool.Supports["implib"].(bool); ok && supportsImplib {
+	if tool.Supports.Implib {
 		if strings.HasSuffix(output, ".dll") {
 			// Replace bin with lib in the path, handling both path separators
 			// Use filepath.Dir/Base to properly handle the path components
@@ -281,60 +284,19 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	allFlags = append(allFlags, extraFlags...)
 	templateVars["flags"] = strings.Join(allFlags, " ")
 
-	// Build command
-	command := tool.Command
-	for key, value := range templateVars {
-		placeholder := "${" + key + "}"
-		command = strings.ReplaceAll(command, placeholder, value)
-	}
-
-	command = strings.TrimSpace(command)
-	if err := checkPlaceholders(tool, command); err != nil {
+	command, err := cb.fill(tool, templateVars)
+	if err != nil {
 		return "", "", fmt.Errorf("linking %s: %w", output, err)
 	}
 
 	return command, implib, nil
 }
 
-// ExecSpecFromToolchain returns where the toolchain's commands run, from its execution section.
+// ExecSpecFromToolchain returns where the toolchain's commands run, from its execution section
+// (validated when the toolchain was loaded).
 func ExecSpecFromToolchain(toolchain *ToolchainConfig) (util.ExecSpec, error) {
-	spec, err := execSpecFromMap(toolchain.ExecutionConfig)
-	if err != nil {
+	if err := toolchain.Execution.Validate(); err != nil {
 		return util.ExecSpec{}, fmt.Errorf("toolchain %s: %w", toolchain.Name, err)
 	}
-	return spec, nil
-}
-
-// execSpecFromMap reads an execution section: type, image, volumes, user, env.
-func execSpecFromMap(config map[string]any) (util.ExecSpec, error) {
-	spec := util.ExecSpec{}
-	for key, value := range config {
-		switch key {
-		case "type":
-			spec.Type, _ = value.(string)
-		case "image":
-			spec.Image, _ = value.(string)
-		case "user":
-			spec.User, _ = value.(string)
-		case "volumes":
-			spec.Volumes = util.ExtractStringList(value)
-		case "env":
-			env, ok := value.(map[string]any)
-			if !ok {
-				return spec, fmt.Errorf("execution.env must be a map")
-			}
-			spec.Env = map[string]string{}
-			for k, v := range env {
-				spec.Env[k] = fmt.Sprint(v)
-			}
-		case "working_dir":
-			return spec, fmt.Errorf("execution.working_dir is not supported: commands run in the workspace root, which Docker mounts at its host path")
-		default:
-			return spec, fmt.Errorf("unknown execution key %q (expected type, image, volumes, user, env)", key)
-		}
-	}
-	if err := spec.Validate(); err != nil {
-		return spec, fmt.Errorf("execution: %w", err)
-	}
-	return spec, nil
+	return toolchain.Execution, nil
 }

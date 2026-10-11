@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
 
@@ -21,98 +22,86 @@ func NewToolchainManager(toolchainsDir string) (*ToolchainManager, error) {
 	return NewToolchainManagerMulti([]string{toolchainsDir})
 }
 
-// NewToolchainManagerMulti creates a new ToolchainManager from multiple directories
+// NewToolchainManagerMulti loads the built-in toolchains, then the toolchains of each directory
+// in order (a later file with the same name replaces an earlier toolchain). Every file must load:
+// a toolchain that fails to, built-in or not, is an error.
 func NewToolchainManagerMulti(toolchainsDirs []string) (*ToolchainManager, error) {
 	tm := &ToolchainManager{
 		toolchainsDirs: toolchainsDirs,
 		toolchains:     make(map[string]*ToolchainConfig),
 	}
-
-	// First load embedded toolchains (built-in)
 	if err := tm.loadEmbeddedToolchains(); err != nil {
-		util.LogWarning("Failed to load embedded toolchains: %v", err)
+		return nil, err
 	}
-
-	// Then load from filesystem directories (can override built-in)
 	if err := tm.loadToolchains(); err != nil {
 		return nil, err
 	}
-
 	return tm, nil
 }
 
-// loadEmbeddedToolchains loads all toolchain configurations from embedded data
+// loadEmbeddedToolchains loads the built-in toolchains
 func (tm *ToolchainManager) loadEmbeddedToolchains() error {
-	// List all embedded toolchain files
 	files, err := ListEmbeddedFiles("toolchains")
 	if err != nil {
-		return err
+		return fmt.Errorf("listing the built-in toolchains: %w", err)
 	}
-
 	for _, filePath := range files {
 		if !strings.HasSuffix(filePath, ".yaml") {
 			continue
 		}
-
-		// Read the embedded file
 		data, err := GetEmbeddedFile(filePath)
 		if err != nil {
-			util.LogWarning("Failed to read embedded toolchain %s: %v", filePath, err)
-			continue
+			return fmt.Errorf("reading built-in toolchain %s: %w", filePath, err)
 		}
-
-		// Parse the toolchain
-		tc, err := LoadToolchainConfigFromData(data, filePath)
+		tc, err := config.LoadToolchain(data, "built-in "+filePath)
 		if err != nil {
-			util.LogWarning("Failed to parse embedded toolchain %s: %v", filePath, err)
-			continue
+			return err
 		}
-
+		if other, exists := tm.toolchains[tc.Name]; exists {
+			return fmt.Errorf("built-in toolchains %s and %s are both named '%s'", other.Source, tc.Source, tc.Name)
+		}
 		tm.toolchains[tc.Name] = tc
 		util.LogVerbose("Loaded embedded toolchain: %s - %s", tc.Name, tc.Description)
 	}
-
 	return nil
 }
 
-// loadToolchains loads all toolchain configurations from filesystem directories
+// loadToolchains loads the toolchains of the filesystem directories
 func (tm *ToolchainManager) loadToolchains() error {
-	// Load toolchains from each directory in order
 	for _, toolchainsDir := range tm.toolchainsDirs {
-		// Check if directory exists
-		if _, err := os.Stat(toolchainsDir); os.IsNotExist(err) {
-			util.LogVerbose("Additional toolchains directory not found, using built-in: %s", toolchainsDir)
-			continue // Not fatal, try next directory
-		}
-
-		// Read all .yaml files
 		entries, err := os.ReadDir(toolchainsDir)
+		if os.IsNotExist(err) {
+			util.LogVerbose("Additional toolchains directory not found, using built-in: %s", toolchainsDir)
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("failed to read toolchains directory %s: %w", toolchainsDir, err)
 		}
-
+		inDir := map[string]string{}
 		for _, entry := range entries {
-			if entry.IsDir() {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
 				continue
 			}
-
-			if filepath.Ext(entry.Name()) == ".yaml" {
-				tcFile := filepath.Join(toolchainsDir, entry.Name())
-				tc, err := LoadToolchainConfig(tcFile)
-				if err != nil {
-					return fmt.Errorf("failed to load toolchain %s: %w", tcFile, err)
-				}
-
-				if _, exists := tm.toolchains[tc.Name]; exists {
-					util.LogInfo("Toolchain '%s' from %s overrides built-in", tc.Name, toolchainsDir)
-				}
-
-				tm.toolchains[tc.Name] = tc
-				util.LogInfo("Loaded toolchain: %s - %s", tc.Name, tc.Description)
+			tcFile := filepath.Join(toolchainsDir, entry.Name())
+			data, err := os.ReadFile(tcFile)
+			if err != nil {
+				return fmt.Errorf("failed to read toolchain %s: %w", tcFile, err)
 			}
+			tc, err := config.LoadToolchain(data, tcFile)
+			if err != nil {
+				return err
+			}
+			if other, ok := inDir[tc.Name]; ok {
+				return fmt.Errorf("toolchains %s and %s are both named '%s'", other, tcFile, tc.Name)
+			}
+			inDir[tc.Name] = tcFile
+			if previous, exists := tm.toolchains[tc.Name]; exists {
+				util.LogInfo("Toolchain '%s' from %s replaces the one from %s", tc.Name, tcFile, previous.Source)
+			}
+			tm.toolchains[tc.Name] = tc
+			util.LogInfo("Loaded toolchain: %s - %s", tc.Name, tc.Description)
 		}
 	}
-
 	return nil
 }
 
@@ -126,9 +115,9 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 	// Collect matching toolchains
 	var matches []*ToolchainConfig
 	for _, tc := range tm.toolchains {
-		if tc.TargetPlatform == platform &&
-			tc.TargetArchitecture == architecture &&
-			tc.ExecutionType == "native" {
+		if tc.Target.Platform == platform &&
+			tc.Target.Architecture == architecture &&
+			!tc.Execution.IsDocker() {
 			matches = append(matches, tc)
 		}
 	}
@@ -146,7 +135,6 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 		"linux":   {"gcc-cpp-linux", "gcc-c-linux", "clang-cpp-linux", "clang-c-linux"},
 		"windows": {"msvc-cpp-windows", "msvc-c-windows", "gcc-cpp-mingw", "gcc-c-mingw"},
 		"macos":   {"clang-cpp-macos", "clang-c-macos", "clang-cpp-macos-arm64", "clang-c-macos-arm64"},
-		"darwin":  {"clang-cpp-macos", "clang-c-macos", "clang-cpp-macos-arm64", "clang-c-macos-arm64"}, // darwin is macOS
 	}
 
 	// Try to find preferred toolchain for this platform
@@ -176,9 +164,9 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 	var matches []*ToolchainConfig
 	for _, tc := range tm.toolchains {
 		if tc.Language == language &&
-			tc.TargetPlatform == platform &&
-			tc.TargetArchitecture == architecture &&
-			tc.ExecutionType == "native" {
+			tc.Target.Platform == platform &&
+			tc.Target.Architecture == architecture &&
+			!tc.Execution.IsDocker() {
 			matches = append(matches, tc)
 		}
 	}
@@ -187,8 +175,8 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 		// Try with just language match (for any platform toolchains)
 		for _, tc := range tm.toolchains {
 			if tc.Language == language &&
-				tc.TargetPlatform == "any" &&
-				tc.ExecutionType == "native" {
+				tc.Target.Platform == "any" &&
+				!tc.Execution.IsDocker() {
 				matches = append(matches, tc)
 			}
 		}
@@ -206,13 +194,11 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 			"linux":   {"gcc-c-linux", "clang-c-linux"},
 			"windows": {"msvc-c-windows", "gcc-c-mingw"},
 			"macos":   {"clang-c-macos", "clang-c-macos-arm64"},
-			"darwin":  {"clang-c-macos", "clang-c-macos-arm64"},
 		},
 		"cpp": {
 			"linux":   {"gcc-cpp-linux", "clang-cpp-linux"},
 			"windows": {"msvc-cpp-windows", "gcc-cpp-mingw"},
 			"macos":   {"clang-cpp-macos", "clang-cpp-macos-arm64"},
-			"darwin":  {"clang-cpp-macos", "clang-cpp-macos-arm64"},
 		},
 	}
 
@@ -239,25 +225,16 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 	return matches[0]
 }
 
-// ListToolchains lists all available toolchains with descriptions
-func (tm *ToolchainManager) ListToolchains() []struct {
-	Name        string
-	Description string
-} {
-	result := []struct {
-		Name        string
-		Description string
-	}{}
-
-	for _, tc := range tm.toolchains {
-		result = append(result, struct {
-			Name        string
-			Description string
-		}{
-			Name:        tc.Name,
-			Description: tc.Description,
-		})
+// ListToolchains lists the toolchains, by name
+func (tm *ToolchainManager) ListToolchains() []*ToolchainConfig {
+	names := make([]string, 0, len(tm.toolchains))
+	for name := range tm.toolchains {
+		names = append(names, name)
 	}
-
+	sort.Strings(names)
+	result := make([]*ToolchainConfig, len(names))
+	for i, name := range names {
+		result[i] = tm.toolchains[name]
+	}
 	return result
 }

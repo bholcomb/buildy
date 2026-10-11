@@ -109,7 +109,7 @@ func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 		return err
 	}
 	tg.ToolMatcher = toolMatcher
-	tg.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, tg.Configuration)
+	tg.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, tg.Platform, tg.Configuration)
 
 	return nil
 }
@@ -200,10 +200,11 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	// Look up template by language and target type
-	templateName, _, metadata, err := tg.TemplateEngine.LookupTemplate(language, targetType)
+	template, err := tg.TemplateEngine.LookupTemplate(language, targetType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find template for language '%s' and type '%s': %w", language, targetType, err)
 	}
+	templateName, metadata := template.Name, &template.Metadata
 
 	// Set module name for unique paths (sanitized for filesystem compatibility)
 	targetConfig["module"] = sanitizeModuleNameForPath(tg.CurrentModule)
@@ -237,7 +238,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 				return nil, fmt.Errorf("failed to create tool matcher for %s: %w", toolchainLanguage, matcherErr)
 			}
 			// Update command builder for the new toolchain
-			tg.CommandBuilder = resource.NewCommandBuilder(langToolchain, toolMatcher, tg.Configuration)
+			tg.CommandBuilder = resource.NewCommandBuilder(langToolchain, toolMatcher, tg.Platform, tg.Configuration)
 		} else {
 			return nil, fmt.Errorf("no %s toolchain found for platform %s-%s", toolchainLanguage, tg.Platform, tg.Architecture)
 		}
@@ -386,8 +387,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 	// The toolchain's variables (e.g. where Cargo puts artifacts) are visible to the template
 	templateVarEnv := tg.VarEnv.CreateChild()
 	if targetToolchain != nil {
-		for key, val := range targetToolchain.Variables {
-			templateVarEnv.SetVariable(key, val, "toolchain "+targetToolchain.Name)
+		for _, key := range targetToolchain.Variables.Keys {
+			templateVarEnv.SetVariable(key, targetToolchain.Variables.Values[key], "toolchain "+targetToolchain.Name)
 		}
 	}
 
@@ -815,18 +816,6 @@ func (tg *TaskGenerator) generateTransformTasks(
 			return nil, fmt.Errorf("artifacts.transform '%s': %w", name, err)
 		}
 
-		// Find the transform/convert/compile tool in the toolchain
-		var tool *resource.Tool
-		for _, t := range toolchain.Tools {
-			if t.Action == "transform" || t.Action == "convert" || t.Action == "compile" {
-				tool = t
-				break
-			}
-		}
-		if tool == nil {
-			return nil, fmt.Errorf("artifacts.transform '%s' in module %s: toolchain '%s' has no transform, convert or compile tool", name, tg.moduleName(), toolName)
-		}
-
 		// Collect all input files from all input patterns
 		var allInputFiles []string
 		for _, inputPattern := range inputPatterns {
@@ -877,18 +866,23 @@ func (tg *TaskGenerator) generateTransformTasks(
 			resolvedOutput = filepath.Clean(resolvedOutput)
 			inputFile = filepath.Clean(inputFile)
 
-			// Build the command
-			command := tool.GetCommand(tg.Platform)
+			// The tool for this file: the one that takes its extension
+			tool, err := toolchain.ToolFor(inputFile, "transform", "convert", "compile")
+			if err != nil {
+				return nil, fmt.Errorf("artifacts.transform '%s' in module %s: %w", name, tg.moduleName(), err)
+			}
+			command, err := tool.Command.For(tg.Platform)
+			if err != nil {
+				return nil, fmt.Errorf("artifacts.transform '%s' in module %s: tool %s %w", name, tg.moduleName(), tool.Name, err)
+			}
 
 			// Add command-specific variables to the iteration environment
 			iterVarEnv.SetVariable("output", resolvedOutput, "transform-command")
 			iterVarEnv.SetVariable("input", inputFile, "transform-command")
 			
 			// Add toolchain variables to the environment
-			if toolchain != nil && toolchain.Variables != nil {
-				for key, val := range toolchain.Variables {
-					iterVarEnv.SetVariable(key, val, "toolchain")
-				}
+			for _, key := range toolchain.Variables.Keys {
+				iterVarEnv.SetVariable(key, toolchain.Variables.Values[key], "toolchain")
 			}
 
 			// Add flags from tool configuration
@@ -1142,18 +1136,6 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				return nil, fmt.Errorf("artifacts.generate '%s': %w", name, err)
 			}
 
-			// Find the generate/compile tool
-			var tool *resource.Tool
-			for _, t := range toolchain.Tools {
-				if t.Action == "generate" || t.Action == "compile" {
-					tool = t
-					break
-				}
-			}
-			if tool == nil {
-				return nil, fmt.Errorf("artifacts.generate '%s' in module %s: toolchain '%s' has no generate or compile tool", name, tg.moduleName(), toolName)
-			}
-
 			// Resolve input pattern (use module directory)
 			if !filepath.IsAbs(inputPattern) && moduleDir != "" {
 				inputPattern = filepath.Join(moduleDir, inputPattern)
@@ -1186,10 +1168,16 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				iterVarEnv.SetVariable("output_dir", outputDir, "generate-iteration")
 
 				// Add toolchain variables to the environment
-				if toolchain != nil && toolchain.Variables != nil {
-					for key, val := range toolchain.Variables {
-						iterVarEnv.SetVariable(key, val, "toolchain")
-					}
+				for _, key := range toolchain.Variables.Keys {
+					iterVarEnv.SetVariable(key, toolchain.Variables.Values[key], "toolchain")
+				}
+				tool, err := toolchain.ToolFor(inputFile, "generate", "compile")
+				if err != nil {
+					return nil, fmt.Errorf("artifacts.generate '%s' in module %s: %w", name, tg.moduleName(), err)
+				}
+				toolCommand, err := tool.Command.For(tg.Platform)
+				if err != nil {
+					return nil, fmt.Errorf("artifacts.generate '%s' in module %s: tool %s %w", name, tg.moduleName(), tool.Name, err)
 				}
 
 				// Resolve output paths using VarEnv
@@ -1232,14 +1220,13 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				iterVarEnv.SetVariable("includes", "", "generate-command")
 
 				// Build command - resolve all ${var} syntax through VarEnv
-				command := tool.GetCommand(tg.Platform)
-				command, err = resolveStrict(iterVarEnv, command, "the command of artifacts.generate '"+name+"'")
+				command, err := resolveStrict(iterVarEnv, toolCommand, "the command of artifacts.generate '"+name+"'")
 				if err != nil {
 					return nil, err
 				}
 				
 				// Handle args appending if no placeholder was present
-				if !strings.Contains(tool.GetCommand(tg.Platform), "${args}") && argsStr != "" {
+				if !strings.Contains(toolCommand, "${args}") && argsStr != "" {
 					command = command + " " + argsStr
 				}
 

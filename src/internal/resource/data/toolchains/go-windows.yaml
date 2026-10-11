@@ -60,9 +60,5 @@ toolchain:
         build_tags_flag: "-tags"
         ldflags: true
         ldflags_flag: "-ldflags"
-        gcflags: true
-        gcflags_flag: "-gcflags"
-        trimpath: true
-        trimpath_flag: "-trimpath"
         buildmode: true
         buildmode_flag: "-buildmode"

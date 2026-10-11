@@ -182,9 +182,9 @@ func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, graph *workspac
 		toolchainInfo = map[string]any{
 			"name":                configParser.CurrentToolchain.Name,
 			"description":         configParser.CurrentToolchain.Description,
-			"target_platform":     configParser.CurrentToolchain.TargetPlatform,
-			"target_architecture": configParser.CurrentToolchain.TargetArchitecture,
-			"execution_type":      configParser.CurrentToolchain.ExecutionType,
+			"target_platform":     configParser.CurrentToolchain.Target.Platform,
+			"target_architecture": configParser.CurrentToolchain.Target.Architecture,
+			"execution_type":      configParser.CurrentToolchain.Execution.Type,
 		}
 	}
 

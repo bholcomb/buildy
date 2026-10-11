@@ -6,7 +6,7 @@ toolchain:
   language: "rust"
   
   target:
-    platform: web
+    platform: wasm
     architecture: wasm32
   
   host:
@@ -68,7 +68,3 @@ toolchain:
       supports:
         features: true
         features_flag: "--features"
-        all_features: true
-        all_features_flag: "--all-features"
-        no_default_features: true
-        no_default_features_flag: "--no-default-features"

@@ -492,7 +492,7 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, *Tas
 		return nil, nil, err
 	}
 	cp.ToolMatcher = toolMatcher
-	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Configuration)
+	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Platform, cp.Configuration)
 	util.LogInfo("Using toolchain: %s (%s)", tc.Name, tc.Description)
 
 	// Build variable environment

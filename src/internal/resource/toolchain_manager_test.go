@@ -2,6 +2,8 @@ package resource
 
 import (
 	"testing"
+
+	"buildy/internal/config"
 )
 
 func newEmbeddedToolchainManager(t *testing.T) *ToolchainManager {
@@ -36,8 +38,8 @@ func TestFindByLanguage_MacOS(t *testing.T) {
 		if tc.Name != c.want {
 			t.Errorf("FindByLanguage(%s, macos, %s) = %s, want %s", c.language, c.architecture, tc.Name, c.want)
 		}
-		if tc.TargetArchitecture != c.architecture {
-			t.Errorf("%s targets %s, want %s", tc.Name, tc.TargetArchitecture, c.architecture)
+		if tc.Target.Architecture != c.architecture {
+			t.Errorf("%s targets %s, want %s", tc.Name, tc.Target.Architecture, c.architecture)
 		}
 	}
 }
@@ -82,15 +84,14 @@ func TestExecSpecFromToolchain(t *testing.T) {
 		t.Errorf("gcc-cpp-linux: %+v, %v", spec, err)
 	}
 
-	for _, bad := range []map[string]any{
-		{"type": "docker", "image": "x", "working_dir": "/workspace"},
-		{"type": "docker"},
-		{"type": "vm"},
-		{"type": "native", "colour": "red"},
+	for _, bad := range []string{
+		"{type: docker, image: x, working_dir: /workspace}",
+		"{type: docker}",
+		"{type: vm}",
+		"{type: native, colour: red}",
 	} {
-		tc := NewToolchainConfig("bad", "")
-		tc.ExecutionConfig = bad
-		if _, err := ExecSpecFromToolchain(tc); err == nil {
+		data := "toolchain:\n  name: bad\n  execution: " + bad + "\n"
+		if _, err := config.LoadToolchain([]byte(data), "bad.yaml"); err == nil {
 			t.Errorf("execution %v was accepted", bad)
 		}
 	}

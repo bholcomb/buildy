@@ -1048,3 +1048,37 @@ func getSystemDependencyDirs() []string {
 		return []string{}
 	}
 }
+
+// execSpecFromMap reads an execution section: type, image, volumes, user, env.
+func execSpecFromMap(config map[string]any) (util.ExecSpec, error) {
+	spec := util.ExecSpec{}
+	for key, value := range config {
+		switch key {
+		case "type":
+			spec.Type, _ = value.(string)
+		case "image":
+			spec.Image, _ = value.(string)
+		case "user":
+			spec.User, _ = value.(string)
+		case "volumes":
+			spec.Volumes = util.ExtractStringList(value)
+		case "env":
+			env, ok := value.(map[string]any)
+			if !ok {
+				return spec, fmt.Errorf("execution.env must be a map")
+			}
+			spec.Env = map[string]string{}
+			for k, v := range env {
+				spec.Env[k] = fmt.Sprint(v)
+			}
+		case "working_dir":
+			return spec, fmt.Errorf("execution.working_dir is not supported: commands run in the workspace root, which Docker mounts at its host path")
+		default:
+			return spec, fmt.Errorf("unknown execution key %q (expected type, image, volumes, user, env)", key)
+		}
+	}
+	if err := spec.Validate(); err != nil {
+		return spec, fmt.Errorf("execution: %w", err)
+	}
+	return spec, nil
+}

@@ -9,35 +9,18 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/internal/resource"
 	"buildy/pkg/util"
-
-	"gopkg.in/yaml.v3"
 )
 
-// TemplateMetadata defines the metadata for a build template
-type TemplateMetadata struct {
-	Language      string   // Language this template is for (e.g., "cpp", "c", "go", "rust")
-	TargetTypes   []string // Target types this template can build (e.g., ["executable", "shared_library"])
-	PreProcessing struct {
-		ResolveDeps        bool // Call resolveDeps() for external dependencies
-		ResolveSources     bool // Call PathResolver.ResolveSources() for source file globbing
-		ResolveIncludeDirs bool // Call PathResolver.ResolveIncludeDirs() for include paths
-		ResolvePath        bool // Call PathResolver.ResolveRelativePath() on "path" field
-	}
-	PostProcessing struct {
-		RegisterTarget bool // Register the target in the global registry
-	}
-	ToolCached        bool   // The build tool keeps its own cache (go build, cargo build): always run it
-	ToolchainLanguage string // Language to use for toolchain selection (if different from Language)
-	LibraryOutputDir  string // Subdirectory under output_dir where libraries are placed (e.g., "bin", "lib")
-}
+// TemplateMetadata is a template's metadata.
+type TemplateMetadata = config.TemplateMetadata
 
-// BuildTemplateEngine expands universal build templates into concrete tasks
+// BuildTemplateEngine expands build templates into concrete tasks
 type BuildTemplateEngine struct {
-	templatesDirs    []string
-	templates        map[string]any
-	templateMetadata map[string]*TemplateMetadata // Parsed metadata for each template
+	templates map[string]*config.Template // by name
+	byTarget  map[string]*config.Template // by "language:target type"
 }
 
 // NewBuildTemplateEngine creates a new BuildTemplateEngine from a single directory
@@ -45,275 +28,137 @@ func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
 	return NewBuildTemplateEngineMulti([]string{templatesDir})
 }
 
-// NewBuildTemplateEngineMulti creates a new BuildTemplateEngine from multiple directories
+// NewBuildTemplateEngineMulti loads the built-in templates, then the template files of each
+// directory in order; a template with the name of an earlier one replaces it. Every file must
+// load, and each language and target type has one template.
 func NewBuildTemplateEngineMulti(templatesDirs []string) (*BuildTemplateEngine, error) {
-	engine := &BuildTemplateEngine{
-		templatesDirs:    templatesDirs,
-		templates:        make(map[string]any),
-		templateMetadata: make(map[string]*TemplateMetadata),
-	}
+	engine := &BuildTemplateEngine{templates: map[string]*config.Template{}}
 
-	// First load embedded templates (built-in)
-	if err := engine.loadEmbeddedTemplates(); err != nil {
-		util.LogWarning("Failed to load embedded templates: %v", err)
-	}
-
-	// Then load from filesystem directories (can override built-in)
-	if err := engine.loadTemplates(); err != nil {
-		return nil, err
-	}
-
-	// Parse metadata for all loaded templates
-	engine.parseAllTemplateMetadata()
-
-	return engine, nil
-}
-
-// loadEmbeddedTemplates loads all templates from embedded data
-func (bte *BuildTemplateEngine) loadEmbeddedTemplates() error {
-	// List all embedded template files
 	files, err := resource.ListEmbeddedFiles("templates")
 	if err != nil {
-		return fmt.Errorf("failed to list embedded templates: %w", err)
+		return nil, fmt.Errorf("listing the built-in templates: %w", err)
 	}
-
 	for _, filePath := range files {
 		if !strings.HasSuffix(filePath, ".yaml") && !strings.HasSuffix(filePath, ".yml") {
 			continue
 		}
-
-		// Read the embedded file
 		data, err := resource.GetEmbeddedFile(filePath)
 		if err != nil {
-			util.LogWarning("Failed to read embedded template %s: %v", filePath, err)
+			return nil, fmt.Errorf("reading built-in template %s: %w", filePath, err)
+		}
+		if err := engine.add(data, "built-in "+filePath); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, dir := range templatesDirs {
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
+			util.LogVerbose("Additional templates directory not found, using built-in: %s", dir)
 			continue
 		}
-
-		// Parse and merge templates
-		if err := bte.loadTemplateData(data, filePath); err != nil {
-			util.LogWarning("Failed to parse embedded template %s: %v", filePath, err)
-			continue
-		}
-	}
-
-	util.LogInfo("Loaded %d embedded template(s)", len(bte.templates))
-	return nil
-}
-
-// loadTemplateData loads templates from YAML data
-func (bte *BuildTemplateEngine) loadTemplateData(data []byte, sourceName string) error {
-	var rawData map[string]any
-	if err := yaml.Unmarshal(data, &rawData); err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	if templates, ok := rawData["templates"].(map[string]any); ok {
-		// Merge templates into the engine's template map
-		for name, tmpl := range templates {
-			if _, exists := bte.templates[name]; exists {
-				util.LogInfo("Template '%s' in %s overrides existing template", name, sourceName)
-			}
-			bte.templates[name] = tmpl
-		}
-	}
-
-	return nil
-}
-
-// loadTemplates loads all build templates from YAML files in filesystem directories
-func (bte *BuildTemplateEngine) loadTemplates() error {
-	// Load templates from each directory in order
-	for _, templatesDir := range bte.templatesDirs {
-		// Find all .yaml files in templates directory
-		entries, err := os.ReadDir(templatesDir)
 		if err != nil {
-			util.LogVerbose("Additional templates directory not found, using built-in: %s", templatesDir)
-			continue // Not fatal, try next directory
+			return nil, fmt.Errorf("reading templates directory %s: %w", dir, err)
 		}
-
-		dirTemplateCount := len(bte.templates)
-
-		// Load each template file
 		for _, entry := range entries {
-			if entry.IsDir() {
+			name := entry.Name()
+			if entry.IsDir() || (!strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml")) {
 				continue
 			}
-
-			if !strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml") {
-				continue
+			path := filepath.Join(dir, name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("reading template file %s: %w", path, err)
 			}
-
-			templateFile := filepath.Join(templatesDir, entry.Name())
-			if err := bte.loadTemplateFile(templateFile); err != nil {
-				return fmt.Errorf("failed to load template file %s: %w", entry.Name(), err)
+			if err := engine.add(data, path); err != nil {
+				return nil, err
 			}
-		}
-
-		newTemplates := len(bte.templates) - dirTemplateCount
-		if newTemplates > 0 {
-			util.LogInfo("Loaded %d template(s) from %s", newTemplates, templatesDir)
 		}
 	}
 
-	util.LogInfo("Total templates loaded: %d", len(bte.templates))
+	if err := engine.index(); err != nil {
+		return nil, err
+	}
+	util.LogInfo("Total templates loaded: %d", len(engine.templates))
+	return engine, nil
+}
+
+// add loads a template file's templates.
+func (bte *BuildTemplateEngine) add(data []byte, source string) error {
+	templates, err := config.LoadTemplates(data, source)
+	if err != nil {
+		return err
+	}
+	for _, t := range templates {
+		if previous, exists := bte.templates[t.Name]; exists {
+			if !strings.HasPrefix(previous.Source, "built-in ") && previous.Source == source {
+				return fmt.Errorf("template '%s' is defined twice in %s", t.Name, source)
+			}
+			util.LogInfo("Template '%s' from %s replaces the one from %s", t.Name, source, previous.Source)
+		}
+		bte.templates[t.Name] = t
+	}
 	return nil
 }
 
-// loadTemplateFile loads templates from a single YAML file
-func (bte *BuildTemplateEngine) loadTemplateFile(filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+// index maps each language and target type to its template, and fails if two templates build
+// the same.
+func (bte *BuildTemplateEngine) index() error {
+	bte.byTarget = map[string]*config.Template{}
+	names := make([]string, 0, len(bte.templates))
+	for name := range bte.templates {
+		names = append(names, name)
 	}
-	return bte.loadTemplateData(data, filePath)
+	sort.Strings(names)
+	for _, name := range names {
+		t := bte.templates[name]
+		for _, targetType := range t.Metadata.TargetTypes {
+			key := t.Metadata.Language + ":" + targetType
+			if other, ok := bte.byTarget[key]; ok {
+				return fmt.Errorf("templates '%s' (%s) and '%s' (%s) both build a %s %s; give one the other's name to replace it",
+					other.Name, other.Source, t.Name, t.Source, t.Metadata.Language, targetType)
+			}
+			bte.byTarget[key] = t
+		}
+	}
+	return nil
 }
 
 // GetTemplate gets a template by name
-func (bte *BuildTemplateEngine) GetTemplate(templateName string) map[string]any {
-	if tmpl, ok := bte.templates[templateName].(map[string]any); ok {
-		return tmpl
-	}
-	return nil
+func (bte *BuildTemplateEngine) GetTemplate(templateName string) *config.Template {
+	return bte.templates[templateName]
 }
 
-// ListTemplates lists available templates with descriptions
-func (bte *BuildTemplateEngine) ListTemplates() []struct {
-	Name        string
-	Description string
-} {
-	result := []struct {
-		Name        string
-		Description string
-	}{}
-
-	for name, tmplRaw := range bte.templates {
-		tmpl, ok := tmplRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		desc := ""
-		if d, ok := tmpl["description"].(string); ok {
-			desc = d
-		}
-		result = append(result, struct {
-			Name        string
-			Description string
-		}{Name: name, Description: desc})
+// ListTemplates lists the templates, by name
+func (bte *BuildTemplateEngine) ListTemplates() []*config.Template {
+	names := make([]string, 0, len(bte.templates))
+	for name := range bte.templates {
+		names = append(names, name)
 	}
-
+	sort.Strings(names)
+	result := make([]*config.Template, len(names))
+	for i, name := range names {
+		result[i] = bte.templates[name]
+	}
 	return result
 }
 
-// parseAllTemplateMetadata parses metadata for all loaded templates
-func (bte *BuildTemplateEngine) parseAllTemplateMetadata() {
-	for name, tmplRaw := range bte.templates {
-		tmpl, ok := tmplRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		metadata := bte.parseTemplateMetadata(tmpl)
-		if metadata != nil {
-			bte.templateMetadata[name] = metadata
-			util.LogVerbose("Parsed metadata for template '%s': language=%s, types=%v",
-				name, metadata.Language, metadata.TargetTypes)
-		}
-	}
-}
-
-// parseTemplateMetadata extracts metadata from a template definition
-func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *TemplateMetadata {
-	metadataRaw, ok := tmpl["metadata"].(map[string]any)
+// LookupTemplate finds the template for a language and target type
+func (bte *BuildTemplateEngine) LookupTemplate(language, targetType string) (*config.Template, error) {
+	t, ok := bte.byTarget[language+":"+targetType]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("no template found for language '%s' and target type '%s'", language, targetType)
 	}
-
-	metadata := &TemplateMetadata{}
-
-	// Parse language
-	if lang, ok := metadataRaw["language"].(string); ok {
-		metadata.Language = lang
-	}
-
-	// Parse target_types
-	if types, ok := metadataRaw["target_types"].([]any); ok {
-		for _, t := range types {
-			if str, ok := t.(string); ok {
-				metadata.TargetTypes = append(metadata.TargetTypes, str)
-			}
-		}
-	}
-
-	// Parse toolchain_language (defaults to language if not specified)
-	if tcLang, ok := metadataRaw["toolchain_language"].(string); ok {
-		metadata.ToolchainLanguage = tcLang
-	} else {
-		metadata.ToolchainLanguage = metadata.Language
-	}
-
-	// Parse pre_processing
-	if preProc, ok := metadataRaw["pre_processing"].(map[string]any); ok {
-		if v, ok := preProc["resolve_deps"].(bool); ok {
-			metadata.PreProcessing.ResolveDeps = v
-		}
-		if v, ok := preProc["resolve_sources"].(bool); ok {
-			metadata.PreProcessing.ResolveSources = v
-		}
-		if v, ok := preProc["resolve_include_dirs"].(bool); ok {
-			metadata.PreProcessing.ResolveIncludeDirs = v
-		}
-		if v, ok := preProc["resolve_path"].(bool); ok {
-			metadata.PreProcessing.ResolvePath = v
-		}
-	}
-
-	// Parse post_processing
-	if postProc, ok := metadataRaw["post_processing"].(map[string]any); ok {
-		if v, ok := postProc["register_target"].(bool); ok {
-			metadata.PostProcessing.RegisterTarget = v
-		}
-	}
-
-	if v, ok := metadataRaw["tool_cached"].(bool); ok {
-		metadata.ToolCached = v
-	}
-
-	// Parse library_output_dir (defaults to "bin" if not specified)
-	if libDir, ok := metadataRaw["library_output_dir"].(string); ok {
-		metadata.LibraryOutputDir = libDir
-	} else {
-		metadata.LibraryOutputDir = "bin"
-	}
-
-	return metadata
-}
-
-// LookupTemplate finds a template by language and target type
-// Returns the template name, template data, and metadata
-func (bte *BuildTemplateEngine) LookupTemplate(language, targetType string) (string, map[string]any, *TemplateMetadata, error) {
-	// Search for a template that matches the language and target type
-	for name, metadata := range bte.templateMetadata {
-		if metadata.Language != language {
-			continue
-		}
-
-		// Check if this template supports the target type
-		for _, tt := range metadata.TargetTypes {
-			if tt == targetType {
-				tmpl := bte.GetTemplate(name)
-				if tmpl != nil {
-					util.LogInfo("Found template '%s' for language=%s, type=%s", name, language, targetType)
-					return name, tmpl, metadata, nil
-				}
-			}
-		}
-	}
-
-	return "", nil, nil, fmt.Errorf("no template found for language '%s' and target type '%s'", language, targetType)
+	util.LogInfo("Found template '%s' for language=%s, type=%s", t.Name, language, targetType)
+	return t, nil
 }
 
 // GetTemplateMetadata returns the metadata for a template by name
 func (bte *BuildTemplateEngine) GetTemplateMetadata(templateName string) *TemplateMetadata {
-	return bte.templateMetadata[templateName]
+	if t := bte.templates[templateName]; t != nil {
+		return &t.Metadata
+	}
+	return nil
 }
 
 // registerMetadataVariables uses reflection to register all string fields from
@@ -363,23 +208,13 @@ func toSnakeCase(s string) string {
 	return strings.ToLower(result.String())
 }
 
-// GetLibraryOutputDir returns the library output directory for a given target type.
-// This allows dependent targets to find where libraries are placed without hardcoding paths.
+// GetLibraryOutputDir returns the directory under the output directory where a template puts a
+// language's libraries of a target type ("bin" if no template builds them).
 func (bte *BuildTemplateEngine) GetLibraryOutputDir(language, targetType string) string {
-	// Find the template for this language/type and return its library_output_dir
-	for _, metadata := range bte.templateMetadata {
-		if metadata.Language == language {
-			for _, tt := range metadata.TargetTypes {
-				if tt == targetType {
-					if metadata.LibraryOutputDir != "" {
-						return metadata.LibraryOutputDir
-					}
-					return "bin" // Default fallback
-				}
-			}
-		}
+	if t, ok := bte.byTarget[language+":"+targetType]; ok {
+		return t.Metadata.LibraryOutputDir
 	}
-	return "bin" // Default if no matching template found
+	return "bin"
 }
 
 // ExpandTemplate expands a template into concrete build tasks
@@ -461,39 +296,14 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		"module":        module,
 	}
 
-	// Get steps
-	stepsRaw, ok := template["steps"]
-	if !ok {
-		return tasks, nil
-	}
-
-	steps, ok := stepsRaw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("template steps must be a list")
-	}
-
-	for _, stepRaw := range steps {
-		step, ok := stepRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		stepName := "unnamed"
-		if name, ok := step["name"].(string); ok {
-			stepName = name
-		}
-
-		// Determine step type and route to appropriate handler
-		action := ""
-		if a, ok := step["action"].(string); ok {
-			action = a
-		}
+	for _, step := range template.Steps {
+		stepName, action := step.Name, step.Action
 
 		var stepTask *BuildTask
 		var stepTasks []*BuildTask
 		var err error
 
-		if _, hasForEach := step["for_each"]; hasForEach {
+		if step.ForEach != "" {
 			// Generate multiple tasks (one per source file)
 			stepTasks, err = bte.expandForEachStep(
 				step, context, itemConfig, mergedConfig, outputDir,
@@ -559,7 +369,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 
 // expandForEachStep expands a for_each step into multiple tasks
 func (bte *BuildTemplateEngine) expandForEachStep(
-	step map[string]any,
+	step *config.Step,
 	context map[string]any,
 	itemConfig map[string]any,
 	mergedConfig map[string]any,
@@ -598,11 +408,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		sources = v
 	}
 
-	// Get action
-	action := "compile"
-	if a, ok := step["action"].(string); ok {
-		action = a
-	}
+	action := step.Action
 
 	// Object paths are built from the source's path relative to the module directory
 	moduleDir, _ := context["module_dir"].(string)
@@ -636,22 +442,14 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		sc.Context["source_rel"] = sourceRel
 
 		// Resolve output path using VarEnv
-		outputTemplate := ""
-		if out, ok := step["output"].(string); ok {
-			outputTemplate = out
-		}
-		output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+		output, err := resolveStrict(sc.VarEnv, step.Output, "the output of step "+step.Name)
 		if err != nil {
 			return nil, err
 		}
 		output = filepath.Clean(output)
 
 		// Get tool parameters
-		toolParams := map[string]any{}
-		if tp, ok := step["tool_params"].(map[string]any); ok {
-			toolParams = tp
-		}
-		resolvedParams, err := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+		resolvedParams, err := bte.resolveToolParams(step.ToolParams, sc.Context, sc.VarEnv)
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s: %w", source, err)
 		}
@@ -707,7 +505,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 
 // expandSingleStep expands a single (non-foreach) step into a task
 func (bte *BuildTemplateEngine) expandSingleStep(
-	step map[string]any,
+	step *config.Step,
 	context map[string]any,
 	stepResults map[string]map[string]any,
 	itemConfig map[string]any,
@@ -720,15 +518,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	existingTasks []*BuildTask,
 	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
-	action := "link"
-	if a, ok := step["action"].(string); ok {
-		action = a
-	}
-
-	outputType := ""
-	if ot, ok := step["output_type"].(string); ok {
-		outputType = ot
-	}
+	action, outputType := step.Action, step.OutputType
 
 	// Find appropriate tool for link action
 	var tool *resource.Tool
@@ -767,25 +557,17 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	// Resolve output path using VarEnv
-	outputTemplate := ""
-	if out, ok := step["output"].(string); ok {
-		outputTemplate = out
-	}
-	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+	output, err := resolveStrict(sc.VarEnv, step.Output, "the output of step "+step.Name)
 	if err != nil {
 		return nil, err
 	}
 	output = filepath.Clean(output)
 
-	// Collect inputs from previous step
-	inputsRef := ""
-	if inp, ok := step["inputs"].(string); ok {
-		inputsRef = inp
+	// Collect inputs from previous steps
+	var inputStrs []string
+	for _, ref := range step.Inputs {
+		inputStrs = append(inputStrs, toStringSlice(bte.resolveReference(ref, stepResults))...)
 	}
-	inputs := bte.resolveReference(inputsRef, stepResults)
-
-	// Convert inputs to string slice
-	inputStrs := toStringSlice(inputs)
 
 	// Filter inputs to only include files matching tool's input extensions
 	filteredInputs := []string{}
@@ -799,19 +581,8 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	// Resolve dependencies
-	dependsOnRef := []string{}
-	if dep, ok := step["depends_on"].(string); ok {
-		dependsOnRef = []string{dep}
-	} else if deps, ok := step["depends_on"].([]any); ok {
-		for _, d := range deps {
-			if str, ok := d.(string); ok {
-				dependsOnRef = append(dependsOnRef, str)
-			}
-		}
-	}
-
 	dependencies := []string{}
-	for _, depRef := range dependsOnRef {
+	for _, depRef := range step.DependsOn {
 		resolvedDeps := bte.resolveReference(depRef, stepResults)
 		dependencies = append(dependencies, toStringSlice(resolvedDeps)...)
 	}
@@ -873,11 +644,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	}
 
 	// Get tool parameters
-	toolParams := map[string]any{}
-	if tp, ok := step["tool_params"].(map[string]any); ok {
-		toolParams = tp
-	}
-	resolvedParams, err := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+	resolvedParams, err := bte.resolveToolParams(step.ToolParams, sc.Context, sc.VarEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -985,7 +752,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 
 // expandBuildStep expands a build step (single-step compile+link like Go modules)
 func (bte *BuildTemplateEngine) expandBuildStep(
-	step map[string]any,
+	step *config.Step,
 	context map[string]any,
 	itemConfig map[string]any,
 	mergedConfig map[string]any,
@@ -1025,8 +792,8 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 
 	// Get working directory (module path)
 	workingDir := ""
-	if wd, ok := step["working_dir"].(string); ok {
-		if workingDir, err = resolveStrict(sc.VarEnv, wd, "the working_dir of step "+fmt.Sprint(step["name"])); err != nil {
+	if wd := step.WorkingDir; wd != "" {
+		if workingDir, err = resolveStrict(sc.VarEnv, wd, "the working_dir of step "+step.Name); err != nil {
 			return nil, err
 		}
 		workingDir = filepath.Clean(workingDir)
@@ -1038,24 +805,18 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 
 	// Get tool parameters from template step
-	toolParams := map[string]any{}
-	if tp, ok := step["tool_params"].(map[string]any); ok {
-		if toolParams, err = bte.resolveToolParams(tp, sc.Context, sc.VarEnv); err != nil {
-			return nil, err
-		}
+	toolParams, err := bte.resolveToolParams(step.ToolParams, sc.Context, sc.VarEnv)
+	if err != nil {
+		return nil, err
 	}
 
 	// Command parameters are variables of the output path too (Cargo's ${profile}, ${bin_name})
-	for paramName, paramValue := range tool.ResolveCommandParams(toolParams, itemConfig, configuration) {
+	for paramName, paramValue := range resource.ResolveCommandParams(tool, toolParams, itemConfig, configuration) {
 		sc.VarEnv.SetVariable(paramName, paramValue, "command-param")
 	}
 
 	// Resolve output path from template using VarEnv
-	outputTemplate := ""
-	if out, ok := step["output"].(string); ok {
-		outputTemplate = out
-	}
-	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+	output, err := resolveStrict(sc.VarEnv, step.Output, "the output of step "+step.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -1082,7 +843,11 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	cmdVarEnv.SetVariable("flags", strings.Join(flagsList, " "), "build-command")
 
 	// Build and resolve the command using VarEnv
-	command, err := resolveStrict(cmdVarEnv, tool.Command, "the command of tool "+tool.Name)
+	toolCommand, err := tool.Command.For(platform)
+	if err != nil {
+		return nil, fmt.Errorf("tool %s %w", tool.Name, err)
+	}
+	command, err := resolveStrict(cmdVarEnv, toolCommand, "the command of tool "+tool.Name)
 	if err != nil {
 		return nil, err
 	}

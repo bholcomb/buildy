@@ -8,223 +8,78 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
-
-	"gopkg.in/yaml.v3"
 )
 
-// BuildSystemConfig represents a build system definition loaded from YAML
-type BuildSystemConfig struct {
-	Name        string                    `yaml:"name"`
-	Description string                    `yaml:"description"`
-	Detection   DetectionConfig           `yaml:"detection"`
-	Phases      map[string]PhaseConfig    `yaml:"phases"`
-	Output      OutputConfig              `yaml:"output"`
-}
-
-// DetectionConfig defines how to detect this build system
-type DetectionConfig struct {
-	MarkerFiles []string `yaml:"marker_files"`
-	Priority    int      `yaml:"priority"`
-}
-
-// PhaseConfig defines a build phase (configure, build, test, install, clean)
-type PhaseConfig struct {
-	Command     string   `yaml:"command"`
-	DefaultArgs []string `yaml:"default_args"`
-	Required    bool     `yaml:"required"`
-	WorkingDir  string   `yaml:"working_dir"` // defaults to source_dir
-}
-
-// OutputConfig defines where to find build outputs
-type OutputConfig struct {
-	IncludePatterns []string `yaml:"include_patterns"`
-	LibPatterns     []string `yaml:"lib_patterns"`
-}
+// BuildSystemConfig is a build system definition (config.BuildSystem).
+type BuildSystemConfig = config.BuildSystem
 
 // BuildSystemManager manages build system detection and execution
 type BuildSystemManager struct {
 	systems map[string]*BuildSystemConfig
 }
 
-// NewBuildSystemManager creates a new BuildSystemManager and loads embedded systems
+// NewBuildSystemManager loads the built-in build systems. Every one must load.
 func NewBuildSystemManager() (*BuildSystemManager, error) {
 	bsm := &BuildSystemManager{
 		systems: make(map[string]*BuildSystemConfig),
 	}
-
-	// Load embedded build systems first
-	if err := bsm.loadEmbeddedSystems(); err != nil {
-		util.LogWarning("Failed to load embedded build systems: %v", err)
-	}
-
-	return bsm, nil
-}
-
-// loadEmbeddedSystems loads all build system definitions from embedded data
-func (bsm *BuildSystemManager) loadEmbeddedSystems() error {
 	files, err := ListEmbeddedFiles("build_systems")
 	if err != nil {
-		return fmt.Errorf("failed to list embedded build systems: %w", err)
+		return nil, fmt.Errorf("listing the built-in build systems: %w", err)
 	}
-
 	for _, filePath := range files {
 		if !strings.HasSuffix(filePath, ".yaml") {
 			continue
 		}
-
 		data, err := GetEmbeddedFile(filePath)
 		if err != nil {
-			util.LogWarning("Failed to read embedded build system %s: %v", filePath, err)
-			continue
+			return nil, fmt.Errorf("reading built-in build system %s: %w", filePath, err)
 		}
-
-		config, err := parseBuildSystemConfig(data, filePath)
-		if err != nil {
-			util.LogWarning("Failed to parse embedded build system %s: %v", filePath, err)
-			continue
+		if err := bsm.add(data, "built-in "+filePath); err != nil {
+			return nil, err
 		}
-
-		bsm.systems[config.Name] = config
-		util.LogInfo("Loaded embedded build system: %s - %s", config.Name, config.Description)
 	}
-
-	return nil
+	return bsm, nil
 }
 
-// LoadFilesystemSystems loads build system definitions from filesystem directories
+// LoadFilesystemSystems loads the build system definitions of directories; a later definition
+// with the same name replaces an earlier one.
 func (bsm *BuildSystemManager) LoadFilesystemSystems(dirs []string) error {
 	for _, dir := range dirs {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
-		}
-
 		entries, err := os.ReadDir(dir)
-		if err != nil {
-			util.LogWarning("Failed to read build systems directory %s: %v", dir, err)
+		if os.IsNotExist(err) {
 			continue
 		}
-
+		if err != nil {
+			return fmt.Errorf("reading build systems directory %s: %w", dir, err)
+		}
 		for _, entry := range entries {
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 				continue
 			}
-
 			filePath := filepath.Join(dir, entry.Name())
 			data, err := os.ReadFile(filePath)
 			if err != nil {
-				util.LogWarning("Failed to read build system file %s: %v", filePath, err)
-				continue
+				return fmt.Errorf("reading build system %s: %w", filePath, err)
 			}
-
-			config, err := parseBuildSystemConfig(data, filePath)
-			if err != nil {
-				util.LogWarning("Failed to parse build system file %s: %v", filePath, err)
-				continue
+			if err := bsm.add(data, filePath); err != nil {
+				return err
 			}
-
-			if _, exists := bsm.systems[config.Name]; exists {
-				util.LogInfo("Build system '%s' from %s overrides existing", config.Name, dir)
-			}
-
-			bsm.systems[config.Name] = config
-			util.LogInfo("Loaded build system: %s - %s", config.Name, config.Description)
 		}
 	}
-
 	return nil
 }
 
-// parseBuildSystemConfig parses a build system YAML file
-func parseBuildSystemConfig(data []byte, sourceName string) (*BuildSystemConfig, error) {
-	var rawConfig map[string]any
-	if err := yaml.Unmarshal(data, &rawConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+func (bsm *BuildSystemManager) add(data []byte, source string) error {
+	bs, err := config.LoadBuildSystem(data, source)
+	if err != nil {
+		return err
 	}
-
-	bsData, ok := rawConfig["build_system"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("missing 'build_system' section in %s", sourceName)
-	}
-
-	config := &BuildSystemConfig{
-		Phases: make(map[string]PhaseConfig),
-	}
-
-	// Parse basic fields
-	if name, ok := bsData["name"].(string); ok {
-		config.Name = name
-	} else {
-		return nil, fmt.Errorf("build system missing 'name' field")
-	}
-
-	if desc, ok := bsData["description"].(string); ok {
-		config.Description = desc
-	}
-
-	// Parse detection
-	if detData, ok := bsData["detection"].(map[string]any); ok {
-		if markers, ok := detData["marker_files"].([]any); ok {
-			for _, m := range markers {
-				if s, ok := m.(string); ok {
-					config.Detection.MarkerFiles = append(config.Detection.MarkerFiles, s)
-				}
-			}
-		}
-		if priority, ok := detData["priority"].(int); ok {
-			config.Detection.Priority = priority
-		}
-	}
-
-	// Parse phases
-	if phasesData, ok := bsData["phases"].(map[string]any); ok {
-		for phaseName, phaseDataRaw := range phasesData {
-			phaseData, ok := phaseDataRaw.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			phase := PhaseConfig{}
-			if cmd, ok := phaseData["command"].(string); ok {
-				phase.Command = cmd
-			}
-			if wd, ok := phaseData["working_dir"].(string); ok {
-				phase.WorkingDir = wd
-			}
-			if req, ok := phaseData["required"].(bool); ok {
-				phase.Required = req
-			}
-			if args, ok := phaseData["default_args"].([]any); ok {
-				for _, a := range args {
-					if s, ok := a.(string); ok {
-						phase.DefaultArgs = append(phase.DefaultArgs, s)
-					}
-				}
-			}
-
-			config.Phases[phaseName] = phase
-		}
-	}
-
-	// Parse output
-	if outputData, ok := bsData["output"].(map[string]any); ok {
-		if patterns, ok := outputData["include_patterns"].([]any); ok {
-			for _, p := range patterns {
-				if s, ok := p.(string); ok {
-					config.Output.IncludePatterns = append(config.Output.IncludePatterns, s)
-				}
-			}
-		}
-		if patterns, ok := outputData["lib_patterns"].([]any); ok {
-			for _, p := range patterns {
-				if s, ok := p.(string); ok {
-					config.Output.LibPatterns = append(config.Output.LibPatterns, s)
-				}
-			}
-		}
-	}
-
-	return config, nil
+	bsm.systems[bs.Name] = bs
+	util.LogVerbose("Loaded build system: %s - %s (%s)", bs.Name, bs.Description, source)
+	return nil
 }
 
 // Detect detects the build system used in a directory
@@ -236,7 +91,8 @@ func (bsm *BuildSystemManager) Detect(dir string) *BuildSystemConfig {
 	}
 	var matches []match
 
-	for _, config := range bsm.systems {
+	for _, name := range bsm.ListBuildSystems() {
+		config := bsm.systems[name]
 		for _, marker := range config.Detection.MarkerFiles {
 			markerPath := filepath.Join(dir, marker)
 			if _, err := os.Stat(markerPath); err == nil {
@@ -253,8 +109,8 @@ func (bsm *BuildSystemManager) Detect(dir string) *BuildSystemConfig {
 		return nil
 	}
 
-	// Sort by priority (highest first)
-	sort.Slice(matches, func(i, j int) bool {
+	// The highest priority wins; between equal priorities, the first by name
+	sort.SliceStable(matches, func(i, j int) bool {
 		return matches[i].priority > matches[j].priority
 	})
 
@@ -298,8 +154,8 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 
 	// Execute each phase in order
 	for _, phaseName := range phases {
-		phase, ok := config.Phases[phaseName]
-		if !ok {
+		phase := config.Phases[phaseName]
+		if phase == nil {
 			if phaseName == "configure" || phaseName == "build" {
 				return fmt.Errorf("required phase '%s' not defined for build system '%s'", phaseName, config.Name)
 			}
@@ -368,9 +224,14 @@ func (bsm *BuildSystemManager) substituteVariablesWithContext(
 	result = strings.ReplaceAll(result, "${jobs}", fmt.Sprintf("%d", jobs))
 	result = strings.ReplaceAll(result, "${args}", argsStr)
 
-	// Apply additional context variables
-	for key, value := range context {
-		result = strings.ReplaceAll(result, "${"+key+"}", value)
+	// Apply additional context variables, in name order
+	keys := make([]string, 0, len(context))
+	for key := range context {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		result = strings.ReplaceAll(result, "${"+key+"}", context[key])
 	}
 
 	return result

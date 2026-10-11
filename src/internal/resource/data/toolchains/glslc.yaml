@@ -42,4 +42,3 @@ toolchain:
         define_flag: "-D"
         includes: true
         include_flag: "-I"
-        dependencies: false

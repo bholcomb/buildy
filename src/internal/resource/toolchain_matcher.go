@@ -1,14 +1,14 @@
 package resource
 
 import (
-	"fmt"
 	"path/filepath"
-	"strings"
 
 	"buildy/pkg/util"
 )
 
-// ToolMatcher matches files to appropriate tools based on action and extension
+// ToolMatcher finds a toolchain's tool for an action and a file. The toolchain loader has
+// rejected ambiguous toolchains (two tools for one action and extension, two link tools for one
+// output type, two build tools), so every lookup has at most one answer.
 type ToolMatcher struct {
 	toolchain *ToolchainConfig
 	toolMap   map[string]*Tool // key: "action:extension"
@@ -20,34 +20,16 @@ func NewToolMatcher(toolchain *ToolchainConfig) (*ToolMatcher, error) {
 		toolchain: toolchain,
 		toolMap:   make(map[string]*Tool),
 	}
-
-	if err := tm.buildToolMap(); err != nil {
-		return nil, err
-	}
-
-	return tm, nil
-}
-
-// buildToolMap builds the action+extension lookup map
-func (tm *ToolMatcher) buildToolMap() error {
-	for _, tool := range tm.toolchain.Tools {
-		// Only build map for non-link actions
-		// Link tools are handled separately by FindLinkTool()
-		if tool.Action != "link" {
-			for _, ext := range tool.InputExtensions {
-				key := tool.Action + ":" + ext
-				if existing, exists := tm.toolMap[key]; exists {
-					return fmt.Errorf(
-						"ambiguous tool definition in toolchain '%s': "+
-							"both '%s' and '%s' handle action='%s' with extension='%s'",
-						tm.toolchain.Name, existing.Name, tool.Name, tool.Action, ext,
-					)
-				}
-				tm.toolMap[key] = tool
-			}
+	for _, name := range toolchain.Tools.Keys {
+		tool := toolchain.Tools.Values[name]
+		if tool.Action == "link" || tool.Action == "build" {
+			continue
+		}
+		for _, ext := range tool.InputExtensions {
+			tm.toolMap[tool.Action+":"+ext] = tool
 		}
 	}
-	return nil
+	return tm, nil
 }
 
 // FindTool finds a tool that matches the action and file extension
@@ -56,50 +38,31 @@ func (tm *ToolMatcher) FindTool(action, filePath string) *Tool {
 	if ext == "" {
 		return nil
 	}
-
-	key := action + ":" + ext
-	tool := tm.toolMap[key]
-
+	tool := tm.toolMap[action+":"+ext]
 	if tool != nil {
 		util.LogInfo("Matched %s (%s) -> tool '%s'", filePath, action, tool.Name)
 	} else {
 		util.LogInfo("No tool found for action='%s' extension='%s'", action, ext)
 	}
-
 	return tool
 }
 
-// FindBuildTool finds a tool for building (single-step compile+link like Go)
+// FindBuildTool finds the toolchain's build tool (a single step that compiles and links, like
+// go build)
 func (tm *ToolMatcher) FindBuildTool() *Tool {
-	// Look for tool with action='build'
-	for _, tool := range tm.toolchain.Tools {
-		if tool.Action == "build" {
-			util.LogInfo("Matched build tool -> '%s'", tool.Name)
-			return tool
-		}
+	if tools := tm.toolchain.ToolsWithAction("build"); len(tools) > 0 {
+		return tools[0]
 	}
-
 	return nil
 }
 
-// FindLinkTool finds a tool for linking based on output type
+// FindLinkTool finds the link tool for an output type (supports.output_type)
 func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
-	// Look for tool with action='link' and matching output type
-	for _, tool := range tm.toolchain.Tools {
-		if tool.Action == "link" {
-			// Check if tool name or supports indicates it handles this output type
-			if strings.Contains(tool.Name, outputType) {
-				util.LogInfo("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
-				return tool
-			}
-			if supportedType, ok := tool.Supports["output_type"].(string); ok && supportedType == outputType {
-				util.LogInfo("Matched link tool for '%s' -> '%s'", outputType, tool.Name)
-				return tool
-			}
+	for _, tool := range tm.toolchain.ToolsWithAction("link") {
+		if tool.Supports.OutputType == outputType {
+			return tool
 		}
 	}
-
-	util.BuildWarning("toolchain", "No link tool found for output_type='%s'", outputType)
 	return nil
 }
 

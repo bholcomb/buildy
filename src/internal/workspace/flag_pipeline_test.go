@@ -3,17 +3,30 @@ package workspace
 import (
 	"testing"
 
+	"buildy/internal/config"
+
 	"buildy/internal/resource"
 )
 
-func makeTestToolchain(flagMappings map[string]map[string][]string) *resource.ToolchainConfig {
-	tc := resource.NewToolchainConfig("test-toolchain", "test")
-	tc.FlagMappings = flagMappings
-	return tc
+func makeTestToolchain(flagMappings config.Ordered[config.Ordered[[]string]]) *resource.ToolchainConfig {
+	return &resource.ToolchainConfig{Name: "test-toolchain", FlagMappings: flagMappings}
 }
 
-func gccFlagMappings() map[string]map[string][]string {
-	return map[string]map[string][]string{
+// mappings makes flag_mappings, keywords and values in name order.
+func mappings(m map[string]map[string][]string) config.Ordered[config.Ordered[[]string]] {
+	var result config.Ordered[config.Ordered[[]string]]
+	for _, keyword := range sortedKeys(m) {
+		var values config.Ordered[[]string]
+		for _, value := range sortedKeys(m[keyword]) {
+			values.Set(value, m[keyword][value])
+		}
+		result.Set(keyword, values)
+	}
+	return result
+}
+
+func gccFlagMappings() config.Ordered[config.Ordered[[]string]] {
+	return mappings(map[string]map[string][]string{
 		"optimization": {
 			"none": {"-O0"},
 			"size": {"-Os"},
@@ -34,11 +47,11 @@ func gccFlagMappings() map[string]map[string][]string {
 			"debug":   {},
 			"release": {},
 		},
-	}
+	})
 }
 
-func msvcFlagMappings() map[string]map[string][]string {
-	return map[string]map[string][]string{
+func msvcFlagMappings() config.Ordered[config.Ordered[[]string]] {
+	return mappings(map[string]map[string][]string{
 		"optimization": {
 			"none":  {"/Od"},
 			"size":  {"/O1"},
@@ -59,7 +72,7 @@ func msvcFlagMappings() map[string]map[string][]string {
 			"debug":   {"/MDd"},
 			"release": {"/MD"},
 		},
-	}
+	})
 }
 
 // --- resolveAbstractKeywords tests ---
@@ -199,7 +212,7 @@ func TestResolveAbstractKeywords_NoMappings(t *testing.T) {
 	merged := map[string]any{
 		"optimization": "speed",
 	}
-	if err := resolveAbstractKeywords(merged, nil); err != nil {
+	if err := resolveAbstractKeywords(merged, config.Ordered[config.Ordered[[]string]]{}); err != nil {
 		t.Fatalf("unexpected error with nil mappings: %v", err)
 	}
 	if _, exists := merged["optimization"]; !exists {

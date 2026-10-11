@@ -112,7 +112,7 @@ templates:
         output_type: executable
         output: "${output_dir}/bin/${tool.output_pattern}"
         inputs: "${compile.outputs}"
-        depends_on: ["${compile.task_ids}", "${item.depends_on.link_tasks}"]
+        depends_on: ["${compile.task_ids}"]
         tool_params:
           lib_dirs: ["${output_dir}/lib", "${output_dir}/bin", "${item.lib_dirs}"]
           libs: "${item.libs}"

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
 
@@ -137,7 +138,11 @@ func resolveStrict(env *util.VariableEnvironment, text, what string) (string, er
 
 // resolveToolParams resolves tool parameters using VarEnv for variable resolution
 // and context map for structural references (like ${item.includes} arrays)
-func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context map[string]any, varEnv *util.VariableEnvironment) (map[string]any, error) {
+func (bte *BuildTemplateEngine) resolveToolParams(stepParams config.Ordered[config.Param], context map[string]any, varEnv *util.VariableEnvironment) (map[string]any, error) {
+	params := make(map[string]any, stepParams.Len())
+	for _, key := range stepParams.Keys {
+		params[key] = stepParams.Values[key].Value
+	}
 	resolved := map[string]any{
 		"defines":      []string{},
 		"include_dirs": []string{},
@@ -182,10 +187,10 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 				return nil, err
 			}
 			resolved[key] = value
-		case []any:
+		case []string:
 			strList := []string{}
-			for _, item := range v {
-				if str, ok := item.(string); ok {
+			for _, str := range v {
+				{
 					// Check if this is a reference to a context array
 					if strings.HasPrefix(str, "${") && strings.HasSuffix(str, "}") {
 						ref := strings.TrimPrefix(str, "${")
