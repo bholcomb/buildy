@@ -12,22 +12,6 @@ import (
 	"buildy/pkg/util"
 )
 
-// ResourceRequirements defines resource requirements for a task
-type ResourceRequirements struct {
-	CPUCores int `json:"cpu_cores"`
-	MemoryMB int `json:"memory_mb"`
-	DiskMB   int `json:"disk_mb"`
-}
-
-// NewResourceRequirements creates a ResourceRequirements with default values
-func NewResourceRequirements() ResourceRequirements {
-	return ResourceRequirements{
-		CPUCores: 1,
-		MemoryMB: 100,
-		DiskMB:   10,
-	}
-}
-
 // TaskInput is a file (or directory) a task reads. Hash is filled in by HashInputs when the task
 // is about to run, after its producers have run; a "symlink:" hash marks an input whose path,
 // not content, is what matters.
@@ -72,28 +56,26 @@ type NativeOp struct {
 // produces; DepFile names the inputs the tool reports after running. The executor checks the
 // inputs exist before running and the outputs exist after.
 type BuildTask struct {
-	TaskID               string               `json:"task_id"`
-	TaskNumber           int                  `json:"task_number"` // Sequential task number for logging (1-based)
-	TaskType             string               `json:"task_type"`
-	Inputs               []TaskInput          `json:"inputs"`
-	Outputs              []string             `json:"outputs"`
-	DepFile              *DepFile             `json:"dep_file,omitempty"`
-	ToolCached           bool                 `json:"tool_cached,omitempty"` // The tool keeps its own cache: always run, never a buildy cache hit
-	Dependencies         []string             `json:"dependencies"`
-	LinkLibs             []string             `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
-	Module               string               `json:"module"`              // Module that defined the task ("" for the workspace root config)
-	Target               string               `json:"target,omitempty"`    // Target or artifact the task belongs to
-	Command              util.Command         `json:"command,omitzero"`    // What the task runs, and where
-	Native               *NativeOp            `json:"native,omitempty"`    // Set instead of Command for work buildy does itself
-	Platform             string               `json:"platform"`
-	Architecture         string               `json:"architecture"`
-	Configuration        string               `json:"configuration"`
-	Toolchain            string               `json:"toolchain"` // Name of the toolchain that produced the task
-	Exec                 util.ExecSpec        `json:"exec"`      // Where the command runs (native or docker), from that toolchain
-	Tool                 string               `json:"-"`         // What the command runs (ToolIdentity), filled in when the task is about to run
-	EstimatedTime        float64              `json:"estimated_time"`
-	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
-	CacheKey             string               `json:"cache_key"`
+	TaskID        string        `json:"task_id"`
+	TaskNumber    int           `json:"task_number"` // Sequential task number for logging (1-based)
+	TaskType      string        `json:"task_type"`
+	Inputs        []TaskInput   `json:"inputs"`
+	Outputs       []string      `json:"outputs"`
+	DepFile       *DepFile      `json:"dep_file,omitempty"`
+	ToolCached    bool          `json:"tool_cached,omitempty"` // The tool keeps its own cache: always run, never a buildy cache hit
+	Dependencies  []string      `json:"dependencies"`
+	LinkLibs      []string      `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
+	Module        string        `json:"module"`              // Module that defined the task ("" for the workspace root config)
+	Target        string        `json:"target,omitempty"`    // Target or artifact the task belongs to
+	Command       util.Command  `json:"command,omitzero"`    // What the task runs, and where
+	Native        *NativeOp     `json:"native,omitempty"`    // Set instead of Command for work buildy does itself
+	Platform      string        `json:"platform"`
+	Architecture  string        `json:"architecture"`
+	Configuration string        `json:"configuration"`
+	Toolchain     string        `json:"toolchain"` // Name of the toolchain that produced the task
+	Exec          util.ExecSpec `json:"exec"`      // Where the command runs (native or docker), from that toolchain
+	Tool          string        `json:"-"`         // What the command runs (ToolIdentity), filled in when the task is about to run
+	CacheKey      string        `json:"cache_key"`
 }
 
 // Describe names the task with the module and target it came from, for error messages.
@@ -118,17 +100,15 @@ func NewNativeTask(taskID, taskType string, inputs []TaskInput, outputs []string
 // NewBuildTask creates a BuildTask with default values
 func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, command util.Command) BuildTask {
 	return BuildTask{
-		TaskID:               taskID,
-		TaskType:             taskType,
-		Inputs:               inputs,
-		Outputs:              outputs,
-		Dependencies:         dependencies,
-		Command:              command,
-		Platform:             "linux",
-		Architecture:         "x86_64",
-		Configuration:        "debug",
-		EstimatedTime:        1.0,
-		ResourceRequirements: NewResourceRequirements(),
+		TaskID:        taskID,
+		TaskType:      taskType,
+		Inputs:        inputs,
+		Outputs:       outputs,
+		Dependencies:  dependencies,
+		Command:       command,
+		Platform:      "linux",
+		Architecture:  "x86_64",
+		Configuration: "debug",
 	}
 }
 

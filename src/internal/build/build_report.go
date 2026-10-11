@@ -94,7 +94,9 @@ func (br *BuildResult) RecordTaskExecution(taskID, taskType string, duration flo
 		br.FailedTaskIDs = append(br.FailedTaskIDs, taskID)
 	}
 
-	br.ExecutedTasks++
+	if !cacheHit {
+		br.ExecutedTasks++
+	}
 }
 
 // AddCompileCommand adds a compile command entry for compile_commands.json: its arguments, or

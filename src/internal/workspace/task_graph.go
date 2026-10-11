@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"container/heap"
 	"fmt"
 	"regexp"
 	"sort"
@@ -9,18 +10,14 @@ import (
 	"buildy/pkg/util"
 )
 
-// TaskGraph represents a task dependency graph with topological sorting
+// TaskGraph is the tasks of a build and their dependencies
 type TaskGraph struct {
-	Tasks           map[string]*BuildTask
-	ExecutionStages [][]string
+	Tasks map[string]*BuildTask
 }
 
 // NewTaskGraph creates a new TaskGraph
 func NewTaskGraph() *TaskGraph {
-	return &TaskGraph{
-		Tasks:           make(map[string]*BuildTask),
-		ExecutionStages: [][]string{},
-	}
+	return &TaskGraph{Tasks: make(map[string]*BuildTask)}
 }
 
 // AddTask adds a task to the graph. Task IDs are unique.
@@ -141,146 +138,83 @@ func hasString(list []string, s string) bool {
 	return false
 }
 
-// BuildExecutionStages builds parallel execution stages using topological sort
-func (tg *TaskGraph) BuildExecutionStages() ([][]string, error) {
-	// Build dependency graph
-	dependencies := make(map[string]map[string]bool)
-	dependents := make(map[string]map[string]bool)
-
-	for taskID, task := range tg.Tasks {
-		dependencies[taskID] = make(map[string]bool)
-		for _, dep := range task.Dependencies {
-			dependencies[taskID][dep] = true
-		}
-		dependents[taskID] = make(map[string]bool)
-	}
-
-	// Build reverse dependencies
-	for taskID, deps := range dependencies {
-		for dep := range deps {
-			if _, exists := dependents[dep]; exists {
-				dependents[dep][taskID] = true
+// Order returns the tasks in an order that runs each after its dependencies: of the tasks whose
+// dependencies are done, the first by ID comes first. It numbers the tasks in that order (1-based),
+// for logs, and fails on a cycle, naming the tasks in it or waiting on it.
+func (tg *TaskGraph) Order() ([]string, error) {
+	waiting := make(map[string]int, len(tg.Tasks))         // task -> dependencies not yet ordered
+	dependents := make(map[string][]string, len(tg.Tasks)) // task -> the tasks that depend on it
+	for _, id := range tg.sortedIDs() {
+		deps := uniqueStrings(tg.Tasks[id].Dependencies)
+		waiting[id] = len(deps)
+		for _, dep := range deps {
+			if tg.Tasks[dep] == nil {
+				return nil, fmt.Errorf("%s depends on %s, which is not a task", tg.Tasks[id].Describe(), dep)
 			}
+			dependents[dep] = append(dependents[dep], id)
 		}
 	}
 
-	// Topological sort with parallel stages
-	stages := [][]string{}
-	remainingTasks := make(map[string]bool)
-	for taskID := range tg.Tasks {
-		remainingTasks[taskID] = true
+	ready := &IDQueue{}
+	for _, id := range tg.sortedIDs() {
+		if waiting[id] == 0 {
+			ready.PushID(id)
+		}
 	}
-
-	for len(remainingTasks) > 0 {
-		// Find tasks with no remaining dependencies
-		readyTasks := []string{}
-		for taskID := range remainingTasks {
-			if len(dependencies[taskID]) == 0 {
-				readyTasks = append(readyTasks, taskID)
-			}
-		}
-
-		if len(readyTasks) == 0 {
-			// Circular dependency detected
-			remaining := []string{}
-			for taskID := range remainingTasks {
-				remaining = append(remaining, taskID)
-			}
-			sort.Strings(remaining)
-			return nil, fmt.Errorf("circular dependency detected in tasks: %v", remaining)
-		}
-		sort.Strings(readyTasks)
-
-		stages = append(stages, readyTasks)
-
-		// Remove ready tasks and update dependencies
-		for _, taskID := range readyTasks {
-			delete(remainingTasks, taskID)
-			for dependent := range dependents[taskID] {
-				delete(dependencies[dependent], taskID)
+	order := make([]string, 0, len(tg.Tasks))
+	for ready.Len() > 0 {
+		id := ready.PopID()
+		order = append(order, id)
+		for _, dependent := range dependents[id] {
+			if waiting[dependent]--; waiting[dependent] == 0 {
+				ready.PushID(dependent)
 			}
 		}
 	}
-
-	tg.ExecutionStages = stages
-
-	// Assign sequential task numbers in execution order (1-based)
-	taskNumber := 1
-	for _, stage := range stages {
-		for _, taskID := range stage {
-			if task, ok := tg.Tasks[taskID]; ok {
-				task.TaskNumber = taskNumber
-				taskNumber++
+	if len(order) < len(tg.Tasks) {
+		var stuck []string
+		for _, id := range tg.sortedIDs() {
+			if waiting[id] > 0 {
+				stuck = append(stuck, id)
 			}
 		}
+		return nil, fmt.Errorf("circular dependency detected in tasks: %v", stuck)
 	}
-
-	return stages, nil
+	for i, id := range order {
+		tg.Tasks[id].TaskNumber = i + 1
+	}
+	return order, nil
 }
 
-// GetExecutionPlan gets detailed execution plan
-func (tg *TaskGraph) GetExecutionPlan() (map[string]any, error) {
-	if len(tg.ExecutionStages) == 0 {
-		if _, err := tg.BuildExecutionStages(); err != nil {
-			return nil, err
+// uniqueStrings returns list without repeats, in order.
+func uniqueStrings(list []string) []string {
+	seen := make(map[string]bool, len(list))
+	result := make([]string, 0, len(list))
+	for _, s := range list {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
 		}
 	}
-
-	totalTime := 0.0
-	maxParallel := 0
-	totalCPUHours := 0.0
-
-	for _, stage := range tg.ExecutionStages {
-		stageTime := 0.0
-		stageCPUs := 0
-		for _, taskID := range stage {
-			task := tg.Tasks[taskID]
-			if task.EstimatedTime > stageTime {
-				stageTime = task.EstimatedTime
-			}
-			stageCPUs += task.ResourceRequirements.CPUCores
-			totalCPUHours += (task.EstimatedTime / 3600.0) * float64(task.ResourceRequirements.CPUCores)
-		}
-
-		totalTime += stageTime
-		if len(stage) > maxParallel {
-			maxParallel = len(stage)
-		}
-	}
-
-	stagesList := []map[string]any{}
-	for i, stage := range tg.ExecutionStages {
-		stagesList = append(stagesList, map[string]any{
-			fmt.Sprintf("stage_%d", i+1): stage,
-		})
-	}
-
-	return map[string]any{
-		"total_stages":           len(tg.ExecutionStages),
-		"total_tasks":            len(tg.Tasks),
-		"estimated_time_seconds": totalTime,
-		"max_parallel_tasks":     maxParallel,
-		"total_cpu_hours":        totalCPUHours,
-		"stages":                 stagesList,
-	}, nil
+	return result
 }
 
-// LogExecutionPlan logs the execution plan
-func (tg *TaskGraph) LogExecutionPlan() {
-	plan, err := tg.GetExecutionPlan()
-	if err != nil {
-		util.LogInfo("ERROR: Failed to get execution plan: %v", err)
-		return
-	}
+// IDQueue is a priority queue of task IDs, smallest first (container/heap).
+type IDQueue []string
 
-	util.LogInfo("Execution Plan:")
-	util.LogInfo("  Total stages: %v", plan["total_stages"])
-	util.LogInfo("  Total tasks: %v", plan["total_tasks"])
-	util.LogInfo("  Estimated time: %.2f seconds", plan["estimated_time_seconds"])
-	util.LogInfo("  Max parallel tasks: %v", plan["max_parallel_tasks"])
-	util.LogInfo("  Total CPU hours: %.4f", plan["total_cpu_hours"])
-
-	for i, stage := range tg.ExecutionStages {
-		util.LogVerbose("  Stage %d: %d tasks", i+1, len(stage))
-	}
+func (q IDQueue) Len() int           { return len(q) }
+func (q IDQueue) Less(i, j int) bool { return q[i] < q[j] }
+func (q IDQueue) Swap(i, j int)      { q[i], q[j] = q[j], q[i] }
+func (q *IDQueue) Push(x any)        { *q = append(*q, x.(string)) }
+func (q *IDQueue) Pop() any {
+	old := *q
+	x := old[len(old)-1]
+	*q = old[:len(old)-1]
+	return x
 }
+
+// PushID adds an ID.
+func (q *IDQueue) PushID(id string) { heap.Push(q, id) }
+
+// PopID removes and returns the smallest ID.
+func (q *IDQueue) PopID() string { return heap.Pop(q).(string) }

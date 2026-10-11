@@ -106,8 +106,15 @@ func (b *Builder) BuildWorkspace(
 		result.TasksByType[task.TaskType]++
 	}
 
+	// An order to run them in (a cycle is an error); it numbers the tasks for the logs
+	order, err := graph.Order()
+	if err != nil {
+		result.Finish(false)
+		return result, err
+	}
+
 	// Save task graph for debugging
-	b.saveTaskGraph(allTasks, graph, configParser)
+	b.saveTaskGraph(allTasks, order, configParser)
 
 	// Collect compile commands if requested
 	if options.CompileCommands {
@@ -123,7 +130,7 @@ func (b *Builder) BuildWorkspace(
 
 	// Execute all tasks (cache will handle skipping unchanged tasks). Commands run in the
 	// workspace root; every path in them is absolute.
-	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, 8192, ws.RootDir, options.Force)
+	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, ws.RootDir, options.Force)
 	executor.BuildResult = result // Pass result for tracking
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
@@ -179,7 +186,7 @@ func (b *Builder) collectCompileCommands(allTasks []*workspace.BuildTask, result
 }
 
 // saveTaskGraph saves task graph to tasks.json
-func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, graph *workspace.TaskGraph, configParser *workspace.ConfigParser) {
+func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, order []string, configParser *workspace.ConfigParser) {
 	// Get toolchain info (may be nil in workspace mode)
 	var toolchainInfo map[string]any
 	if configParser.CurrentToolchain != nil {
@@ -190,12 +197,6 @@ func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, graph *workspac
 			"target_architecture": configParser.CurrentToolchain.Target.Architecture,
 			"execution_type":      configParser.CurrentToolchain.Execution.Type,
 		}
-	}
-
-	executionPlan, err := graph.GetExecutionPlan()
-	if err != nil {
-		util.LogInfo("WARNING: Failed to get execution plan: %v", err)
-		executionPlan = make(map[string]any)
 	}
 
 	outputData := map[string]any{
@@ -209,7 +210,7 @@ func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, graph *workspac
 		},
 		"resolved_variables": configParser.VarEnv.GetAllVariables(true),
 		"tasks":              allTasks,
-		"execution_plan":     executionPlan,
+		"execution_order":    order,
 	}
 
 	// Always save to cache directory, per build context so platforms and configurations coexist

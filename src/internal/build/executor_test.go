@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"buildy/internal/cache"
 	"buildy/internal/workspace"
@@ -22,6 +23,7 @@ import (
 //	append <file> <text>  append text to file
 //	exit <code>           exit with code
 //	nothing               do nothing
+//	sleep <ms>            sleep
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("BUILDY_HELPER_PROCESS") != "1" {
 		return
@@ -54,6 +56,9 @@ func TestHelperProcess(t *testing.T) {
 			code, _ := strconv.Atoi(step[1])
 			os.Exit(code)
 		case "nothing":
+		case "sleep":
+			ms, _ := strconv.Atoi(step[1])
+			time.Sleep(time.Duration(ms) * time.Millisecond)
 		}
 	}
 	os.Exit(0)
@@ -71,7 +76,7 @@ func newExecutor(t *testing.T, dir string, force bool) *TaskExecutor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewTaskExecutor(bc, 2, 8192, dir, force)
+	return NewTaskExecutor(bc, 2, dir, force)
 }
 
 func runTasks(te *TaskExecutor, tasks ...*workspace.BuildTask) bool {
@@ -328,5 +333,43 @@ func TestExecutorRunsNativeOperations(t *testing.T) {
 	}
 	if te.ExecutionStats.CacheHits != len(tasks) {
 		t.Errorf("second run: %d cache hits, want %d", te.ExecutionStats.CacheHits, len(tasks))
+	}
+}
+
+// Finding 4.5: a task starts as soon as its dependencies finish, not when every task of a stage
+// has: second runs after first while slow is still running.
+func TestExecutorStartsATaskWhenItsDependenciesFinish(t *testing.T) {
+	dir := t.TempDir()
+	slowOut, firstOut, secondOut := filepath.Join(dir, "slow"), filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	slow := newTask("slow", nil, []string{slowOut}, helperCommand(t, "sleep", "1500", "&&", "write", slowOut, "s"))
+	first := newTask("first", nil, []string{firstOut}, helperCommand(t, "write", firstOut, "f"))
+	second := newTask("second", []string{firstOut}, []string{secondOut}, helperCommand(t, "write", secondOut, "2"))
+	second.Dependencies = []string{"first"}
+	if !runTasks(newExecutor(t, dir, false), slow, first, second) {
+		t.Fatal("the build failed")
+	}
+	slowInfo, _ := os.Stat(slowOut)
+	secondInfo, _ := os.Stat(secondOut)
+	if !secondInfo.ModTime().Before(slowInfo.ModTime()) {
+		t.Error("second waited for slow, which it doesn't depend on")
+	}
+}
+
+// After a failure no task starts, and the running ones finish.
+func TestExecutorStopsStartingTasksAfterAFailure(t *testing.T) {
+	dir := t.TempDir()
+	longOut, laterOut := filepath.Join(dir, "long"), filepath.Join(dir, "later")
+	failing := newTask("a_fails", nil, nil, helperCommand(t, "exit", "1"))
+	long := newTask("b_long", nil, []string{longOut}, helperCommand(t, "sleep", "500", "&&", "write", longOut, "l"))
+	later := newTask("c_later", nil, []string{laterOut}, helperCommand(t, "write", laterOut, "x"))
+	te := newExecutor(t, dir, false) // two workers: a_fails and b_long start first
+	if runTasks(te, failing, long, later) {
+		t.Fatal("the build succeeded")
+	}
+	if _, err := os.Stat(longOut); err != nil {
+		t.Error("the running task didn't finish")
+	}
+	if _, err := os.Stat(laterOut); err == nil {
+		t.Error("a task started after the failure")
 	}
 }

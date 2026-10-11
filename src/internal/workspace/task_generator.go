@@ -141,14 +141,12 @@ func (tg *TaskGenerator) resolve(values []string, what string) ([]string, error)
 	return result, nil
 }
 
-// finalizeTask sets common task fields and calculates cache key
-func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string, estimatedTime float64, resources ResourceRequirements) {
+// finalizeTask sets the build context and toolchain of a task
+func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string) {
 	task.Platform = tg.Platform
 	task.Architecture = tg.Architecture
 	task.Configuration = tg.Configuration
 	task.Toolchain = toolchain
-	task.EstimatedTime = estimatedTime
-	task.ResourceRequirements = resources
 }
 
 // moduleSettings resolves the module's compile and link settings for the build, and their
@@ -770,7 +768,7 @@ func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, 
 
 			taskID := tg.TaskIDGen.Next("transform", baseName)
 			task := NewBuildTask(taskID, "transform", []TaskInput{NewTaskInput(inputFile)}, []string{output}, []string{}, command)
-			tg.finalizeTask(&task, t.Tool, 1.0, ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50})
+			tg.finalizeTask(&task, t.Tool)
 			task.Target = t.Name
 			task.Exec = execSpec
 
@@ -860,7 +858,7 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 
 			taskID := tg.TaskIDGen.Next("generate", baseName)
 			task := NewBuildTask(taskID, "generate", []TaskInput{NewTaskInput(inputFile)}, resolvedOutputs, []string{}, command)
-			tg.finalizeTask(&task, g.Tool, 0.5, ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10})
+			tg.finalizeTask(&task, g.Tool)
 			task.Target = g.Name
 			task.Exec = execSpec
 
@@ -924,7 +922,7 @@ func (tg *TaskGenerator) generateFromTemplate(g *config.Generate, outputDir, gen
 	taskID := tg.TaskIDGen.Next("generate", g.Name)
 	task := NewNativeTask(taskID, "generate", []TaskInput{NewTaskInput(templatePath)}, []string{outputPath}, []string{},
 		NativeOp{Op: NativeTemplate, Substitutions: substitutions})
-	tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1})
+	tg.finalizeTask(&task, "")
 	task.Target = g.Name
 
 	if err := tg.registerArtifact(g.Name, []string{outputPath}, []string{taskID}); err != nil {
@@ -1121,7 +1119,7 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(source, dest string, useSymlink
 	} else {
 		task = NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, NativeOp{Op: NativeCopy})
 	}
-	tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
+	tg.finalizeTask(&task, "")
 	util.LogInfo("Generated %s task: %s -> %s", task.TaskType, source, dest)
 	return &task
 }
@@ -1196,7 +1194,7 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 		taskID := tg.TaskIDGen.Next("install", name)
 		task := NewNativeTask(taskID, "install", []TaskInput{{Path: stagingDir}}, []string{outputFile},
 			tg.stagingTasksByName[stagingName], NativeOp{Op: NativeArchive, Format: format, FollowSymlinks: followSymlinks})
-		tg.finalizeTask(&task, "", 5.0, ResourceRequirements{CPUCores: 1, MemoryMB: 512, DiskMB: 500})
+		tg.finalizeTask(&task, "")
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
 	}
@@ -1241,7 +1239,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 					destFile := filepath.Join(destDir, filepath.Base(srcFile))
 					taskID := tg.TaskIDGen.Next("copy", filepath.Base(srcFile))
 					task := NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(srcFile)}, []string{destFile}, nil, NativeOp{Op: NativeCopy})
-					tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
+					tg.finalizeTask(&task, "")
 					tasks = append(tasks, &task)
 					outputs = append(outputs, destFile)
 					taskIDs = append(taskIDs, taskID)
@@ -1297,7 +1295,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 
 		taskID := tg.TaskIDGen.Next("copy", filepath.Base(dest))
 		task := NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, NativeOp{Op: NativeCopy})
-		tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
+		tg.finalizeTask(&task, "")
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated copy task: %s -> %s", source, dest)
 	}

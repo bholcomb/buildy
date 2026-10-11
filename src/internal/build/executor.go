@@ -16,7 +16,8 @@ import (
 	"buildy/pkg/util"
 )
 
-// TaskExecutor executes tasks with caching, parallel execution, and resource-aware scheduling.
+// TaskExecutor runs a task graph: in parallel, each task once its dependencies have finished,
+// skipping those the cache says are up to date.
 //
 // It enforces the task contract: before a task runs, every declared input exists (its producer
 // has run); before a buildy-cached task runs, its declared outputs are deleted, so whatever
@@ -25,7 +26,6 @@ import (
 type TaskExecutor struct {
 	Cache           *cache.BuildCache
 	MaxWorkers      int
-	MaxMemoryMB     int
 	WorkDir         string   // The workspace root: commands run here; relative dependency-file paths are relative to it
 	DockerMounts    []string // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
 	DisableCache    bool
@@ -52,11 +52,10 @@ type ExecutionStats struct {
 }
 
 // NewTaskExecutor creates a new TaskExecutor
-func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, workDir string, disableCache bool) *TaskExecutor {
+func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers int, workDir string, disableCache bool) *TaskExecutor {
 	te := &TaskExecutor{
 		Cache:           buildCache,
 		MaxWorkers:      maxWorkers,
-		MaxMemoryMB:     maxMemoryMB,
 		WorkDir:         workDir,
 		DockerMounts:    resource.DockerMounts(workDir, buildCache.CacheDir()),
 		DisableCache:    disableCache,
@@ -87,155 +86,105 @@ func (te *TaskExecutor) cleanupPendingOutputs() {
 	te.pendingOutputs = make(map[string][]string)
 }
 
-// ExecuteTaskGraph executes all tasks in the graph
+// ExecuteTaskGraph runs the graph's tasks, each as soon as its dependencies have finished, up to
+// MaxWorkers at a time. After a failure (or an interrupt) it starts no more tasks and waits for
+// the running ones. With dryRun it prints the plan instead.
 func (te *TaskExecutor) ExecuteTaskGraph(graph *workspace.TaskGraph, dryRun bool) bool {
-	if len(graph.ExecutionStages) == 0 {
-		if _, err := graph.BuildExecutionStages(); err != nil {
-			util.LogInfo("ERROR: Failed to build execution stages: %v", err)
-			return false
-		}
+	order, err := graph.Order()
+	if err != nil {
+		util.LogError("%v", err)
+		return false
 	}
-
 	for taskID, task := range graph.Tasks {
 		for _, output := range task.Outputs {
 			te.producers[util.NormalizePath(output)] = taskID
 		}
 	}
-
-	startTime := time.Now()
-	success := true
-	completedTasks := 0
-	totalTasks := len(graph.Tasks)
-
-	// Store total task count for logging
-	te.totalTaskCount = totalTasks
-
-	util.LogProgress("Starting build with %d tasks in %d stages", totalTasks, len(graph.ExecutionStages))
+	te.totalTaskCount = len(order)
 
 	if dryRun {
-		te.printDryRun(graph)
+		te.printDryRun(graph, order)
 		return true
 	}
 
-	for stageNum, stageTasks := range graph.ExecutionStages {
-		// Check for shutdown before starting each stage
-		if te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown() {
-			util.LogInfo("Build interrupted, stopping after stage %d", stageNum)
-			success = false
-			break
-		}
-
-		progress := 0.0
-		if totalTasks > 0 {
-			progress = (float64(completedTasks) / float64(totalTasks)) * 100
-		}
-		util.LogProgress("\nStage %d/%d: %d task(s) [%.1f%% complete]",
-			stageNum+1, len(graph.ExecutionStages), len(stageTasks), progress)
-
-		stageSuccess := te.executeStage(stageTasks, graph.Tasks)
-		completedTasks += len(stageTasks)
-
-		if !stageSuccess {
-			success = false
-			break
+	startTime := time.Now()
+	util.LogProgress("Starting build with %d tasks, up to %d at a time", len(order), te.MaxWorkers)
+	started, success := te.schedule(graph)
+	if notStarted := len(order) - started; notStarted > 0 {
+		util.LogProgress("%d task(s) not started: the build stopped", notStarted)
+		if te.BuildResult != nil {
+			te.BuildResult.SkippedTasks = notStarted
 		}
 	}
 
 	te.ExecutionStats.TotalTime = time.Since(startTime).Seconds()
 	te.printSummary()
-
 	return success
 }
 
-// executeStage executes a single stage of tasks in parallel with resource-aware scheduling
-func (te *TaskExecutor) executeStage(taskIDs []string, tasks map[string]*workspace.BuildTask) bool {
-	if len(taskIDs) == 1 {
-		// Single task - execute directly
-		return te.executeSingleTask(tasks[taskIDs[0]])
-	}
-
-	// Resource-aware parallel execution
-	// Calculate total memory requirements for the stage
-	totalMemoryRequired := 0
-	for _, taskID := range taskIDs {
-		totalMemoryRequired += tasks[taskID].ResourceRequirements.MemoryMB
-	}
-
-	// Adjust max workers based on memory constraints
-	effectiveWorkers := te.MaxWorkers
-	if totalMemoryRequired > te.MaxMemoryMB {
-		// Need to limit parallelism to avoid memory overload
-		maxTaskMemory := 0
-		for _, taskID := range taskIDs {
-			if tasks[taskID].ResourceRequirements.MemoryMB > maxTaskMemory {
-				maxTaskMemory = tasks[taskID].ResourceRequirements.MemoryMB
+// schedule runs the tasks: a ready queue of the tasks whose dependencies have finished, smallest
+// ID first, feeding up to MaxWorkers running tasks. It returns how many tasks it started, and
+// whether all of them succeeded.
+func (te *TaskExecutor) schedule(graph *workspace.TaskGraph) (int, bool) {
+	waiting := make(map[string]int, len(graph.Tasks))
+	dependents := make(map[string][]string, len(graph.Tasks))
+	ready := &workspace.IDQueue{}
+	for id, task := range graph.Tasks {
+		seen := map[string]bool{}
+		for _, dep := range task.Dependencies {
+			if !seen[dep] {
+				seen[dep] = true
+				waiting[id]++
+				dependents[dep] = append(dependents[dep], id)
 			}
 		}
-		effectiveWorkers = te.MaxMemoryMB / maxTaskMemory
-		if effectiveWorkers < 1 {
-			effectiveWorkers = 1
-		}
-		if effectiveWorkers > te.MaxWorkers {
-			effectiveWorkers = te.MaxWorkers
-		}
-		if effectiveWorkers > len(taskIDs) {
-			effectiveWorkers = len(taskIDs)
-		}
-		util.LogInfo("WARNING: Limiting parallelism to %d workers due to memory constraints "+
-			"(%dMB required, %dMB available)", effectiveWorkers, totalMemoryRequired, te.MaxMemoryMB)
-	} else {
-		if effectiveWorkers > len(taskIDs) {
-			effectiveWorkers = len(taskIDs)
+		if waiting[id] == 0 {
+			ready.PushID(id)
 		}
 	}
 
-	// Execute tasks in parallel with resource limits using goroutines
-	var wg sync.WaitGroup
-	taskChan := make(chan string, len(taskIDs))
-	resultChan := make(chan bool, len(taskIDs))
-
-	// Start worker goroutines
-	for i := 0; i < effectiveWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for taskID := range taskChan {
-				result := te.executeSingleTask(tasks[taskID])
-				resultChan <- result
-			}
-		}()
+	workers := max(te.MaxWorkers, 1)
+	type result struct {
+		id string
+		ok bool
 	}
-
-	// Send tasks to workers
-	for _, taskID := range taskIDs {
-		taskChan <- taskID
-	}
-	close(taskChan)
-
-	// Wait for all workers to finish
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// Collect results
-	success := true
-	for result := range resultChan {
-		if !result {
+	done := make(chan result)
+	running, started, success := 0, 0, true
+	for {
+		for success && running < workers && ready.Len() > 0 && !te.stopping() {
+			id := ready.PopID()
+			running++
+			started++
+			go func() { done <- result{id, te.executeSingleTask(graph.Tasks[id])} }()
+		}
+		if running == 0 {
+			break
+		}
+		r := <-done
+		running--
+		if !r.ok {
 			success = false
+			continue
+		}
+		for _, dependent := range dependents[r.id] {
+			if waiting[dependent]--; waiting[dependent] == 0 {
+				ready.PushID(dependent)
+			}
 		}
 	}
+	if te.stopping() {
+		success = false
+	}
+	return started, success
+}
 
-	return success
+// stopping reports whether the build was interrupted.
+func (te *TaskExecutor) stopping() bool {
+	return te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown()
 }
 
 // executeSingleTask runs one task under the task contract, or skips it on a valid cache hit.
 func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
-	// Check for shutdown before starting
-	if te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown() {
-		return false
-	}
-
 	te.mu.Lock()
 	te.ExecutionStats.TotalTasks++
 	te.mu.Unlock()
@@ -456,13 +405,22 @@ func runNative(task *workspace.BuildTask) error {
 	return fmt.Errorf("task %s: unknown native operation %q", task.TaskID, task.Native.Op)
 }
 
-// printDryRun prints the execution plan: every task, stage by stage, without running any
-func (te *TaskExecutor) printDryRun(graph *workspace.TaskGraph) {
-	util.LogProgress("Dry run: %d tasks in %d stages (nothing is executed)", len(graph.Tasks), len(graph.ExecutionStages))
-	for i, stage := range graph.ExecutionStages {
-		ids := append([]string{}, stage...)
-		sort.Strings(ids)
-		util.LogProgress("  Stage %d: %s", i+1, strings.Join(ids, ", "))
+// printDryRun prints the plan: every task in an order that runs each after its dependencies, with
+// what it waits for. Nothing runs.
+func (te *TaskExecutor) printDryRun(graph *workspace.TaskGraph, order []string) {
+	util.LogProgress("Dry run: %d tasks, in an order they can run in (nothing is executed)", len(order))
+	for _, id := range order {
+		task := graph.Tasks[id]
+		line := fmt.Sprintf("  [%d] %s", task.TaskNumber, id)
+		if deps := task.Dependencies; len(deps) > 0 {
+			sorted := append([]string{}, deps...)
+			sort.Strings(sorted)
+			if len(sorted) > 4 {
+				sorted = append(sorted[:4], fmt.Sprintf("and %d more", len(deps)-4))
+			}
+			line += "  (after " + strings.Join(sorted, ", ") + ")"
+		}
+		util.LogProgress("%s", line)
 	}
 }
 

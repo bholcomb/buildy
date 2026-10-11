@@ -33,14 +33,12 @@ func TestTaskGraphCircularDependencyDetection(t *testing.T) {
 	graph.AddTask(taskB)
 	graph.AddTask(taskC)
 
-	stages, err := graph.BuildExecutionStages()
-
+	order, err := graph.Order()
 	if err == nil {
-		t.Error("BuildExecutionStages should return an error for circular dependencies")
+		t.Error("Order should return an error for circular dependencies")
 	}
-
-	if stages != nil && len(stages) > 0 {
-		t.Error("Should not return stages when circular dependency exists")
+	if len(order) > 0 {
+		t.Error("Should not return an order when circular dependency exists")
 	}
 
 	t.Logf("Correctly detected circular dependency: %v", err)
@@ -83,28 +81,19 @@ func TestTaskGraphTopologicalOrder(t *testing.T) {
 	graph.AddTask(link)
 	graph.AddTask(stage)
 
-	stages, err := graph.BuildExecutionStages()
+	order, err := graph.Order()
 	if err != nil {
-		t.Fatalf("BuildExecutionStages failed: %v", err)
+		t.Fatalf("Order failed: %v", err)
 	}
-
-	if len(stages) == 0 {
-		t.Fatal("Expected at least one execution stage")
-	}
-
-	// Build a map of task → stage index for verification
-	taskStage := make(map[string]int)
-	for stageIdx, stage := range stages {
-		for _, taskID := range stage {
-			taskStage[taskID] = stageIdx
-		}
+	position := make(map[string]int)
+	for i, taskID := range order {
+		position[taskID] = i
 	}
 
 	// Verify ordering constraints
 	assertBefore := func(before, after string) {
-		if taskStage[before] >= taskStage[after] {
-			t.Errorf("%s (stage %d) should execute before %s (stage %d)",
-				before, taskStage[before], after, taskStage[after])
+		if position[before] >= position[after] {
+			t.Errorf("%s (%d) should execute before %s (%d)", before, position[before], after, position[after])
 		}
 	}
 
@@ -113,27 +102,18 @@ func TestTaskGraphTopologicalOrder(t *testing.T) {
 	assertBefore("compile_001", "link_001")
 	assertBefore("compile_002", "link_001")
 	assertBefore("link_001", "stage_001")
-
-	// Compile tasks can be parallel (same stage is ok)
-	if taskStage["compile_001"] != taskStage["compile_002"] {
-		t.Logf("Note: compile_001 and compile_002 are in different stages (%d vs %d), but parallel is preferred",
-			taskStage["compile_001"], taskStage["compile_002"])
-	}
-
-	t.Logf("SUCCESS: Tasks correctly ordered across %d stages", len(stages))
 }
 
 // TestTaskGraphEmptyGraph handles edge case of empty task graph.
 func TestTaskGraphEmptyGraph(t *testing.T) {
 	graph := NewTaskGraph()
 
-	stages, err := graph.BuildExecutionStages()
+	order, err := graph.Order()
 	if err != nil {
 		t.Errorf("Empty graph should not error: %v", err)
 	}
-
-	if len(stages) != 0 {
-		t.Errorf("Empty graph should have 0 stages, got %d", len(stages))
+	if len(order) != 0 {
+		t.Errorf("Empty graph should have no tasks, got %v", order)
 	}
 }
 
@@ -148,17 +128,12 @@ func TestTaskGraphSingleTask(t *testing.T) {
 	}
 	graph.AddTask(task)
 
-	stages, err := graph.BuildExecutionStages()
+	order, err := graph.Order()
 	if err != nil {
 		t.Fatalf("Single task graph should not error: %v", err)
 	}
-
-	if len(stages) != 1 {
-		t.Errorf("Expected 1 stage for single task, got %d", len(stages))
-	}
-
-	if len(stages[0]) != 1 || stages[0][0] != "single_task" {
-		t.Errorf("Expected single_task in first stage")
+	if len(order) != 1 || order[0] != "single_task" {
+		t.Errorf("order = %v, want [single_task]", order)
 	}
 }
 
@@ -173,15 +148,9 @@ func TestTaskGraphMissingDependency(t *testing.T) {
 	}
 	graph.AddTask(task)
 
-	stages, err := graph.BuildExecutionStages()
-
-	// Missing dependencies should be detected
-	if err == nil {
-		t.Error("Should error when dependency doesn't exist")
-	}
-
-	if stages != nil && len(stages) > 0 {
-		t.Error("Should not return stages when dependency is missing")
+	_, err := graph.Order()
+	if err == nil || !strings.Contains(err.Error(), "nonexistent_task") {
+		t.Errorf("Should error naming the missing dependency, got %v", err)
 	}
 }
 
@@ -198,9 +167,9 @@ func TestTaskNumbersAssigned(t *testing.T) {
 	graph.AddTask(task2)
 	graph.AddTask(task3)
 
-	_, err := graph.BuildExecutionStages()
+	_, err := graph.Order()
 	if err != nil {
-		t.Fatalf("BuildExecutionStages failed: %v", err)
+		t.Fatalf("Order failed: %v", err)
 	}
 
 	// Verify task numbers are assigned
@@ -277,12 +246,12 @@ func TestValidateAddsProducerEdges(t *testing.T) {
 	if strings.Join(link.Dependencies, ",") != "compile_version" {
 		t.Errorf("link dependencies = %v, want [compile_version] once", link.Dependencies)
 	}
-	stages, err := graph.BuildExecutionStages()
+	order, err := graph.Order()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stages) != 3 {
-		t.Errorf("stages = %v, want generate, compile, link", stages)
+	if strings.Join(order, ",") != "generate_version,compile_version,link_app" {
+		t.Errorf("order = %v, want generate, compile, link", order)
 	}
 }
 
@@ -337,7 +306,7 @@ func TestSelectTakesTheDependencyClosure(t *testing.T) {
 	if !targets["app"] || !targets["calc"] || targets["other"] || len(targets) != 2 {
 		t.Errorf("selected the tasks of %v, want app and calc", targets)
 	}
-	if _, err := selected.BuildExecutionStages(); err != nil {
+	if _, err := selected.Order(); err != nil {
 		t.Errorf("the selection is not a closed graph: %v", err)
 	}
 

@@ -465,8 +465,6 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		if depFile != "" {
 			task.DepFile = &DepFile{Path: depFile, Format: depFormat}
 		}
-		task.EstimatedTime = util.DefaultCompileTimeSeconds
-		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 200, DiskMB: 15}
 
 		tasks = append(tasks, &task)
 	}
@@ -688,8 +686,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	task.Architecture = architecture
 	task.Configuration = configuration
 	task.Toolchain = toolchain
-	task.EstimatedTime = util.DefaultLinkTimeSeconds
-	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 150, DiskMB: 25}
 
 	return &task, nil
 }
@@ -808,8 +804,6 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	task.Architecture = architecture
 	task.Configuration = configuration
 	task.Toolchain = toolchain
-	task.EstimatedTime = 10.0 // Build tasks are typically longer
-	task.ResourceRequirements = ResourceRequirements{CPUCores: 2, MemoryMB: 512, DiskMB: 100}
 
 	return &task, nil
 }

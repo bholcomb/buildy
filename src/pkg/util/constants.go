@@ -1,13 +1,7 @@
 package util
 
-// Constants used throughout the buildy system
+// DefaultMaxWorkers is how many tasks run at once unless -j says otherwise
+const DefaultMaxWorkers = 4
 
-// Default timeouts and estimates
-const (
-	DefaultTaskTimeoutSeconds  = 300
-	DefaultCompileTimeSeconds  = 2.0
-	DefaultLinkTimeSeconds     = 1.5
-	DefaultSetupTimeSeconds    = 0.1
-	DefaultMaxWorkers          = 4
-)
-
+// DefaultTaskTimeoutSeconds is how long a task may run
+const DefaultTaskTimeoutSeconds = 300
