@@ -270,18 +270,20 @@ func (bsm *BuildSystemManager) GetBuildSystem(name string) *BuildSystemConfig {
 func (bsm *BuildSystemManager) Execute(
 	config *BuildSystemConfig,
 	sourceDir, buildDir, installDir string,
-	execEnv *util.ExecutionEnvironment,
+	execSpec util.ExecSpec,
+	mounts []string,
 	phases []string,
 	extraArgs []string,
 ) error {
-	return bsm.ExecuteWithContext(config, sourceDir, buildDir, installDir, execEnv, phases, extraArgs, nil)
+	return bsm.ExecuteWithContext(config, sourceDir, buildDir, installDir, execSpec, mounts, phases, extraArgs, nil)
 }
 
 // ExecuteWithContext executes specified phases with additional context variables
 func (bsm *BuildSystemManager) ExecuteWithContext(
 	config *BuildSystemConfig,
 	sourceDir, buildDir, installDir string,
-	execEnv *util.ExecutionEnvironment,
+	execSpec util.ExecSpec,
+	mounts []string,
 	phases []string,
 	extraArgs []string,
 	context map[string]string,
@@ -322,7 +324,7 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
 
 		// Execute the command
-		result, err := execEnv.Execute(cmd, workDir, 600) // 10 minute timeout
+		result, err := util.Run(execSpec, cmd, workDir, mounts, 600) // 10 minute timeout
 		if err != nil {
 			return fmt.Errorf("phase '%s' failed: %w", phaseName, err)
 		}

@@ -51,9 +51,6 @@ environment:
     execution:
       type: docker
       image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
     default_phases: [configure, build, install]
 
@@ -123,9 +120,6 @@ environment:
     execution:
       type: docker
       image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
     default_phases: [configure, build, install]
 ```
@@ -151,9 +145,6 @@ dependencies:
       execution:
         type: docker
         image: "gcc:13"
-        volumes:
-          - "${PWD}:/workspace"
-        working_dir: "/workspace"
         user: "${UID}:${GID}"
 
     - name: nlohmann_json
@@ -273,9 +264,6 @@ environment:
     execution:
       type: docker
       image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
 ```
 
@@ -291,8 +279,6 @@ fetch:
     execution:
       type: docker
       image: "ubuntu:22.04"
-      volumes:
-        - "${PWD}:/workspace"
 ```
 
 ### Docker Configuration Fields
@@ -301,8 +287,7 @@ fetch:
 |-------|-------------|---------|
 | `type` | `docker` or `native` | `native` |
 | `image` | Docker image name | `gcc:13` |
-| `volumes` | Volume mounts | `["${PWD}:/workspace"]` |
-| `working_dir` | Working directory in container | `/workspace` |
+| `volumes` | Extra volume mounts | none |
 | `user` | User to run as | `${UID}:${GID}` |
 
 ### Variable Expansion
@@ -311,11 +296,14 @@ These variables are expanded in Docker configuration:
 
 | Variable | Description |
 |----------|-------------|
-| `${PWD}` | Current working directory |
 | `${UID}` | Host user ID |
 | `${GID}` | Host group ID |
 
 Using `${UID}:${GID}` ensures files created in the container have correct ownership.
+
+The workspace root, and the cache directory if it lies elsewhere, are mounted at their host paths,
+and commands run in the workspace root (a dependency's build phases in its source directory), so the
+absolute paths in commands are the same inside the container as outside.
 
 ## Step 5: Build the Project
 
@@ -498,8 +486,6 @@ fetch:
     execution:                      # Per-dependency Docker config
       type: docker
       image: "gcc:13"
-      volumes: ["${PWD}:/workspace"]
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
 ```
 

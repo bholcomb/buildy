@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"buildy/internal/cache"
+	"buildy/internal/resource"
 	"buildy/internal/workspace"
 	"buildy/pkg/util"
 )
@@ -22,8 +23,8 @@ type TaskExecutor struct {
 	Cache               *cache.BuildCache
 	MaxWorkers          int
 	MaxMemoryMB         int
-	ExecEnv             *util.ExecutionEnvironment
-	WorkDir             string // Where commands run; relative dependency-file paths are relative to it
+	WorkDir             string   // The workspace root: commands run here; relative dependency-file paths are relative to it
+	DockerMounts        []string // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
 	DisableCache        bool
 	ExecutionStats      ExecutionStats
 	BuildResult         *BuildResult         // Optional: for tracking execution in build report
@@ -33,6 +34,9 @@ type TaskExecutor struct {
 	pendingOutputs      map[string][]string // Track outputs of in-progress tasks for cleanup
 	totalTaskCount      int                 // Total number of tasks for logging
 	producers           map[string]string   // Normalized output path -> task ID that produces it
+
+	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
+	runCommand func(spec util.ExecSpec, command, workDir string, mounts []string, timeoutSeconds int) (*util.ExecutionResult, error)
 }
 
 // ExecutionStats tracks execution statistics
@@ -45,11 +49,7 @@ type ExecutionStats struct {
 }
 
 // NewTaskExecutor creates a new TaskExecutor
-func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, execEnv *util.ExecutionEnvironment, workDir string, disableCache bool) *TaskExecutor {
-	if execEnv == nil {
-		execEnv = util.NewNativeExecution()
-	}
-
+func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, workDir string, disableCache bool) *TaskExecutor {
 	rfmConfig := DefaultResponseFileConfig(buildCache.CacheDir())
 	rfm := NewResponseFileManager(rfmConfig)
 
@@ -57,13 +57,14 @@ func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, 
 		Cache:               buildCache,
 		MaxWorkers:          maxWorkers,
 		MaxMemoryMB:         maxMemoryMB,
-		ExecEnv:             execEnv,
 		WorkDir:             workDir,
+		DockerMounts:        resource.DockerMounts(workDir, buildCache.CacheDir()),
 		DisableCache:        disableCache,
 		ShutdownManager:     GetShutdownManager(),
 		ResponseFileManager: rfm,
 		pendingOutputs:      make(map[string][]string),
 		producers:           make(map[string]string),
+		runCommand:          util.Run,
 	}
 
 	// Register cleanup for pending outputs and response files on shutdown
@@ -400,7 +401,8 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 		return fmt.Errorf("failed to create a response file: %w", err)
 	}
 
-	result, err := te.ExecEnv.Execute(command, te.WorkDir, util.DefaultTaskTimeoutSeconds)
+	// Natively or in Docker, as the task's toolchain says; either way in the workspace root
+	result, err := te.runCommand(task.Exec, command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
 	if err != nil {
 		return err
 	}

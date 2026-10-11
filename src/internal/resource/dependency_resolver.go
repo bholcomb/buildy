@@ -45,15 +45,6 @@ type BuildConfig struct {
 	Args     []string `yaml:"args"`     // Arguments passed to the build system
 }
 
-// ExecutionConfig represents execution environment for dependency builds
-type ExecutionConfig struct {
-	Type       string   `yaml:"type"`        // native, docker
-	Image      string   `yaml:"image"`       // Docker image
-	Volumes    []string `yaml:"volumes"`     // Docker volumes
-	WorkingDir string   `yaml:"working_dir"` // Working directory in container
-	User       string   `yaml:"user"`        // User in container
-}
-
 // DependencyConfig represents a single dependency's configuration (parsed from YAML)
 // This is the new unified format with platform sections
 type DependencyConfig struct {
@@ -87,8 +78,8 @@ type DependencySection struct {
 	Frameworks  []string `yaml:"frameworks"`
 	Defines     []string `yaml:"defines"`
 
-	// Execution environment
-	Execution *ExecutionConfig `yaml:"execution"`
+	// Execution environment (native or docker) for the dependency's build
+	Execution *util.ExecSpec `yaml:"execution"`
 }
 
 // DependencyResolver resolves all dependency types
@@ -102,7 +93,6 @@ type DependencyResolver struct {
 	workspaceRoot      string
 	fetchManager       *FetchManager
 	buildSystemManager *BuildSystemManager
-	defaultExecEnv     *util.ExecutionEnvironment
 	resolved           map[string]*ResolvedDependency
 	configs            map[string]*DependencyConfig
 }
@@ -124,15 +114,9 @@ func NewDependencyResolver(platform, architecture, toolchain, configuration, cac
 		workspaceRoot:      workspaceRoot,
 		fetchManager:       NewFetchManager(cacheDir),
 		buildSystemManager: bsm,
-		defaultExecEnv:     util.NewNativeExecution(),
 		resolved:           make(map[string]*ResolvedDependency),
 		configs:            make(map[string]*DependencyConfig),
 	}
-}
-
-// SetDefaultExecution sets the default execution environment for dependency builds
-func (dr *DependencyResolver) SetDefaultExecution(execEnv *util.ExecutionEnvironment) {
-	dr.defaultExecEnv = execEnv
 }
 
 // LoadDependencies loads dependencies from the workspace
@@ -347,21 +331,11 @@ func (dr *DependencyResolver) parseDependencySection(data map[string]any) (Depen
 
 	// Execution config
 	if execData, ok := data["execution"].(map[string]any); ok {
-		exec := &ExecutionConfig{}
-		if t, ok := execData["type"].(string); ok {
-			exec.Type = t
+		spec, err := execSpecFromMap(execData)
+		if err != nil {
+			return section, err
 		}
-		if image, ok := execData["image"].(string); ok {
-			exec.Image = image
-		}
-		exec.Volumes = util.ExtractStringSlice(execData["volumes"])
-		if wd, ok := execData["working_dir"].(string); ok {
-			exec.WorkingDir = wd
-		}
-		if user, ok := execData["user"].(string); ok {
-			exec.User = user
-		}
-		section.Execution = exec
+		section.Execution = &spec
 	}
 
 	return section, nil
@@ -655,11 +629,13 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 
 	util.LogProgress("=== Building dependency: %s (using %s) ===", name, bsConfig.Name)
 
-	// Determine execution environment
-	execEnv := dr.defaultExecEnv
-	if section.Execution != nil && section.Execution.Type != "" {
-		execEnv = dr.createExecutionEnv(section.Execution)
+	// Determine execution environment: natively, or in Docker with the workspace and the cache
+	// directory mounted at their host paths
+	execSpec := util.ExecSpec{}
+	if section.Execution != nil {
+		execSpec = *section.Execution
 	}
+	mounts := dr.dockerMounts()
 
 	// Build both debug and release configurations
 	configurations := []string{"debug", "release"}
@@ -713,7 +689,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		}
 
 		util.LogInfo("Building %s (%s) with %s", name, config, bsConfig.Name)
-		if err := dr.buildSystemManager.ExecuteWithContext(bsConfig, dest, buildDir, installDir, execEnv, phases, extraArgs, context); err != nil {
+		if err := dr.buildSystemManager.ExecuteWithContext(bsConfig, dest, buildDir, installDir, execSpec, mounts, phases, extraArgs, context); err != nil {
 			return fmt.Errorf("build failed for %s (%s): %w", name, config, err)
 		}
 
@@ -784,26 +760,19 @@ func (dr *DependencyResolver) resolveVariables(text string, varEnv *util.Variabl
 	return resolved
 }
 
-// createExecutionEnv creates an ExecutionEnvironment from config
-func (dr *DependencyResolver) createExecutionEnv(config *ExecutionConfig) *util.ExecutionEnvironment {
-	switch config.Type {
-	case "docker":
-		dockerConfig := map[string]any{
-			"image": config.Image,
-		}
-		if len(config.Volumes) > 0 {
-			dockerConfig["volumes"] = config.Volumes
-		}
-		if config.WorkingDir != "" {
-			dockerConfig["working_dir"] = config.WorkingDir
-		}
-		if config.User != "" {
-			dockerConfig["user"] = config.User
-		}
-		return util.NewDockerExecution(dockerConfig)
-	default:
-		return util.NewNativeExecution()
+// dockerMounts returns the directories a Docker build mounts at their host paths: the workspace
+// root, and the cache directory when it lies outside it.
+func (dr *DependencyResolver) dockerMounts() []string {
+	return DockerMounts(dr.workspaceRoot, dr.cacheDir)
+}
+
+// DockerMounts returns the workspace root, and the cache directory when it lies outside it.
+func DockerMounts(workspaceRoot, cacheDir string) []string {
+	mounts := []string{workspaceRoot}
+	if rel, err := filepath.Rel(workspaceRoot, cacheDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		mounts = append(mounts, cacheDir)
 	}
+	return mounts
 }
 
 // GetDependency returns a resolved dependency by name

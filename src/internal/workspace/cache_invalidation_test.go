@@ -462,7 +462,7 @@ func TestCacheKeyDifferentToolchains(t *testing.T) {
 		task.Platform = "linux"
 		task.Architecture = "x86_64"
 		task.Configuration = "debug"
-		task.Toolchain = toolchain
+		task.ToolchainHash = toolchain
 		if err := task.HashInputs(); err != nil {
 			t.Fatal(err)
 		}

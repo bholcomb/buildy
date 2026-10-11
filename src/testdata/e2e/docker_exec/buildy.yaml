@@ -1,0 +1,8 @@
+project:
+  name: docker_exec
+
+targets:
+  executables:
+    - name: app
+      language: cpp
+      sources: ["main.cpp"]

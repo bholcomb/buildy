@@ -71,8 +71,10 @@ type BuildTask struct {
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
-	Toolchain            string               `json:"toolchain"`   // Toolchain identifier (e.g., "gcc-linux-13.2")
-	ConfigHash           string               `json:"config_hash"` // Hash of buildy.yaml to invalidate cache on config changes
+	Toolchain            string               `json:"toolchain"`      // Name of the toolchain that produced the task
+	ToolchainHash        string               `json:"toolchain_hash"` // Content hash of that toolchain's config
+	Exec                 util.ExecSpec        `json:"exec"`           // Where the command runs (native or docker), from that toolchain
+	ConfigHash           string               `json:"config_hash"`    // Hash of buildy.yaml to invalidate cache on config changes
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -125,15 +127,16 @@ func (t *BuildTask) CalculateCacheKey() string {
 	// Create content structure for hashing
 	// Includes all factors that affect build output
 	content := map[string]interface{}{
-		"task_type":     t.TaskType,
-		"inputs":        inputTuples,
-		"outputs":       outputs,
-		"command":       t.Command,
-		"platform":      t.Platform,
-		"architecture":  t.Architecture,
-		"configuration": t.Configuration,
-		"toolchain":     t.Toolchain,
-		"config_hash":   t.ConfigHash,
+		"task_type":      t.TaskType,
+		"inputs":         inputTuples,
+		"outputs":        outputs,
+		"command":        t.Command,
+		"platform":       t.Platform,
+		"architecture":   t.Architecture,
+		"configuration":  t.Configuration,
+		"toolchain_hash": t.ToolchainHash,
+		"exec":           t.Exec,
+		"config_hash":    t.ConfigHash,
 	}
 
 	// Serialize to JSON (Go's json.Marshal sorts keys by default)

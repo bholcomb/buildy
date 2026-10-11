@@ -14,9 +14,8 @@ toolchain:
   execution:
     type: docker
     image: "gcc:13"
-    volumes:
-      - "${PWD}:/workspace"
-    working_dir: "/workspace"
+    # The workspace (and the cache directory, if elsewhere) is mounted at its host path and
+    # commands run in the workspace root, as natively. "volumes:" adds mounts.
     user: "${UID}:${GID}"
   
   flag_mappings:

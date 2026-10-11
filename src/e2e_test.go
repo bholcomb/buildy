@@ -101,6 +101,8 @@ func buildy(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command(buildyBinary, args...)
 	cmd.Dir = dir
+	// A fixture is not a VCS checkout; don't let a stray .git above the temp dir break go build
+	cmd.Env = append(os.Environ(), "GOFLAGS=-buildvcs=false")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -335,5 +337,34 @@ func TestE2ERustOutputs(t *testing.T) {
 	mustBuildy(t, dir)
 	if _, err := os.Stat(hello); err != nil {
 		t.Errorf("the deleted binary was not rebuilt: %v", err)
+	}
+}
+
+// Finding 9 and S14: a Docker toolchain's commands run in a container that sees the workspace
+// at its host path. Runs only with BUILDY_TEST_DOCKER=1.
+func TestE2EDockerExecution(t *testing.T) {
+	if os.Getenv("BUILDY_TEST_DOCKER") != "1" {
+		t.Skip("skipping: set BUILDY_TEST_DOCKER=1 to run the Docker case")
+	}
+	needTools(t, "docker")
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		t.Skip("skipping: already inside a container")
+	}
+	dir := fixture(t, "docker_exec")
+	mustBuildy(t, dir, "--toolchain", "busybox-cpp")
+	app := filepath.Join(outDir(dir, "debug"), "bin", "app")
+	data, err := os.ReadFile(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "compiled\n" {
+		t.Errorf("app = %q", data)
+	}
+
+	// The outputs belong to the invoking user: the next build can replace them.
+	writeFile(t, filepath.Join(dir, "main.cpp"), "again\n")
+	mustBuildy(t, dir, "--toolchain", "busybox-cpp")
+	if data, _ := os.ReadFile(app); string(data) != "again\n" {
+		t.Errorf("after an edit app = %q", data)
 	}
 }

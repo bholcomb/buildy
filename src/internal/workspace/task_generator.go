@@ -36,7 +36,6 @@ type TaskGenerator struct {
 	ToolchainHash      string
 	ToolMatcher        *resource.ToolMatcher
 	CommandBuilder     *resource.CommandBuilder
-	ExecEnv            *util.ExecutionEnvironment
 	DependencyResolver *resource.DependencyResolver
 	VarEnv             *util.VariableEnvironment
 	PathResolver       *PathResolver
@@ -97,7 +96,6 @@ func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 	}
 	tg.ToolMatcher = toolMatcher
 	tg.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, tg.Configuration)
-	tg.ExecEnv = resource.CreateExecutionEnvironmentFromToolchain(tc)
 
 	return nil
 }
@@ -399,10 +397,23 @@ func (tg *TaskGenerator) generateTargetTasks(
 	if err != nil {
 		return nil, fmt.Errorf("target '%s' in module %s: %w", targetName, tg.moduleName(), err)
 	}
+	// The tasks run where their toolchain says (natively or in Docker), and the toolchain's
+	// content is part of their cache key
+	if targetToolchain == nil {
+		return nil, fmt.Errorf("target '%s' in module %s: no toolchain", targetName, tg.moduleName())
+	}
+	execSpec, err := resource.ExecSpecFromToolchain(targetToolchain)
+	if err != nil {
+		return nil, fmt.Errorf("target '%s' in module %s: %w", targetName, tg.moduleName(), err)
+	}
+	toolchainHash := resource.HashToolchainConfig(targetToolchain)
+
 	depLibFiles := ExtractStringList(targetConfig["dep_lib_files"])
 	for _, task := range tasks {
 		task.Module = tg.CurrentModule
 		task.Target = targetName
+		task.Exec = execSpec
+		task.ToolchainHash = toolchainHash
 		if len(task.LinkLibs) > 0 {
 			for _, file := range depLibFiles {
 				task.Inputs = append(task.Inputs, NewTaskInput(file))
@@ -749,6 +760,10 @@ func (tg *TaskGenerator) generateTransformTasks(
 			util.LogWarning("artifacts.transform '%s': toolchain '%s' not found", name, toolName)
 			continue
 		}
+		execSpec, err := resource.ExecSpecFromToolchain(toolchain)
+		if err != nil {
+			return nil, fmt.Errorf("artifacts.transform '%s': %w", name, err)
+		}
 
 		// Find the transform/convert/compile tool in the toolchain
 		var tool *resource.Tool
@@ -870,6 +885,8 @@ func (tg *TaskGenerator) generateTransformTasks(
 			)
 			tg.finalizeTask(&task, toolName, 1.0, ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50})
 			task.Target = name
+			task.Exec = execSpec
+			task.ToolchainHash = resource.HashToolchainConfig(toolchain)
 
 			tasks = append(tasks, &task)
 			artifactOutputPaths = append(artifactOutputPaths, resolvedOutput)
@@ -1074,6 +1091,10 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				util.LogWarning("artifacts.generate '%s': toolchain '%s' not found", name, toolName)
 				continue
 			}
+			execSpec, err := resource.ExecSpecFromToolchain(toolchain)
+			if err != nil {
+				return nil, fmt.Errorf("artifacts.generate '%s': %w", name, err)
+			}
 
 			// Find the generate/compile tool
 			var tool *resource.Tool
@@ -1198,6 +1219,8 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				)
 				tg.finalizeTask(&task, toolName, 0.5, ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10})
 				task.Target = name
+				task.Exec = execSpec
+				task.ToolchainHash = resource.HashToolchainConfig(toolchain)
 
 				tasks = append(tasks, &task)
 				artifactOutputPaths = append(artifactOutputPaths, resolvedOutputs...)

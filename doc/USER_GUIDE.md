@@ -805,9 +805,6 @@ environment:
     execution:
       type: docker
       image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
 ```
 
@@ -823,8 +820,6 @@ complex_lib:
     execution:
       type: docker
       image: "ubuntu:22.04"
-      volumes:
-        - "${PWD}:/workspace"
 ```
 
 ### Docker Configuration
@@ -833,9 +828,14 @@ complex_lib:
 |-------|-------------|
 | `type` | `docker` or `native` |
 | `image` | Docker image name |
-| `volumes` | Volume mounts (supports `${PWD}`, `${UID}`, `${GID}`) |
-| `working_dir` | Working directory in container |
+| `volumes` | Extra volume mounts (supports `${UID}`, `${GID}`) |
 | `user` | User to run as (default: `${UID}:${GID}`) |
+| `env` | Environment variables for the commands |
+
+The workspace root, and the cache directory if it lies elsewhere, are mounted at their host paths,
+so commands see the same absolute paths in the container as outside it. A Docker toolchain
+(`--toolchain docker-cpp-linux`) runs every compile and link of its targets in its image; the
+image is part of each task's cache key.
 
 ## Artifacts and Post-Processing
 

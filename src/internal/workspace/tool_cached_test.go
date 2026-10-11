@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"buildy/internal/resource"
 )
 
 const goAndRustWorkspace = `
@@ -77,6 +79,46 @@ func TestGoAndRustTasksAreToolCached(t *testing.T) {
 			if got := task.Outputs[0]; got != filepath.Join(outDir, filepath.FromSlash(want)) {
 				t.Errorf("%s-%s %s: output %s, want %s", tc.platform, tc.config, target, got, filepath.Join(outDir, want))
 			}
+		}
+	}
+}
+
+// Finding 9: with a Docker toolchain, the tasks carry its Docker execution (they used to run
+// on the host).
+func TestDockerToolchainTasksRunInDocker(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: d}\n" + cppEnvironment + "targets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n",
+		"main.cpp":    "int main() {}",
+	})
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.DiscoverModules(false); err != nil {
+		t.Fatal(err)
+	}
+	toolchains, err := resource.NewToolchainManagerMulti(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	templates, err := NewBuildTemplateEngineMulti(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := NewConfigParser("linux", "x86_64", "debug", nil, toolchains, "docker-cpp-linux", templates, ws, nil, nil).GenerateWorkspaceTasks(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("no tasks")
+	}
+	for _, task := range tasks {
+		if !task.Exec.IsDocker() || task.Exec.Image != "gcc:13" {
+			t.Errorf("%s runs %+v, want docker gcc:13", task.TaskID, task.Exec)
+		}
+		if task.ToolchainHash != resource.HashToolchainConfig(toolchains.GetToolchain("docker-cpp-linux")) {
+			t.Errorf("%s: toolchain hash %q", task.TaskID, task.ToolchainHash)
 		}
 	}
 }

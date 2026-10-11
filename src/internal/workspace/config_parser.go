@@ -38,7 +38,6 @@ type ConfigParser struct {
 	ToolchainHash      string
 	ToolMatcher        *resource.ToolMatcher
 	CommandBuilder     *resource.CommandBuilder
-	ExecEnv            *util.ExecutionEnvironment
 	Workspace          *Workspace
 	TargetRegistry     *TargetRegistry
 	CurrentModule      string
@@ -499,10 +498,7 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	}
 	cp.ToolMatcher = toolMatcher
 	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Configuration)
-	cp.ExecEnv = resource.CreateExecutionEnvironmentFromToolchain(tc)
-
 	util.LogInfo("Using toolchain: %s (%s)", tc.Name, tc.Description)
-	util.LogInfo("Execution environment: %s", tc.ExecutionType)
 
 	// Build variable environment
 	if err := cp.setupVariableEnvironment(config); err != nil {

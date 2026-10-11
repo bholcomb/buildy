@@ -1610,22 +1610,30 @@ execution:
 execution:
   type: docker
   image: "gcc:13"
-  volumes:
-    - "${PWD}:/workspace"
-  working_dir: "/workspace"
-  user: "${UID}:${GID}"
+  user: "${UID}:${GID}"      # The default: files belong to the invoking user
+  volumes:                   # Optional extra mounts
+    - "/opt/sdk:/opt/sdk:ro"
 ```
+
+Every task runs where the toolchain that produced it says: a compile or link with its target's
+toolchain, a transform or generate with the named tool's toolchain. Copy, staging and install
+tasks run natively. A Docker task runs `docker run --rm` with the workspace root, and the cache
+directory if it lies elsewhere, mounted **at their host paths**, and `-w <workspace root>`, so
+the absolute host paths in its command are valid in the container. The execution settings and
+the toolchain's content are part of every task's cache key: switching a toolchain to another
+image rebuilds.
 
 #### Execution Configuration Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | string | `native` or `docker` |
-| `env` | map | Environment variables to set (native only) |
-| `image` | string | Docker image name (docker only) |
-| `volumes` | list | Volume mounts (docker only) |
-| `working_dir` | string | Working directory in container (docker only) |
-| `user` | string | User/group to run as (docker only) |
+| `env` | map | Environment variables to set |
+| `image` | string | Docker image name (docker only, required) |
+| `volumes` | list | Extra volume mounts (docker only); the workspace is always mounted at its host path |
+| `user` | string | User/group to run as (docker only); the invoking user by default |
+
+Any other key is an error. `working_dir` is gone: commands always run in the workspace root.
 
 #### Docker Variable Expansion
 
@@ -1633,7 +1641,6 @@ These variables are expanded in Docker configuration:
 
 | Variable | Description |
 |----------|-------------|
-| `${PWD}` | Current working directory on host |
 | `${UID}` | Host user ID |
 | `${GID}` | Host group ID |
 

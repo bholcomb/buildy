@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"buildy/internal/cache"
 	"buildy/internal/workspace"
+	"buildy/pkg/util"
 )
 
 // TestHelperProcess is not a test: tasks run the test binary as their command (the Go
@@ -63,7 +65,7 @@ func newExecutor(t *testing.T, dir string, force bool) *TaskExecutor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewTaskExecutor(bc, 2, 8192, nil, dir, force)
+	return NewTaskExecutor(bc, 2, 8192, dir, force)
 }
 
 func runTasks(te *TaskExecutor, tasks ...*workspace.BuildTask) bool {
@@ -225,5 +227,46 @@ func TestExecutorReportsCommandFailure(t *testing.T) {
 	task := newTask("compile_bad", nil, []string{filepath.Join(dir, "x.o")}, cmd)
 	if runTasks(newExecutor(t, dir, false), task) {
 		t.Fatal("a failing command succeeded")
+	}
+}
+
+// Finding 9: a task's Exec decides where it runs; a Docker task goes to Docker with the
+// workspace (and the cache, when elsewhere) mounted, a native one runs natively.
+func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
+	dir := t.TempDir()
+	te := newExecutor(t, dir, false)
+	var mu sync.Mutex // the stage's tasks run in parallel
+	var specs []util.ExecSpec
+	var mounts [][]string
+	te.runCommand = func(spec util.ExecSpec, command, workDir string, m []string, timeout int) (*util.ExecutionResult, error) {
+		mu.Lock()
+		specs = append(specs, spec)
+		mounts = append(mounts, m)
+		mu.Unlock()
+		if workDir != dir {
+			t.Errorf("command ran in %s, want the workspace root %s", workDir, dir)
+		}
+		return util.Run(util.ExecSpec{}, command, workDir, nil, timeout)
+	}
+
+	dockerTask := newTask("compile_in_docker", nil, []string{filepath.Join(dir, "a.o")}, helperCommand(t, "write", filepath.Join(dir, "a.o"), "a"))
+	dockerTask.Exec = util.ExecSpec{Type: "docker", Image: "gcc:13"}
+	nativeTask := newTask("compile_native", nil, []string{filepath.Join(dir, "b.o")}, helperCommand(t, "write", filepath.Join(dir, "b.o"), "b"))
+	if !runTasks(te, dockerTask, nativeTask) {
+		t.Fatal("tasks failed")
+	}
+	var sawDocker, sawNative bool
+	for i, spec := range specs {
+		if spec.IsDocker() {
+			sawDocker = true
+			if spec.Image != "gcc:13" || len(mounts[i]) == 0 || mounts[i][0] != dir {
+				t.Errorf("docker task got spec %+v, mounts %v", spec, mounts[i])
+			}
+		} else {
+			sawNative = true
+		}
+	}
+	if !sawDocker || !sawNative {
+		t.Errorf("specs %+v: want one docker and one native run", specs)
 	}
 }

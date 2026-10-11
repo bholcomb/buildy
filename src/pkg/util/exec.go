@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -17,176 +18,131 @@ type ExecutionResult struct {
 	Stderr     string
 }
 
-// ExecutionEnvironment represents different execution environments (native, docker, etc.)
-type ExecutionEnvironment struct {
-	Type   string
-	Config map[string]any
+// ExecSpec says where a command runs: natively on the host, or in a Docker container. It comes
+// from the toolchain that produced a task, and is part of the task's cache key.
+type ExecSpec struct {
+	Type    string            `json:"type,omitempty"`    // "" or "native", or "docker"
+	Image   string            `json:"image,omitempty"`   // Docker image
+	Volumes []string          `json:"volumes,omitempty"` // Extra docker -v mounts (${UID} and ${GID} expand)
+	User    string            `json:"user,omitempty"`    // Docker -u; the invoking user if empty
+	Env     map[string]string `json:"env,omitempty"`     // Environment variables for the command
 }
 
-// NewNativeExecution creates a native execution environment
-func NewNativeExecution() *ExecutionEnvironment {
-	return &ExecutionEnvironment{
-		Type:   "native",
-		Config: make(map[string]any),
-	}
+// IsDocker reports whether the spec runs in Docker.
+func (s ExecSpec) IsDocker() bool {
+	return s.Type == "docker"
 }
 
-// NewDockerExecution creates a Docker execution environment
-func NewDockerExecution(config map[string]any) *ExecutionEnvironment {
-	return &ExecutionEnvironment{
-		Type:   "docker",
-		Config: config,
-	}
-}
-
-// Execute executes a command in the environment
-func (ee *ExecutionEnvironment) Execute(command, cwd string, timeout int) (*ExecutionResult, error) {
-	switch ee.Type {
-	case "native":
-		return ee.executeNative(command, cwd, timeout)
+// Validate checks the spec can be run.
+func (s ExecSpec) Validate() error {
+	switch s.Type {
+	case "", "native":
+		return nil
 	case "docker":
-		return ee.executeDocker(command, cwd, timeout)
-	default:
-		LogWarning("Unknown execution type '%s', falling back to native", ee.Type)
-		return ee.executeNative(command, cwd, timeout)
+		if s.Image == "" {
+			return fmt.Errorf("docker execution needs an image")
+		}
+		return nil
 	}
+	return fmt.Errorf("unknown execution type %q (expected native or docker)", s.Type)
 }
 
-// executeNative executes command directly on host
-func (ee *ExecutionEnvironment) executeNative(command, cwd string, timeout int) (*ExecutionResult, error) {
-	if cwd == "" {
-		var err error
-		cwd, err = os.Getwd()
+// Run runs command through the platform shell, natively or in Docker, with workDir as its
+// working directory. A Docker container gets mounts (the workspace root, and the cache directory
+// when it lies elsewhere) at their host paths, so the absolute host paths in commands are valid
+// inside it.
+func Run(spec ExecSpec, command, workDir string, mounts []string, timeoutSeconds int) (*ExecutionResult, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if spec.IsDocker() {
+		args, err := DockerRunArgs(spec, command, workDir, mounts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get working directory: %w", err)
+			return nil, err
+		}
+		LogDebug("Docker command: docker %s", strings.Join(args, " "))
+		cmd = exec.CommandContext(ctx, "docker", args...)
+	} else {
+		if runtime.GOOS == "windows" {
+			// Use /S to strip quotes and parse command string literally
+			cmd = exec.CommandContext(ctx, "cmd.exe", "/S", "/C", command)
+		} else {
+			cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		}
+		cmd.Dir = workDir
+		if len(spec.Env) > 0 {
+			cmd.Env = append(os.Environ(), envList(spec.Env)...)
 		}
 	}
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-
-	// Execute command using platform-appropriate shell
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		// Use /S to strip quotes and parse command string literally
-		cmd = exec.CommandContext(ctx, "cmd.exe", "/S", "/C", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
-	}
-	cmd.Dir = cwd
-
-	// Capture both stdout and stderr using CombinedOutput
-	// This ensures we see all compiler output (warnings/errors go to stdout for cl.exe)
+	// Capture stdout and stderr separately (cl.exe writes diagnostics to stdout)
 	var stdoutBuf, stderrBuf strings.Builder
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
 	err := cmd.Run()
-	stdout := stdoutBuf.String()
-	stderr := stderrBuf.String()
-
+	result := &ExecutionResult{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return &ExecutionResult{
-				ReturnCode: exitErr.ExitCode(),
-				Stdout:     stdout,
-				Stderr:     stderr,
-			}, nil
+		if exitErr, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
+			result.ReturnCode = exitErr.ExitCode()
+			return result, nil
 		}
-		// Other errors (timeout, etc.)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("timed out after %d seconds", timeoutSeconds)
+		}
 		return nil, err
 	}
-
-	return &ExecutionResult{
-		ReturnCode: 0,
-		Stdout:     stdout,
-		Stderr:     stderr,
-	}, nil
+	return result, nil
 }
 
-// executeDocker executes command inside Docker container
-func (ee *ExecutionEnvironment) executeDocker(command, cwd string, timeout int) (*ExecutionResult, error) {
-	// Get Docker configuration
-	image := "gcc:13"
-	if img, ok := ee.Config["image"].(string); ok {
-		image = img
+// DockerRunArgs returns the arguments of the `docker run` that runs command for spec: the mounts
+// at their host paths, then the spec's extra volumes, the working directory, the user (the
+// invoking user unless the spec names one), the environment, the image, and `sh -c command`.
+func DockerRunArgs(spec ExecSpec, command, workDir string, mounts []string) ([]string, error) {
+	if spec.Image == "" {
+		return nil, fmt.Errorf("docker execution needs an image")
 	}
-
-	volumes := []string{}
-	if vols, ok := ee.Config["volumes"].([]any); ok {
-		for _, vol := range vols {
-			if volStr, ok := vol.(string); ok {
-				volumes = append(volumes, volStr)
-			}
+	args := []string{"run", "--rm"}
+	for _, m := range mounts {
+		args = append(args, "-v", m+":"+m)
+	}
+	for _, vol := range spec.Volumes {
+		expanded := expandIDs(vol)
+		if strings.Contains(expanded, "${") {
+			return nil, fmt.Errorf("docker volume %q: only ${UID} and ${GID} expand (the workspace is already mounted at its host path)", vol)
 		}
-	} else if vols, ok := ee.Config["volumes"].([]string); ok {
-		volumes = vols
+		args = append(args, "-v", expanded)
 	}
-
-	workingDir := "/workspace"
-	if wd, ok := ee.Config["working_dir"].(string); ok {
-		workingDir = wd
+	args = append(args, "-w", workDir)
+	user := expandIDs(spec.User)
+	if user == "" && os.Getuid() >= 0 {
+		user = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	}
-
-	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	if u, ok := ee.Config["user"].(string); ok {
-		user = u
+	if user != "" {
+		args = append(args, "-u", user)
 	}
-
-	// Expand environment variables in volume mounts
-	expandedVolumes := []string{}
-	for _, vol := range volumes {
-		// Replace ${PWD} with current directory
-		expanded := strings.ReplaceAll(vol, "${PWD}", cwd)
-		// Replace ${UID} and ${GID}
-		expanded = strings.ReplaceAll(expanded, "${UID}", fmt.Sprintf("%d", os.Getuid()))
-		expanded = strings.ReplaceAll(expanded, "${GID}", fmt.Sprintf("%d", os.Getgid()))
-		expandedVolumes = append(expandedVolumes, expanded)
+	for _, e := range envList(spec.Env) {
+		args = append(args, "-e", e)
 	}
+	return append(args, spec.Image, "sh", "-c", command), nil
+}
 
-	// Expand user string
-	user = strings.ReplaceAll(user, "${UID}", fmt.Sprintf("%d", os.Getuid()))
-	user = strings.ReplaceAll(user, "${GID}", fmt.Sprintf("%d", os.Getgid()))
+func expandIDs(s string) string {
+	s = strings.ReplaceAll(s, "${UID}", fmt.Sprintf("%d", os.Getuid()))
+	return strings.ReplaceAll(s, "${GID}", fmt.Sprintf("%d", os.Getgid()))
+}
 
-	// Build docker run command
-	dockerArgs := []string{"run", "--rm"}
-	for _, vol := range expandedVolumes {
-		dockerArgs = append(dockerArgs, "-v", vol)
+// envList returns KEY=VALUE entries in a stable order.
+func envList(env map[string]string) []string {
+	list := make([]string, 0, len(env))
+	for k, v := range env {
+		list = append(list, k+"="+v)
 	}
-	dockerArgs = append(dockerArgs, "-w", workingDir)
-	dockerArgs = append(dockerArgs, "-u", user)
-	dockerArgs = append(dockerArgs, image)
-	dockerArgs = append(dockerArgs, "sh", "-c", command)
-
-	LogDebug("Docker command: docker %s", strings.Join(dockerArgs, " "))
-
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-
-	// Execute docker command
-	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
-
-	// Capture output
-	stdout, err := cmd.Output()
-	stderr := ""
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = string(exitErr.Stderr)
-			return &ExecutionResult{
-				ReturnCode: exitErr.ExitCode(),
-				Stdout:     string(stdout),
-				Stderr:     stderr,
-			}, nil
-		}
-		// Other errors (timeout, etc.)
-		return nil, err
-	}
-
-	return &ExecutionResult{
-		ReturnCode: 0,
-		Stdout:     string(stdout),
-		Stderr:     "",
-	}, nil
+	sort.Strings(list)
+	return list
 }

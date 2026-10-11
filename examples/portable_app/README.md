@@ -38,7 +38,7 @@ and your user has permission to run Docker commands.
 
 The Docker configuration:
 - Uses `gcc:13` image
-- Mounts current directory to `/workspace`
+- Mounts the workspace (and the cache directory) at their host paths
 - Runs as your user (avoids permission issues)
 
 ## What Gets Built

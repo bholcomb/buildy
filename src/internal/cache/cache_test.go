@@ -8,6 +8,7 @@ import (
 
 	"buildy/internal/resource"
 	"buildy/internal/workspace"
+	"buildy/pkg/util"
 )
 
 func write(t *testing.T, path, content string) {
@@ -205,5 +206,27 @@ func TestCacheKeyIncludesOutputs(t *testing.T) {
 	}
 	if a.CacheKey == b.CacheKey {
 		t.Error("tasks with different outputs share a cache key")
+	}
+}
+
+// S11: the key covers where a task runs and its toolchain's content, not just its name.
+func TestCacheKeyIncludesExecAndToolchainHash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "main.cpp"), "int main() {}")
+	key := func(mutate func(*workspace.BuildTask)) string {
+		task := compileTask(t, dir)
+		mutate(task)
+		if err := task.HashInputs(); err != nil {
+			t.Fatal(err)
+		}
+		return task.CacheKey
+	}
+	native := key(func(*workspace.BuildTask) {})
+	docker := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "gcc:13"} })
+	otherImage := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "gcc:14"} })
+	otherToolchain := key(func(task *workspace.BuildTask) { task.ToolchainHash = "changed" })
+	keys := map[string]bool{native: true, docker: true, otherImage: true, otherToolchain: true}
+	if len(keys) != 4 {
+		t.Errorf("keys collide: native %s, docker %s, gcc:14 %s, changed toolchain %s", native, docker, otherImage, otherToolchain)
 	}
 }

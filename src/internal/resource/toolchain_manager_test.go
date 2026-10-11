@@ -64,3 +64,34 @@ func TestAutoDetect_MacOS(t *testing.T) {
 		}
 	}
 }
+
+func TestExecSpecFromToolchain(t *testing.T) {
+	tm, err := NewToolchainManagerMulti(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := ExecSpecFromToolchain(tm.GetToolchain("docker-cpp-linux"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spec.IsDocker() || spec.Image != "gcc:13" {
+		t.Errorf("docker-cpp-linux: %+v", spec)
+	}
+	spec, err = ExecSpecFromToolchain(tm.GetToolchain("gcc-cpp-linux"))
+	if err != nil || spec.IsDocker() {
+		t.Errorf("gcc-cpp-linux: %+v, %v", spec, err)
+	}
+
+	for _, bad := range []map[string]any{
+		{"type": "docker", "image": "x", "working_dir": "/workspace"},
+		{"type": "docker"},
+		{"type": "vm"},
+		{"type": "native", "colour": "red"},
+	} {
+		tc := NewToolchainConfig("bad", "")
+		tc.ExecutionConfig = bad
+		if _, err := ExecSpecFromToolchain(tc); err == nil {
+			t.Errorf("execution %v was accepted", bad)
+		}
+	}
+}

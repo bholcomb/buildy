@@ -20,9 +20,6 @@ sdl2:
     execution:
       type: docker
       image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
       user: "${UID}:${GID}"
 
 nlohmann_json:
