@@ -258,22 +258,6 @@ func main() {
 		util.LogFatal("Failed to verify embedded data: %v", err)
 	}
 
-	// Initialize cache
-	buildCache, err := cache.NewBuildCache(*cacheDir)
-	if err != nil {
-		util.LogFatal("Failed to initialize cache: %v", err)
-	}
-
-	// Show cache stats if requested
-	if *cacheStats {
-		stats := buildCache.GetCacheStats()
-		util.LogInfo("Cache Statistics:")
-		util.LogInfo("  Total entries: %d", stats["total_entries"])
-		util.LogInfo("  Total size: %.1f MB", stats["total_size_mb"])
-		util.LogInfo("  Cache directory: %s", stats["cache_directory"])
-		os.Exit(0)
-	}
-
 	// Initialize template engine with base directory and additional directories
 	templatesDir := filepath.Join(buildyDir, "data", "templates")
 	templateDirs := []string{templatesDir}
@@ -401,8 +385,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize dependency resolver and load dependencies
 	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
+
+	// Show cache stats if requested
+	if *cacheStats {
+		buildCache, err := cache.NewBuildCache(workspaceCacheDir)
+		if err != nil {
+			util.LogFatal("Failed to open the cache: %v", err)
+		}
+		stats := buildCache.GetCacheStats()
+		util.LogProgress("Cache Statistics:")
+		util.LogProgress("  Total entries: %d", stats["total_entries"])
+		util.LogProgress("  Cache directory: %s", stats["cache_directory"])
+		os.Exit(0)
+	}
+
+	// Initialize dependency resolver and load dependencies
 	depResolver := resource.NewDependencyResolver(*platform, *architecture, *toolchain, *configuration, workspaceCacheDir, ws.RootDir, rootVarEnv)
 
 	// Skip dependency resolution in standalone mode (explicit config file provided)

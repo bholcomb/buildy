@@ -1096,7 +1096,26 @@ This creates `buildy_config/compile_commands.json` which IDEs and language serve
 
 ## Cache Management
 
-Buildy uses content-addressable caching for incremental builds.
+Buildy uses content-addressable caching for incremental builds. A task's cache key covers its
+type, command, declared outputs, platform, architecture, configuration, toolchain, the module's
+configuration, and the content of every declared input. A task is skipped (a cache hit) only when:
+
+- the cache has an entry for that key,
+- every declared output still exists with the content recorded when the task last ran, and
+- every input the compiler reported in its dependency file (`-MMD`'s `.d` file, MSVC's
+  `/sourceDependencies` JSON) is unchanged. All of them count, including headers without an
+  extension; a reported header that didn't exist counts as changed when it appears.
+
+Every task also follows these rules when it runs:
+
+- Each declared input must exist; otherwise the task fails, naming the input and the task that
+  should have produced it.
+- Its declared outputs are deleted first, so an archiver that appends (`ar rcs`) never keeps the
+  members of removed sources.
+- If it exits 0 without producing a declared output, it fails:
+  `link_app__root exited 0 but did not produce declared output …`.
+
+The cache stores no copies of outputs; it records what each task last produced.
 
 ```bash
 buildy --cache-stats      # Show cache statistics

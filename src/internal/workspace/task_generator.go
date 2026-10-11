@@ -158,7 +158,6 @@ func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string, estimat
 	task.ConfigHash = tg.ConfigHash
 	task.EstimatedTime = estimatedTime
 	task.ResourceRequirements = resources
-	task.CacheKey = task.CalculateCacheKey()
 }
 
 // generateTargetTasks is the unified task generation function that uses template metadata
@@ -418,8 +417,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 				for _, srcFile := range sourceFiles {
 					task.Inputs = append(task.Inputs, NewTaskInput(srcFile))
 				}
-				// Recalculate cache key with updated inputs
-				task.CacheKey = task.CalculateCacheKey()
 			}
 			util.LogInfo("Found %d source files matching '%s' in %s", len(sourceFiles), metadata.PostProcessing.ScanSourcesPattern, scanPath)
 		}
@@ -663,7 +660,6 @@ func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
 	}
 	task.EstimatedTime = util.DefaultSetupTimeSeconds
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 10, DiskMB: 1}
-	task.CacheKey = task.CalculateCacheKey()
 	return task
 }
 
@@ -1733,7 +1729,6 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(
 	task.ConfigHash = tg.ConfigHash
 	task.EstimatedTime = 0.1
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
-	task.CacheKey = task.CalculateCacheKey()
 
 	util.LogInfo("Generated %s task: %s -> %s", taskType, source, dest)
 	return &task
@@ -1887,7 +1882,6 @@ func (tg *TaskGenerator) generateInstallTasks(
 		task.ConfigHash = tg.ConfigHash
 		task.EstimatedTime = 5.0
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 512, DiskMB: 500}
-		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
@@ -2037,7 +2031,6 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 					task.ConfigHash = tg.ConfigHash
 					task.EstimatedTime = 0.1
 					task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
-					task.CacheKey = task.CalculateCacheKey()
 
 					tasks = append(tasks, &task)
 					artifactOutputPaths = append(artifactOutputPaths, destFile)
@@ -2169,7 +2162,6 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		task.Toolchain = ""
 		task.EstimatedTime = 0.1
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10}
-		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated copy task: %s -> %s", source, dest)

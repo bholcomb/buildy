@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,21 +13,27 @@ import (
 	"buildy/pkg/util"
 )
 
-// TaskExecutor executes tasks with caching, parallel execution, and resource-aware scheduling
+// TaskExecutor executes tasks with caching, parallel execution, and resource-aware scheduling.
+//
+// It enforces the task contract: before a task runs, every declared input exists (its producer
+// has run); before a buildy-cached task runs, its declared outputs are deleted, so whatever
+// exists afterwards came from this run; after it exits 0, every declared output exists and a
+// declared dependency file parses, or the task fails. Only then is a cache entry written.
 type TaskExecutor struct {
 	Cache               *cache.BuildCache
-	ChangeDetector      *cache.ChangeDetector
 	MaxWorkers          int
 	MaxMemoryMB         int
 	ExecEnv             *util.ExecutionEnvironment
+	WorkDir             string // Where commands run; relative dependency-file paths are relative to it
 	DisableCache        bool
 	ExecutionStats      ExecutionStats
-	BuildResult         *BuildResult            // Optional: for tracking execution in build report
-	ShutdownManager     *ShutdownManager        // For graceful shutdown handling
-	ResponseFileManager *ResponseFileManager    // For handling long command lines on Windows
+	BuildResult         *BuildResult         // Optional: for tracking execution in build report
+	ShutdownManager     *ShutdownManager     // For graceful shutdown handling
+	ResponseFileManager *ResponseFileManager // For handling long command lines on Windows
 	mu                  sync.Mutex
-	pendingOutputs      map[string][]string     // Track outputs of in-progress tasks for cleanup
-	totalTaskCount      int                     // Total number of tasks for logging
+	pendingOutputs      map[string][]string // Track outputs of in-progress tasks for cleanup
+	totalTaskCount      int                 // Total number of tasks for logging
+	producers           map[string]string   // Normalized output path -> task ID that produces it
 }
 
 // ExecutionStats tracks execution statistics
@@ -39,38 +46,27 @@ type ExecutionStats struct {
 }
 
 // NewTaskExecutor creates a new TaskExecutor
-func NewTaskExecutor(buildCache *cache.BuildCache, changeDetector *cache.ChangeDetector, maxWorkers, maxMemoryMB int, execEnv *util.ExecutionEnvironment, disableCache bool) *TaskExecutor {
+func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, execEnv *util.ExecutionEnvironment, workDir string, disableCache bool) *TaskExecutor {
 	if execEnv == nil {
 		execEnv = util.NewNativeExecution()
 	}
 
-	// Initialize response file manager with cache directory
-	cacheDir := ".buildy_cache"
-	if buildCache != nil {
-		cacheDir = buildCache.CacheDir()
-	}
-	rfmConfig := DefaultResponseFileConfig(cacheDir)
+	rfmConfig := DefaultResponseFileConfig(buildCache.CacheDir())
 	rfm := NewResponseFileManager(rfmConfig)
 
 	te := &TaskExecutor{
 		Cache:               buildCache,
-		ChangeDetector:      changeDetector,
 		MaxWorkers:          maxWorkers,
 		MaxMemoryMB:         maxMemoryMB,
 		ExecEnv:             execEnv,
+		WorkDir:             workDir,
 		DisableCache:        disableCache,
 		ShutdownManager:     GetShutdownManager(),
 		ResponseFileManager: rfm,
 		pendingOutputs:      make(map[string][]string),
-		ExecutionStats: ExecutionStats{
-			TotalTasks:  0,
-			CacheHits:   0,
-			CacheMisses: 0,
-			FailedTasks: 0,
-			TotalTime:   0,
-		},
+		producers:           make(map[string]string),
 	}
-	
+
 	// Register cleanup for pending outputs and response files on shutdown
 	if te.ShutdownManager != nil {
 		te.ShutdownManager.RegisterCleanup(func() {
@@ -80,7 +76,7 @@ func NewTaskExecutor(buildCache *cache.BuildCache, changeDetector *cache.ChangeD
 			}
 		})
 	}
-	
+
 	return te
 }
 
@@ -88,7 +84,7 @@ func NewTaskExecutor(buildCache *cache.BuildCache, changeDetector *cache.ChangeD
 func (te *TaskExecutor) cleanupPendingOutputs() {
 	te.mu.Lock()
 	defer te.mu.Unlock()
-	
+
 	for taskID, outputs := range te.pendingOutputs {
 		util.LogInfo("Cleaning up partial outputs for interrupted task: %s", taskID)
 		CleanupPartialOutputs(outputs)
@@ -102,6 +98,12 @@ func (te *TaskExecutor) ExecuteTaskGraph(graph *workspace.TaskGraph, dryRun bool
 		if _, err := graph.BuildExecutionStages(); err != nil {
 			util.LogInfo("ERROR: Failed to build execution stages: %v", err)
 			return false
+		}
+	}
+
+	for taskID, task := range graph.Tasks {
+		for _, output := range task.Outputs {
+			te.producers[util.NormalizePath(output)] = taskID
 		}
 	}
 
@@ -127,7 +129,7 @@ func (te *TaskExecutor) ExecuteTaskGraph(graph *workspace.TaskGraph, dryRun bool
 			success = false
 			break
 		}
-		
+
 		progress := 0.0
 		if totalTasks > 0 {
 			progress = (float64(completedTasks) / float64(totalTasks)) * 100
@@ -232,26 +234,30 @@ func (te *TaskExecutor) executeStage(taskIDs []string, tasks map[string]*workspa
 	return success
 }
 
-// executeSingleTask executes a single task with caching
+// executeSingleTask runs one task under the task contract, or skips it on a valid cache hit.
 func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	// Check for shutdown before starting
 	if te.ShutdownManager != nil && te.ShutdownManager.IsShuttingDown() {
 		return false
 	}
-	
+
 	te.mu.Lock()
 	te.ExecutionStats.TotalTasks++
 	te.mu.Unlock()
 
-	// Update input hashes and cache key before cache lookup
-	// This ensures cache keys are correct for tasks whose inputs were created by dependencies
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		util.LogWarning("Failed to update input hashes for %s: %v", task.TaskID, err)
+	// Every declared input exists by now (its producer has run); hash them once, here.
+	if err := te.checkInputs(task); err != nil {
+		return te.fail(task, 0, err)
+	}
+	if err := task.HashInputs(); err != nil {
+		return te.fail(task, 0, err)
 	}
 
-	// Check cache first (unless disabled by force flag)
-	if !te.DisableCache && te.ChangeDetector != nil && te.ChangeDetector.IsCachedResultValid(task) {
-		if err := te.Cache.RestoreCachedResult(task, te.totalTaskCount); err == nil {
+	// Tool-cached tasks (go build, cargo build) always run: their tool decides what to redo.
+	if !task.ToolCached && !te.DisableCache {
+		hit, reason := te.Cache.Lookup(task)
+		if hit {
+			util.LogProgress("[%d/%d] %s - cache hit", task.TaskNumber, te.totalTaskCount, task.TaskID)
 			te.mu.Lock()
 			te.ExecutionStats.CacheHits++
 			if te.BuildResult != nil {
@@ -260,7 +266,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 			te.mu.Unlock()
 			return true
 		}
-		util.LogInfo("Cache restore failed for %s, falling back to execution", task.TaskID)
+		util.LogInfo("Cache miss for %s: %s", task.TaskID, reason)
 	}
 
 	// Execute task
@@ -268,108 +274,22 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	util.LogInfo("  Command: %s", task.Command)
 	startTime := time.Now()
 
-	// Ensure output directories exist
-	for _, output := range task.Outputs {
-		// Normalize path separators for the current OS
-		output = filepath.Clean(output)
-		var dirToCreate string
-		// If output ends with a path separator, it's a directory itself
-		if strings.HasSuffix(output, string(filepath.Separator)) || strings.HasSuffix(output, "/") {
-			dirToCreate = strings.TrimSuffix(strings.TrimSuffix(output, "/"), string(filepath.Separator))
-		} else {
-			dirToCreate = filepath.Dir(output)
-		}
-		if dirToCreate != "" && dirToCreate != "." {
-			if err := os.MkdirAll(dirToCreate, 0755); err != nil {
-				util.LogInfo("ERROR: Failed to create output directory %s: %v", dirToCreate, err)
-				te.mu.Lock()
-				te.ExecutionStats.FailedTasks++
-				if te.BuildResult != nil {
-					te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, 0, false, false)
-				}
-				te.mu.Unlock()
-				return false
-			}
-		}
+	if err := te.prepareOutputs(task); err != nil {
+		return te.fail(task, 0, err)
 	}
 
 	// Track this task's outputs for cleanup on interruption
 	te.mu.Lock()
 	te.pendingOutputs[task.TaskID] = task.Outputs
 	te.mu.Unlock()
-	
+
 	// Track task in shutdown manager
 	if te.ShutdownManager != nil {
 		te.ShutdownManager.TrackTask()
 		defer te.ShutdownManager.TaskDone()
 	}
 
-	// Handle copy tasks natively using Go's file operations
-	// This avoids platform-specific shell command issues
-	if task.TaskType == "copy" {
-		// Extract source and destination from inputs/outputs
-		if len(task.Inputs) == 1 && len(task.Outputs) == 1 {
-			src := filepath.Clean(task.Inputs[0].Path)
-			dst := filepath.Clean(task.Outputs[0])
-			
-			executionTime := time.Since(startTime).Seconds()
-			
-			if err := util.CopyFile(src, dst); err != nil {
-				util.LogProgress("[%d/%d] %s - FAILED: %v", task.TaskNumber, te.totalTaskCount, task.TaskID, err)
-				CleanupPartialOutputs(task.Outputs)
-				te.mu.Lock()
-				te.ExecutionStats.FailedTasks++
-				if te.BuildResult != nil {
-					te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, false, false)
-				}
-				te.mu.Unlock()
-				return false
-			}
-			
-			executionTime = time.Since(startTime).Seconds()
-			util.LogProgress("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
-			te.Cache.CacheTaskResult(task, executionTime, true)
-			te.mu.Lock()
-			te.ExecutionStats.CacheMisses++
-			if te.BuildResult != nil {
-				te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, true, false)
-			}
-			te.mu.Unlock()
-			return true
-		}
-	}
-
-	// Handle setup tasks with no-op commands natively
-	if task.TaskType == "setup" {
-		// Directories already created above via MkdirAll
-		executionTime := time.Since(startTime).Seconds()
-		util.LogProgress("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
-		te.Cache.CacheTaskResult(task, executionTime, true)
-		te.mu.Lock()
-		te.ExecutionStats.CacheMisses++
-		if te.BuildResult != nil {
-			te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, true, false)
-		}
-		te.mu.Unlock()
-		return true
-	}
-
-	// Process command through response file manager for long commands (Windows)
-	command := task.Command
-	if te.ResponseFileManager != nil {
-		processedCmd, err := te.ResponseFileManager.ProcessCommand(command, task.TaskID)
-		if err != nil {
-			util.LogWarning("Failed to create response file for %s: %v", task.TaskID, err)
-			// Continue with original command
-		} else {
-			command = processedCmd
-		}
-	}
-
-	// Execute command using execution environment
-	cwd, _ := os.Getwd()
-	result, err := te.ExecEnv.Execute(command, cwd, util.DefaultTaskTimeoutSeconds)
-
+	runErr := te.run(task)
 	executionTime := time.Since(startTime).Seconds()
 
 	// Remove from pending outputs tracking
@@ -377,43 +297,31 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	delete(te.pendingOutputs, task.TaskID)
 	te.mu.Unlock()
 
-	if err != nil {
-		util.LogProgress("[%d/%d] %s - FAILED: %v", task.TaskNumber, te.totalTaskCount, task.TaskID, err)
-		if result != nil && result.Stderr != "" {
-			util.LogInfo("  stderr: %s", result.Stderr)
-		}
+	if runErr == nil {
+		runErr = checkOutputs(task)
+	}
+	if runErr == nil && !task.ToolCached {
+		runErr = te.Cache.Record(task, executionTime, te.WorkDir)
+	}
+	if runErr != nil {
 		// Clean up partial outputs on failure
 		CleanupPartialOutputs(task.Outputs)
-		te.mu.Lock()
-		te.ExecutionStats.FailedTasks++
-		if te.BuildResult != nil {
-			te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, false, false)
-		}
-		te.mu.Unlock()
-		return false
+		return te.fail(task, executionTime, runErr)
 	}
 
-	if result.ReturnCode == 0 {
-		util.LogProgress("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
-		te.Cache.CacheTaskResult(task, executionTime, true)
-		te.mu.Lock()
-		te.ExecutionStats.CacheMisses++
-		if te.BuildResult != nil {
-			te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, true, false)
-		}
-		te.mu.Unlock()
-		return true
+	util.LogProgress("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
+	te.mu.Lock()
+	te.ExecutionStats.CacheMisses++
+	if te.BuildResult != nil {
+		te.BuildResult.RecordTaskExecution(task.TaskID, task.TaskType, executionTime, true, false)
 	}
+	te.mu.Unlock()
+	return true
+}
 
-	util.LogProgress("[%d/%d] %s - FAILED (exit code %d)", task.TaskNumber, te.totalTaskCount, task.TaskID, result.ReturnCode)
-	if result.Stderr != "" {
-		util.LogInfo("  stderr: %s", result.Stderr)
-	}
-	if result.Stdout != "" {
-		util.LogInfo("  stdout: %s", result.Stdout)
-	}
-	// Clean up partial outputs on failure
-	CleanupPartialOutputs(task.Outputs)
+// fail reports a failed task and records it.
+func (te *TaskExecutor) fail(task *workspace.BuildTask, executionTime float64, err error) bool {
+	util.LogProgress("[%d/%d] %s - FAILED: %v", task.TaskNumber, te.totalTaskCount, task.TaskID, err)
 	te.mu.Lock()
 	te.ExecutionStats.FailedTasks++
 	if te.BuildResult != nil {
@@ -421,6 +329,102 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	}
 	te.mu.Unlock()
 	return false
+}
+
+// checkInputs fails if a declared input does not exist, naming the task that should produce it.
+func (te *TaskExecutor) checkInputs(task *workspace.BuildTask) error {
+	for _, input := range task.Inputs {
+		if _, err := os.Stat(input.Path); err == nil {
+			continue
+		}
+		if producer, ok := te.producers[util.NormalizePath(input.Path)]; ok {
+			return fmt.Errorf("input %s does not exist; task %s should have produced it", input.Path, producer)
+		}
+		return fmt.Errorf("input %s does not exist, and no task produces it", input.Path)
+	}
+	return nil
+}
+
+// prepareOutputs creates every output's directory. For a buildy-cached task it also deletes the
+// declared output files, so that whatever exists after the run came from the run (an archiver
+// that appends, like `ar rcs`, would otherwise keep members of removed sources). Tool-cached
+// tasks keep their outputs: their tool uses them for its own incremental work.
+func (te *TaskExecutor) prepareOutputs(task *workspace.BuildTask) error {
+	for _, output := range task.Outputs {
+		if isDirOutput(output) {
+			if err := os.MkdirAll(output, 0755); err != nil {
+				return fmt.Errorf("failed to create output directory %s: %w", output, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
+			return fmt.Errorf("failed to create output directory %s: %w", filepath.Dir(output), err)
+		}
+		if task.ToolCached {
+			continue
+		}
+		if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove the previous %s: %w", output, err)
+		}
+	}
+	return nil
+}
+
+// isDirOutput reports whether an output is declared as a directory (a trailing separator).
+func isDirOutput(path string) bool {
+	return strings.HasSuffix(path, "/") || strings.HasSuffix(path, string(filepath.Separator))
+}
+
+// checkOutputs fails if the task exited 0 without producing a declared output.
+func checkOutputs(task *workspace.BuildTask) error {
+	for _, output := range task.Outputs {
+		if _, err := os.Stat(output); err != nil {
+			return fmt.Errorf("%s exited 0 but did not produce declared output %s", task.TaskID, output)
+		}
+	}
+	if task.DepFile != nil {
+		if _, err := os.Stat(task.DepFile.Path); err != nil {
+			return fmt.Errorf("%s exited 0 but did not write its dependency file %s", task.TaskID, task.DepFile.Path)
+		}
+	}
+	return nil
+}
+
+// run executes the task's work: copies natively, setup tasks by creating their directories
+// (done by prepareOutputs), everything else through its command.
+func (te *TaskExecutor) run(task *workspace.BuildTask) error {
+	switch task.TaskType {
+	case "copy":
+		// Copy natively with Go's file operations, avoiding platform-specific shell commands
+		if len(task.Inputs) != 1 || len(task.Outputs) != 1 {
+			return fmt.Errorf("copy task %s needs exactly one input and one output, has %d and %d",
+				task.TaskID, len(task.Inputs), len(task.Outputs))
+		}
+		return util.CopyFile(task.Inputs[0].Path, task.Outputs[0])
+	case "setup":
+		return nil
+	}
+
+	// Process command through response file manager for long commands (Windows)
+	command, err := te.ResponseFileManager.ProcessCommand(task.Command, task.TaskID)
+	if err != nil {
+		return fmt.Errorf("failed to create a response file: %w", err)
+	}
+
+	result, err := te.ExecEnv.Execute(command, te.WorkDir, util.DefaultTaskTimeoutSeconds)
+	if err != nil {
+		return err
+	}
+	if result.ReturnCode != 0 {
+		if result.Stderr != "" {
+			util.LogProgress("  stderr: %s", result.Stderr)
+		}
+		if result.Stdout != "" {
+			util.LogProgress("  stdout: %s", result.Stdout)
+		}
+		return fmt.Errorf("exit code %d", result.ReturnCode)
+	}
+	return nil
 }
 
 // printDryRun prints dry run information

@@ -29,56 +29,47 @@ func NewResourceRequirements() ResourceRequirements {
 	}
 }
 
-// TaskInput represents an input file with content hash
+// TaskInput is a file (or directory) a task reads. Hash is filled in by HashInputs when the task
+// is about to run, after its producers have run; a "symlink:" hash marks an input whose path,
+// not content, is what matters.
 type TaskInput struct {
 	Path string `json:"path"`
 	Hash string `json:"hash"`
 }
 
-// NewTaskInput creates a TaskInput and calculates its hash if the file exists
+// NewTaskInput declares an input file. It is hashed when the task runs, not now.
 func NewTaskInput(path string) TaskInput {
-	input := TaskInput{
-		Path: path,
-		Hash: "",
-	}
-	
-	if _, err := os.Stat(path); err == nil {
-		input.Hash = input.CalculateHash()
-	}
-	
-	return input
+	return TaskInput{Path: path}
 }
 
-// CalculateHash calculates SHA-256 hash of file content
-func (t *TaskInput) CalculateHash() string {
-	file, err := os.Open(t.Path)
-	if err != nil {
-		return "missing_file"
-	}
-	defer file.Close()
-	
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "missing_file"
-	}
-	
-	return fmt.Sprintf("%x", hash.Sum(nil))
+// DepFile is a dependency file a task's tool writes: the inputs it discovered while running,
+// such as the headers a compile included.
+type DepFile struct {
+	Path   string `json:"path"`
+	Format string `json:"format"` // resource.DepFormatMake or resource.DepFormatMSVCJSON
 }
 
-// BuildTask represents an individual build task following Blizzard's parse/execute model
+// BuildTask represents an individual build task following Blizzard's parse/execute model.
+//
+// The contract: Inputs are every file the task reads that can be named before it runs, including
+// every upstream output it consumes; Outputs are the files this task, and only this task,
+// produces; DepFile names the inputs the tool reports after running. The executor checks the
+// inputs exist before running and the outputs exist after.
 type BuildTask struct {
 	TaskID               string               `json:"task_id"`
-	TaskNumber           int                  `json:"task_number"`            // Sequential task number for logging (1-based)
+	TaskNumber           int                  `json:"task_number"` // Sequential task number for logging (1-based)
 	TaskType             string               `json:"task_type"`
 	Inputs               []TaskInput          `json:"inputs"`
 	Outputs              []string             `json:"outputs"`
+	DepFile              *DepFile             `json:"dep_file,omitempty"`
+	ToolCached           bool                 `json:"tool_cached,omitempty"` // The tool keeps its own cache: always run, never a buildy cache hit
 	Dependencies         []string             `json:"dependencies"`
 	Command              string               `json:"command"`
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
-	Toolchain            string               `json:"toolchain"`              // Toolchain identifier (e.g., "gcc-linux-13.2")
-	ConfigHash           string               `json:"config_hash"`            // Hash of buildy.yaml to invalidate cache on config changes
+	Toolchain            string               `json:"toolchain"`   // Toolchain identifier (e.g., "gcc-linux-13.2")
+	ConfigHash           string               `json:"config_hash"` // Hash of buildy.yaml to invalidate cache on config changes
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -86,7 +77,7 @@ type BuildTask struct {
 
 // NewBuildTask creates a BuildTask with default values
 func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, command string) BuildTask {
-	task := BuildTask{
+	return BuildTask{
 		TaskID:               taskID,
 		TaskType:             taskType,
 		Inputs:               inputs,
@@ -98,14 +89,11 @@ func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string,
 		Configuration:        "debug",
 		EstimatedTime:        1.0,
 		ResourceRequirements: NewResourceRequirements(),
-		CacheKey:             "",
 	}
-	
-	task.CacheKey = task.CalculateCacheKey()
-	return task
 }
 
-// CalculateCacheKey calculates content-addressable cache key
+// CalculateCacheKey calculates the content-addressable cache key from the task's definition and
+// its input hashes. Call HashInputs first.
 func (t *BuildTask) CalculateCacheKey() string {
 	// Build input tuples with normalized paths for consistent cache keys
 	// On Windows, paths are case-insensitive, so we normalize to lowercase
@@ -114,12 +102,17 @@ func (t *BuildTask) CalculateCacheKey() string {
 		normalizedPath := util.NormalizePathForCache(inp.Path)
 		inputTuples[i] = [2]string{normalizedPath, inp.Hash}
 	}
+	outputs := make([]string, len(t.Outputs))
+	for i, out := range t.Outputs {
+		outputs[i] = util.NormalizePathForCache(out)
+	}
 
 	// Create content structure for hashing
 	// Includes all factors that affect build output
 	content := map[string]interface{}{
 		"task_type":     t.TaskType,
 		"inputs":        inputTuples,
+		"outputs":       outputs,
 		"command":       t.Command,
 		"platform":      t.Platform,
 		"architecture":  t.Architecture,
@@ -131,7 +124,7 @@ func (t *BuildTask) CalculateCacheKey() string {
 	// Serialize to JSON (Go's json.Marshal sorts keys by default)
 	jsonBytes, err := json.Marshal(content)
 	if err != nil {
-		return ""
+		panic(fmt.Sprintf("task %s: cannot marshal its cache key: %v", t.TaskID, err))
 	}
 
 	// Calculate SHA-256 hash
@@ -139,41 +132,31 @@ func (t *BuildTask) CalculateCacheKey() string {
 	return fmt.Sprintf("%x", hash[:])
 }
 
-// UpdateInputHashesAndCacheKey updates input file hashes and recalculates the cache key
-// This should be called before cache lookup when input files may have been created by dependencies
-func (t *BuildTask) UpdateInputHashesAndCacheKey() error {
+// HashInputs hashes every declared input and computes the cache key. Every input must exist:
+// the executor calls it once the task's producers have run.
+func (t *BuildTask) HashInputs() error {
 	for i := range t.Inputs {
-		// Skip symlink inputs - they intentionally don't hash content
-		if strings.HasPrefix(t.Inputs[i].Hash, "symlink:") {
-			continue
-		}
-		
 		path := t.Inputs[i].Path
 		info, err := os.Stat(path)
 		if err != nil {
-			continue // File doesn't exist yet
+			return fmt.Errorf("input %s: %w", path, err)
 		}
-		
+		// Symlink inputs: the link points at the path, so the path is what is keyed
+		if strings.HasPrefix(t.Inputs[i].Hash, "symlink:") {
+			continue
+		}
+		var hash string
 		if info.IsDir() {
-			// For directory inputs, hash the directory contents
-			// This is used by install tasks that package staging directories
-			hash, err := calculateDirectoryHash(path)
-			if err != nil {
-				return err
-			}
-			t.Inputs[i].Hash = hash
+			// Directory inputs (install tasks packaging a staging directory) hash as a tree
+			hash, err = calculateDirectoryHash(path)
 		} else {
-			// Always recalculate hash for input files that exist
-			// This is critical for tasks like link that depend on outputs from earlier tasks
-			// (e.g., object files from compile tasks) - the file content may have changed
-			hash, err := calculateFileHashForInput(path)
-			if err != nil {
-				return err
-			}
-			t.Inputs[i].Hash = hash
+			hash, err = calculateFileHashForInput(path)
 		}
+		if err != nil {
+			return fmt.Errorf("input %s: %w", path, err)
+		}
+		t.Inputs[i].Hash = hash
 	}
-	// Recalculate cache key with updated input hashes
 	t.CacheKey = t.CalculateCacheKey()
 	return nil
 }
@@ -207,7 +190,7 @@ func calculateFileHashForInput(filePath string) (string, error) {
 // This includes all file paths and their content hashes, sorted for determinism
 func calculateDirectoryHash(dirPath string) (string, error) {
 	var entries []string
-	
+
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -215,19 +198,19 @@ func calculateDirectoryHash(dirPath string) (string, error) {
 		if info.IsDir() {
 			return nil
 		}
-		
+
 		// Get relative path for consistent hashing
 		relPath, err := filepath.Rel(dirPath, path)
 		if err != nil {
 			return err
 		}
-		
+
 		// Calculate file hash
 		fileHash, err := calculateFileHashForInput(path)
 		if err != nil {
 			return err
 		}
-		
+
 		// Use forward slashes for cross-platform consistency
 		entries = append(entries, filepath.ToSlash(relPath)+":"+fileHash)
 		return nil
@@ -235,10 +218,10 @@ func calculateDirectoryHash(dirPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Sort for deterministic ordering
 	sort.Strings(entries)
-	
+
 	// Hash the combined entries
 	h := sha256.New()
 	for _, entry := range entries {
@@ -247,4 +230,3 @@ func calculateDirectoryHash(dirPath string) (string, error) {
 	}
 	return fmt.Sprintf("dir:%x", h.Sum(nil)), nil
 }
-

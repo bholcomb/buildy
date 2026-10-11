@@ -6,7 +6,7 @@ A modern, data-driven build system for multi-language projects.
 
 - **Multi-Language Support**: Build C, C++, Go, and Rust projects with a unified configuration
 - **Data-Driven**: All build logic defined in YAML - templates, toolchains, and build configurations
-- **Content-Addressable Caching**: Fast incremental builds with Git-style sharded cache
+- **Content-Addressable Caching**: Fast incremental builds keyed on the content of every input
 - **Parallel Execution**: Automatic dependency resolution and parallel task execution
 - **Cross-Platform**: Same `buildy.yaml` works on Linux, Windows, and macOS
 - **Extensible**: Add new languages and tools via YAML template and toolchain files
@@ -221,9 +221,9 @@ my-project/
 ├── include/                 # Headers
 ├── build/                   # Output directory (auto-created)
 └── .buildy_cache/           # Build cache (git-ignored)
+    ├── cache_index.json     # What each task last produced
     ├── deps/                # Fetched dependencies
-    ├── downloads/           # Cached archives
-    └── objects/             # Compiled objects
+    └── downloads/           # Cached archives
 ```
 
 ## Built-in Toolchains
@@ -321,9 +321,10 @@ This eliminates hardcoded language-specific logic and makes the build system ful
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                       Executor                               │
-│  - Check cache for up-to-date outputs                        │
-│  - Execute tasks in parallel                                 │
-│  - Update cache with results                                 │
+│  - Check every task's inputs exist                           │
+│  - Skip tasks whose cache entry and outputs are current      │
+│  - Execute the rest in parallel; check their outputs exist   │
+│  - Record the outputs and discovered inputs in the cache     │
 └─────────────────────────────────────────────────────────────┘
 ```
 

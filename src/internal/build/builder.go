@@ -1,12 +1,10 @@
 package build
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"buildy/internal/cache"
@@ -54,33 +52,16 @@ func (b *Builder) BuildWorkspace(
 	result.Architecture = configParser.Architecture
 	result.Configuration = configParser.Configuration
 
-	stateFileName := fmt.Sprintf("incremental_build_%s.json", configParser.Configuration)
-	workspaceStateFile := filepath.Join(b.CacheDir, stateFileName)
-	existingState, err := cache.LoadBuildState(workspaceStateFile)
-	if err != nil {
-		util.LogInfo("WARNING: Failed to load previous build state: %v", err)
-	}
-
-	var buildState *cache.BuildState
-	if existingState != nil {
-		buildState = existingState
-	} else {
-		buildState = cache.NewBuildState()
-	}
-
-	changeDetector := cache.NewChangeDetector(buildState, b.Cache)
-
-	// Precompute toolchain hash (workspace-level) if available
-	currentToolchainHash := ""
+	// Select the workspace-level toolchain (used by workspace-level staging and install tasks)
 	if configParser != nil && ws != nil && ws.Config != nil {
-		if tc, err := configParser.SelectToolchain(ws.Config.RawConfig); err == nil && tc != nil {
-			configParser.CurrentToolchain = tc
-			configParser.ToolchainHash = resource.HashToolchainConfig(tc)
-			currentToolchainHash = configParser.ToolchainHash
-			result.Toolchain = tc.Name
-		} else if err != nil {
-			util.LogInfo("WARNING: Failed to preselect toolchain for change detection: %v", err)
+		tc, err := configParser.SelectToolchain(ws.Config.RawConfig)
+		if err != nil {
+			result.Finish(false)
+			return result, err
 		}
+		configParser.CurrentToolchain = tc
+		configParser.ToolchainHash = resource.HashToolchainConfig(tc)
+		result.Toolchain = tc.Name
 	}
 
 	// Task Generation Phase
@@ -96,26 +77,6 @@ func (b *Builder) BuildWorkspace(
 	// Save discovery cache
 	if err := ws.SaveDiscoveryCache(b.CacheDir); err != nil {
 		util.LogInfo("WARNING: Failed to save discovery cache: %v", err)
-	}
-
-	// If we have prior build state and we're not forcing, check for changes first
-	if !options.Force && buildState != nil && buildState.ConfigHash != "" && !options.DryRun {
-		var currentConfig map[string]any
-		if ws != nil && ws.Config != nil {
-			currentConfig = ws.Config.RawConfig
-		}
-
-		configFile := filepath.Join(ws.RootDir, "buildy.yaml")
-		changes, detectErr := changeDetector.DetectChanges(configFile, currentConfig, currentToolchainHash)
-		if detectErr != nil {
-			util.LogInfo("WARNING: Change detection failed: %v", detectErr)
-		} else if !changes.HasChanges() {
-			util.LogInfo("No source or config changes detected; verifying cache state before execution.")
-		} else if changes.RequiresFullRebuild() {
-			util.LogInfo("Detected configuration/toolchain changes. Performing full rebuild.")
-		} else {
-			util.LogInfo("Detected source changes. Rebuilding affected tasks.")
-		}
 	}
 
 	// Generate tasks for all modules
@@ -150,7 +111,12 @@ func (b *Builder) BuildWorkspace(
 	execStart := time.Now()
 
 	// Execute all tasks (cache will handle skipping unchanged tasks)
-	executor := NewTaskExecutor(b.Cache, changeDetector, b.MaxWorkers, 8192, nil, options.Force)
+	workDir, err := os.Getwd()
+	if err != nil {
+		result.Finish(false)
+		return result, err
+	}
+	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, 8192, nil, workDir, options.Force)
 	executor.BuildResult = result // Pass result for tracking
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
@@ -166,50 +132,6 @@ func (b *Builder) BuildWorkspace(
 
 	// Finalize result
 	result.Finish(success)
-
-	// Save build state for future reference
-	if success && !options.DryRun {
-		workspaceConfigHash, err := util.HashConfig(ws.Config.RawConfig)
-		if err != nil {
-			util.LogInfo("WARNING: Failed to hash workspace config: %v", err)
-			workspaceConfigHash = ""
-		}
-
-		// Build file mtimes map with normalized paths for consistent lookup
-		// On Windows, paths are case-insensitive, so we normalize to ensure
-		// consistent comparisons between builds
-		fileMtimes := make(map[string]float64)
-		for _, task := range allTasks {
-			for _, input := range task.Inputs {
-				if info, err := os.Stat(input.Path); err == nil {
-					normalizedPath := util.NormalizePath(input.Path)
-					fileMtimes[normalizedPath] = float64(info.ModTime().Unix())
-				}
-			}
-		}
-
-		// Build completed tasks map
-		completedTasks := make(map[string]map[string]interface{})
-		for _, task := range allTasks {
-			completedTasks[task.TaskID] = map[string]interface{}{
-				"cache_key": task.CacheKey,
-				"command":   task.Command,
-			}
-		}
-
-		newState := &cache.BuildState{
-			LastBuildTime:  float64(time.Now().Unix()),
-			TaskGraphHash:  b.hashGraph(graph),
-			CompletedTasks: completedTasks,
-			FileMtimes:     fileMtimes,
-			ConfigHash:     workspaceConfigHash,
-			ToolchainHash:  configParser.ToolchainHash,
-		}
-
-		if err := newState.Save(workspaceStateFile); err != nil {
-			util.LogInfo("WARNING: Failed to save workspace build state: %v", err)
-		}
-	}
 
 	return result, nil
 }
@@ -241,33 +163,6 @@ func (b *Builder) collectCompileCommands(allTasks []*workspace.BuildTask, result
 	}
 	
 	util.LogInfo("Collected %d compile commands for compile_commands.json", len(result.CompileTasks))
-}
-
-// hashGraph generates hash of task graph structure
-func (b *Builder) hashGraph(graph *workspace.TaskGraph) string {
-	// Build dependencies dict from tasks
-	dependencies := make(map[string][]string)
-	taskIDs := []string{}
-
-	for taskID, task := range graph.Tasks {
-		taskIDs = append(taskIDs, taskID)
-		deps := make([]string, len(task.Dependencies))
-		copy(deps, task.Dependencies)
-		sort.Strings(deps)
-		dependencies[taskID] = deps
-	}
-
-	sort.Strings(taskIDs)
-
-	// Create a stable representation of the graph
-	graphRepr := map[string]any{
-		"tasks":        taskIDs,
-		"dependencies": dependencies,
-	}
-
-	graphBytes, _ := json.Marshal(graphRepr)
-	hash := sha256.Sum256(graphBytes)
-	return fmt.Sprintf("%x", hash[:])
 }
 
 // saveTaskGraph saves task graph to tasks.json

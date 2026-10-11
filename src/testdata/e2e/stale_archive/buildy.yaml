@@ -1,0 +1,12 @@
+project:
+  name: stale_archive
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+targets:
+  static_libraries:
+    - name: calc
+      language: cpp
+      sources: ["lib/*.cpp"]

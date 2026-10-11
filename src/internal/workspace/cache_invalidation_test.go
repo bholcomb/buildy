@@ -22,7 +22,7 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 	// Create a test input file (simulating an object file from a previous build)
 	inputFile := filepath.Join(tmpDir, "test.o")
 	outputFile := filepath.Join(tmpDir, "test.exe")
-	
+
 	// Write initial content
 	if err := os.WriteFile(inputFile, []byte("initial object file content"), 0644); err != nil {
 		t.Fatalf("Failed to write initial input file: %v", err)
@@ -42,7 +42,9 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 	task.Architecture = "x86_64"
 	task.Configuration = "debug"
 	task.Toolchain = "gcc"
-	task.CacheKey = task.CalculateCacheKey()
+	if err := task.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	initialCacheKey := task.CacheKey
 	initialInputHash := task.Inputs[0].Hash
@@ -60,9 +62,9 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 		t.Fatalf("Failed to write modified input file: %v", err)
 	}
 
-	// Call UpdateInputHashesAndCacheKey - this is called before cache lookup
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		t.Fatalf("UpdateInputHashesAndCacheKey failed: %v", err)
+	// Call HashInputs - the executor calls it before the cache lookup
+	if err := task.HashInputs(); err != nil {
+		t.Fatalf("HashInputs failed: %v", err)
 	}
 
 	updatedCacheKey := task.CacheKey
@@ -123,8 +125,8 @@ func TestCacheKeyChangesWhenDirectoryContentsChange(t *testing.T) {
 	task.Configuration = "debug"
 
 	// Update hashes - this should calculate the actual directory hash
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		t.Fatalf("UpdateInputHashesAndCacheKey failed: %v", err)
+	if err := task.HashInputs(); err != nil {
+		t.Fatalf("HashInputs failed: %v", err)
 	}
 
 	initialCacheKey := task.CacheKey
@@ -143,8 +145,8 @@ func TestCacheKeyChangesWhenDirectoryContentsChange(t *testing.T) {
 	}
 
 	// Update hashes again
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		t.Fatalf("UpdateInputHashesAndCacheKey failed: %v", err)
+	if err := task.HashInputs(); err != nil {
+		t.Fatalf("HashInputs failed: %v", err)
 	}
 
 	updatedCacheKey := task.CacheKey
@@ -197,8 +199,8 @@ func TestSymlinkInputsAreNotRehashed(t *testing.T) {
 	originalHash := task.Inputs[0].Hash
 
 	// Update hashes
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		t.Fatalf("UpdateInputHashesAndCacheKey failed: %v", err)
+	if err := task.HashInputs(); err != nil {
+		t.Fatalf("HashInputs failed: %v", err)
 	}
 
 	// Symlink hash should be preserved, not recalculated
@@ -249,7 +251,9 @@ func TestMultipleInputsAllRehashed(t *testing.T) {
 		"ld -o output.exe file1.o file2.o file3.o",
 	)
 	task.Platform = "linux"
-	task.CacheKey = task.CalculateCacheKey()
+	if err := task.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	initialCacheKey := task.CacheKey
 	initialHashes := []string{
@@ -264,8 +268,8 @@ func TestMultipleInputsAllRehashed(t *testing.T) {
 	}
 
 	// Update hashes
-	if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-		t.Fatalf("UpdateInputHashesAndCacheKey failed: %v", err)
+	if err := task.HashInputs(); err != nil {
+		t.Fatalf("HashInputs failed: %v", err)
 	}
 
 	// Cache key should change
@@ -312,14 +316,16 @@ func TestCacheKeyStableWhenNoChanges(t *testing.T) {
 		"ld -o output.exe stable.o",
 	)
 	task.Platform = "linux"
-	task.CacheKey = task.CalculateCacheKey()
+	if err := task.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	initialCacheKey := task.CacheKey
 
-	// Call UpdateInputHashesAndCacheKey multiple times without changing the file
+	// Call HashInputs multiple times without changing the file
 	for i := 0; i < 5; i++ {
-		if err := task.UpdateInputHashesAndCacheKey(); err != nil {
-			t.Fatalf("UpdateInputHashesAndCacheKey failed on iteration %d: %v", i, err)
+		if err := task.HashInputs(); err != nil {
+			t.Fatalf("HashInputs failed on iteration %d: %v", i, err)
 		}
 
 		if task.CacheKey != initialCacheKey {
@@ -361,7 +367,9 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 	task1.Platform = "test"
 	task1.Architecture = "x86_64"
 	task1.Configuration = "debug"
-	task1.CacheKey = task1.CalculateCacheKey()
+	if err := task1.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create identical task - should have same cache key
 	task2 := NewBuildTask(
@@ -375,7 +383,9 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 	task2.Platform = "test"
 	task2.Architecture = "x86_64"
 	task2.Configuration = "debug"
-	task2.CacheKey = task2.CalculateCacheKey()
+	if err := task2.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	if task1.CacheKey != task2.CacheKey {
 		t.Errorf("Identical tasks should have identical cache keys:\n"+
@@ -409,7 +419,9 @@ func TestCacheKeyDifferentPlatforms(t *testing.T) {
 		task.Platform = platform
 		task.Architecture = "x86_64"
 		task.Configuration = "debug"
-		task.CacheKey = task.CalculateCacheKey()
+		if err := task.HashInputs(); err != nil {
+			t.Fatal(err)
+		}
 		return &task
 	}
 
@@ -451,7 +463,9 @@ func TestCacheKeyDifferentToolchains(t *testing.T) {
 		task.Architecture = "x86_64"
 		task.Configuration = "debug"
 		task.Toolchain = toolchain
-		task.CacheKey = task.CalculateCacheKey()
+		if err := task.HashInputs(); err != nil {
+			t.Fatal(err)
+		}
 		return &task
 	}
 
@@ -511,7 +525,9 @@ func TestConfigHashInvalidatesCache(t *testing.T) {
 		task.Configuration = "debug"
 		task.Toolchain = "gcc"
 		task.ConfigHash = configHash
-		task.CacheKey = task.CalculateCacheKey()
+		if err := task.HashInputs(); err != nil {
+			t.Fatal(err)
+		}
 		return &task
 	}
 
@@ -551,7 +567,9 @@ func TestConfigHashEmptyDoesNotPanic(t *testing.T) {
 		"g++ -c input.cpp -o output.o",
 	)
 	task.ConfigHash = ""
-	task.CacheKey = task.CalculateCacheKey()
+	if err := task.HashInputs(); err != nil {
+		t.Fatal(err)
+	}
 
 	if task.CacheKey == "" {
 		t.Error("Cache key should not be empty even with empty config hash")

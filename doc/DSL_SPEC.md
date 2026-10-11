@@ -68,14 +68,13 @@ project/
 │   └── shaders/
 │       └── buildy.yaml            # Shader compilation module
 └── .buildy_cache/                 # Build cache (git-ignored)
-    ├── cache_index.json           # Content-addressable cache index
+    ├── cache_index.json           # Cache index: what each task last produced
     ├── deps/                      # Fetched dependency sources
     │   ├── glfw3/                 # Extracted dependency
     │   └── glfw3.extracted.json   # What glfw3/ was extracted from (URL, SHA256)
     ├── downloads/                 # Cached archive downloads, keyed by a hash of the URL
     │   ├── 3f2a…-glfw-3.4.zip           # Downloaded archive
     │   └── 3f2a…-glfw-3.4.zip.meta.json # Download metadata (SHA256, etc.)
-    ├── objects/                   # Compiled object files
     └── response_files/            # Compiler response files
 ```
 

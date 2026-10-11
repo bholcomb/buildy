@@ -546,10 +546,9 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 		}
 	}
 
-	// Stamp config hash on all generated tasks and recalculate cache keys
+	// Stamp config hash on all generated tasks
 	for _, task := range tasks {
 		task.ConfigHash = configHash
-		task.CacheKey = task.CalculateCacheKey()
 	}
 
 	return tasks, nil
@@ -653,7 +652,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		defines, includeDirs, extraFlags, kwargs := convertResolvedParams(resolvedParams)
 
 		// Build command
-		command, depFile, err := commandBuilder.BuildCommand(
+		command, depFile, depFormat, err := commandBuilder.BuildCommand(
 			tool, source, output,
 			defines, includeDirs, extraFlags, kwargs,
 		)
@@ -686,9 +685,11 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		task.Architecture = architecture
 		task.Configuration = configuration
 		task.Toolchain = toolchain
+		if depFile != "" {
+			task.DepFile = &DepFile{Path: depFile, Format: depFormat}
+		}
 		task.EstimatedTime = util.DefaultCompileTimeSeconds
 		task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 200, DiskMB: 15}
-		task.CacheKey = task.CalculateCacheKey()
 
 		tasks = append(tasks, &task)
 	}
@@ -983,7 +984,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	task.Toolchain = toolchain
 	task.EstimatedTime = util.DefaultLinkTimeSeconds
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 150, DiskMB: 25}
-	task.CacheKey = task.CalculateCacheKey()
 
 	return &task, nil
 }
@@ -1112,7 +1112,6 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	task.Toolchain = toolchain
 	task.EstimatedTime = 10.0 // Build tasks are typically longer
 	task.ResourceRequirements = ResourceRequirements{CPUCores: 2, MemoryMB: 512, DiskMB: 100}
-	task.CacheKey = task.CalculateCacheKey()
 
 	return &task, nil
 }

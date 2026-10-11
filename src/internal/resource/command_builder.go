@@ -24,13 +24,20 @@ func NewCommandBuilder(toolchain *ToolchainConfig, toolMatcher *ToolMatcher, con
 	}
 }
 
-// BuildCommand builds a command using the tool template
+// Dependency file formats a compile tool can write (see supports.dependencies).
+const (
+	DepFormatMake     = "make"      // gcc/clang -MD/-MMD: a Makefile rule
+	DepFormatMSVCJSON = "msvc-json" // cl.exe /sourceDependencies
+)
+
+// BuildCommand builds a command using the tool template. If the tool writes a dependency file,
+// it also returns the file's path and format.
 func (cb *CommandBuilder) BuildCommand(
 	tool *Tool,
 	source, output string,
 	defines, includeDirs, extraFlags []string,
 	kwargs map[string]any,
-) (string, string, error) {
+) (command, depFile, depFormat string, err error) {
 	if defines == nil {
 		defines = []string{}
 	}
@@ -105,14 +112,14 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Handle dependency generation if tool supports it
-	depFile := ""
 	if depTemplate, ok := tool.Supports["dependencies"].(string); ok && depTemplate != "" {
 		// Use .json extension for MSVC /sourceDependencies, .d for GCC/Clang
-		if strings.Contains(depTemplate, "/sourceDependencies") ||
-			strings.Contains(strings.ToLower(depTemplate), "/sourcedependencies") {
+		if strings.Contains(strings.ToLower(depTemplate), "/sourcedependencies") {
 			depFile = strings.TrimSuffix(output, tool.OutputExtension) + ".json"
+			depFormat = DepFormatMSVCJSON
 		} else {
 			depFile = strings.TrimSuffix(output, tool.OutputExtension) + ".d"
+			depFormat = DepFormatMake
 		}
 
 		templateVars["dep_file"] = depFile
@@ -129,7 +136,7 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	// Build command from template
-	command := tool.Command
+	command = tool.Command
 	for key, value := range templateVars {
 		placeholder := "${" + key + "}"
 		command = strings.ReplaceAll(command, placeholder, value)
@@ -137,7 +144,7 @@ func (cb *CommandBuilder) BuildCommand(
 
 	command = strings.TrimSpace(command)
 
-	return command, depFile, nil
+	return command, depFile, depFormat, nil
 }
 
 // BuildLinkCommand builds a link command using the tool template
