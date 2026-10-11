@@ -80,25 +80,9 @@ func (cp *ConfigParser) buildContext() BuildContext {
 	return BuildContext{Platform: cp.Platform, Architecture: cp.Architecture, Configuration: cp.Configuration}
 }
 
-// ParseConfigFile parses YAML build configuration file
-func (cp *ConfigParser) ParseConfigFile(configFile string) (map[string]any, error) {
-	config, err := cp.YAMLParser.ParseFile(configFile)
-	if err != nil {
-		return nil, err
-	}
-
-	cp.ConfigFileDir = cp.YAMLParser.ConfigFileDir
-
-	// Validate configuration
-	validationErrors := cp.YAMLParser.ValidateConfig(config)
-	if len(validationErrors) > 0 {
-		for _, errMsg := range validationErrors {
-			util.LogInfo("ERROR: Config validation error: %s", errMsg)
-		}
-		return nil, fmt.Errorf("configuration failed validation with %d error(s)", len(validationErrors))
-	}
-
-	return config, nil
+// unknownToolchain is the error for a toolchain name that names no toolchain.
+func unknownToolchain(name, where string) error {
+	return fmt.Errorf("toolchain '%s' (from %s) is not a known toolchain; buildy --list-toolchains lists them", name, where)
 }
 
 // selectToolchain selects toolchain based on hierarchical configuration
@@ -114,7 +98,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 			util.LogInfo("Using CLI-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
-		util.BuildWarning("config", "CLI toolchain '%s' not found, falling back", cp.DefaultToolchain)
+		return nil, unknownToolchain(cp.DefaultToolchain, "--toolchain")
 	}
 
 	// Check project-level toolchain
@@ -125,7 +109,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 				util.LogInfo("Using project-specified toolchain: %s", tc.Name)
 				return tc, nil
 			}
-			util.BuildWarning("config", "Project toolchain '%s' not found, falling back", projectToolchain)
+			return nil, unknownToolchain(projectToolchain, "project.toolchain")
 		}
 	}
 
@@ -136,7 +120,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 			util.LogInfo("Using workspace-specified toolchain: %s", tc.Name)
 			return tc, nil
 		}
-		util.BuildWarning("config", "Workspace toolchain '%s' not found, falling back", workspaceToolchain)
+		return nil, unknownToolchain(workspaceToolchain, "toolchain")
 	}
 
 	// Check environment.toolchains structure (hierarchical: platform-specific, then default)
@@ -149,7 +133,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 					util.LogInfo("Using platform-specified toolchain: %s", tc.Name)
 					return tc, nil
 				}
-				util.BuildWarning("config", "Platform toolchain '%s' not found, falling back", platformToolchain)
+				return nil, unknownToolchain(platformToolchain, "environment.toolchains."+cp.Platform)
 			}
 			// Check default
 			if defaultToolchain, ok := toolchains["default"].(string); ok {
@@ -158,7 +142,7 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 					util.LogInfo("Using default toolchain: %s", tc.Name)
 					return tc, nil
 				}
-				util.BuildWarning("config", "Default toolchain '%s' not found, falling back", defaultToolchain)
+				return nil, unknownToolchain(defaultToolchain, "environment.toolchains.default")
 			}
 		}
 	}

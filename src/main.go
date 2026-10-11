@@ -285,7 +285,7 @@ func main() {
 		}
 		ws, err = workspace.DiscoverWorkspace(cwd)
 		if err != nil {
-			util.LogFatal("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
+			util.LogFatal("Failed to load the workspace: %v", err)
 		}
 		util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
 	} else {
@@ -328,7 +328,7 @@ func main() {
 
 	// Load the modules this build context selects
 	if _, err := ws.DiscoverModules(buildContext); err != nil {
-		util.LogFatal("Failed to discover modules: %v", err)
+		util.LogFatal("Failed to load the workspace's modules: %v", err)
 	}
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
@@ -401,7 +401,7 @@ func main() {
 	standaloneMode := ws.ConfigPath != ""
 	if !standaloneMode {
 		// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
-		if err := depResolver.LoadDependencies(ws.RootDir); err != nil {
+		if err := depResolver.LoadDependencies(ws.RootDir, ws.Config.DependenciesFile); err != nil {
 			util.LogFatal("Failed to load dependencies: %v", err)
 		}
 

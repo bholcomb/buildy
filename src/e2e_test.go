@@ -389,3 +389,17 @@ func TestE2EPlatformModule(t *testing.T) {
 		t.Errorf("windows build generated the linux module:\n%s", out)
 	}
 }
+
+// Finding 11: an unknown key fails the build, naming the key and the file.
+func TestE2EUnknownKey(t *testing.T) {
+	dir := fixture(t, "unknown_key")
+	out := mustFailBuildy(t, dir)
+	for _, want := range []string{"bogus_key", "defnies", "did you mean 'defines'", filepath.Join(dir, "buildy.yaml")} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); err == nil {
+		t.Error("the invalid config was built")
+	}
+}

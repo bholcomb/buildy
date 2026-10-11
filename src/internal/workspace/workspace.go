@@ -10,7 +10,6 @@ import (
 	"buildy/pkg/util"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"gopkg.in/yaml.v3"
 )
 
 // ModuleInfo represents information about a discovered module
@@ -224,14 +223,9 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 		return nil, fmt.Errorf("workspace config not found: %s", configFile)
 	}
 
-	data, err := os.ReadFile(configFile)
+	rawConfig, err := loadConfigFile(configFile, true)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read workspace config: %w", err)
-	}
-
-	var rawConfig map[string]any
-	if err := yaml.Unmarshal(data, &rawConfig); err != nil {
-		return nil, fmt.Errorf("invalid YAML in %s: %w", configFile, err)
+		return nil, err
 	}
 
 	// Extract workspace section
@@ -364,8 +358,7 @@ func (ws *Workspace) DiscoverModules(ctx BuildContext) (map[string]*ModuleInfo, 
 
 		moduleInfo, err := ws.loadModule(modulePath, moduleDir)
 		if err != nil {
-			util.LogWarning("Failed to load module %s: %v", modulePath, err)
-			continue
+			return nil, err
 		}
 
 		ws.Modules[moduleDir] = moduleInfo
@@ -563,16 +556,11 @@ func matchPattern(path, pattern string) bool {
 	return matched
 }
 
-// loadModule loads a module configuration file
+// loadModule loads and validates a module configuration file
 func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, error) {
-	data, err := os.ReadFile(modulePath)
+	config, err := loadConfigFile(modulePath, filepath.Clean(modulePath) == filepath.Clean(ws.configFile()))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read module file: %w", err)
-	}
-
-	var config map[string]any
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("invalid YAML in %s: %w", modulePath, err)
+		return nil, err
 	}
 
 	// Extract target names from various sections
@@ -600,35 +588,6 @@ func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, er
 		if exes, ok := targetsSection["executables"].([]any); ok {
 			extractNames(exes)
 		}
-	}
-
-	// Legacy format: 'library' section (singular)
-	if libSection, ok := config["library"]; ok {
-		switch v := libSection.(type) {
-		case map[string]any:
-			if name, ok := v["name"].(string); ok {
-				targets = append(targets, name)
-			}
-		case []any:
-			extractNames(v)
-		}
-	}
-
-	// Legacy format: 'executable' section (singular)
-	if exeSection, ok := config["executable"]; ok {
-		switch v := exeSection.(type) {
-		case map[string]any:
-			if name, ok := v["name"].(string); ok {
-				targets = append(targets, name)
-			}
-		case []any:
-			extractNames(v)
-		}
-	}
-
-	// Also check legacy 'tasks' sections
-	if section, ok := config["tasks"].([]any); ok {
-		extractNames(section)
 	}
 
 	return &ModuleInfo{

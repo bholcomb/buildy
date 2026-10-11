@@ -79,7 +79,7 @@ foo:
 		t.Fatal(err)
 	}
 	deps := resource.NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil))
-	if err := deps.LoadDependencies(root); err != nil {
+	if err := deps.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := deps.ResolveAll(); err != nil {

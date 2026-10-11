@@ -83,16 +83,43 @@ project/
 ## Top-Level Structure
 
 ```yaml
-project:           # Metadata (required)
+project:           # Metadata (required in the workspace's root config)
 variables:         # User-defined variables (optional)
 workspace:         # Multi-module coordination (optional)
-dependencies:      # External dependencies (optional, root only)
+dependencies:      # External dependencies (optional, root only): {file: ...}
 environment:       # Build configuration (optional)
 targets:           # What to build (optional)
 artifacts:         # File operations (optional)
 staging:           # Product assembly (optional)
 install:           # Packaging for distribution (optional)
+output:            # base_dir and pattern of the output directory (optional)
+toolchain:         # Toolchain for the module (optional)
+platforms:         # Per-platform settings and target overrides (optional)
+architectures:     # Per-architecture settings (optional)
+configurations:    # Per-configuration settings (optional)
 ```
+
+### Strict Validation
+
+Every config file (the workspace root, every module, a dependency's override config) is read by
+one loader that rejects duplicate keys and validates the file before anything is generated. A key
+buildy doesn't read is an error, not something silently ignored, and so is a missing required
+field. Each error names the file and the key, with a suggestion for a likely typo:
+
+```
+FATAL: Failed to load the workspace: /src/game/buildy.yaml is not a valid buildy config:
+  - unknown key 'targets.executables[0] (app).defnies' (did you mean 'defines'?)
+```
+
+Required fields: `project.name` in the root config; `name` and `language` on every target;
+`sources` on C and C++ targets; `path` on Go and Rust targets. The old `library:`, `executable:`
+and `tasks:` sections were never built and are rejected. Dependency definitions in
+`buildy_config/` are validated the same way.
+
+Configuration errors found while generating tasks also stop the build, naming the module and the
+item: an unknown toolchain (from `--toolchain`, `project.toolchain`, `environment.toolchains`, or an
+artifact's `tool`), a transform or generate whose inputs match no files, a staging entry naming an
+unknown target or artifact, and an install naming an unknown staging area.
 
 ---
 
@@ -102,9 +129,10 @@ Required metadata about the project.
 
 ```yaml
 project:
-  name: game_engine           # Required: project identifier
+  name: game_engine           # Required (in the root config): project identifier
   version: "2.0.0"            # Optional: semantic version
   description: "My project"   # Optional: human-readable description
+  toolchain: gcc-cpp-linux    # Optional: toolchain for the module
 ```
 
 ---
@@ -1047,17 +1075,6 @@ When a target declares `depends_on.artifacts`:
 
 **Note:** Artifact dependencies work within a single module. For multi-module projects, the artifact and dependent target should be in the same module.
 
-### Per-Target Toolchain Override
-
-```yaml
-targets:
-  static_libraries:
-    - name: perf_critical
-      language: cpp
-      toolchain: clang-linux      # Override default toolchain
-      sources: ["src/*.cpp"]
-```
-
 ---
 
 ## 7. Artifacts Section
@@ -1964,32 +1981,20 @@ dependencies:
 
 ### Execution Environment
 
-Build systems can run natively or in Docker containers for reproducibility.
-
-**Global default:**
+Build systems run natively, or in a Docker container when the dependency has an `execution`
+section (the same fields as a toolchain's; the workspace and cache directory are mounted at their
+host paths):
 
 ```yaml
-environment:
-  dependency_builds:
+# buildy_config/dependencies.yaml
+complex_lib:
+  common:
+    git: "https://github.com/example/complex.git"
+    build:
+      system: cmake
     execution:
       type: docker
-      image: "buildy/build-env:latest"
-    default_phases: [configure, build]
-```
-
-**Per-dependency override:**
-
-```yaml
-dependencies:
-  fetch:
-    - name: complex_lib
-      git: "https://github.com/example/complex.git"
-      build_system: cmake
-      execution:
-        type: docker
-        image: "gcc:13"
-        volumes:
-          - "${PWD}:/workspace"
+      image: "gcc:13"
 ```
 
 ### Custom Build System Definition

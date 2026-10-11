@@ -92,6 +92,10 @@ myproject/
 
 ## Core Concepts
 
+Every config file is validated strictly before anything is built: a misspelled or unsupported key
+is an error naming the file and the key (with a suggestion), not a setting silently ignored. See
+[Strict Validation](DSL_SPEC.md#strict-validation).
+
 ### Project Metadata
 
 Every `buildy.yaml` starts with project metadata:
@@ -798,20 +802,7 @@ Built-in Docker toolchains: `docker-c-linux`, `docker-cpp-linux`
 
 ### Docker for Dependency Builds
 
-Build fetched dependencies in Docker containers:
-
-**Global default:**
-
-```yaml
-environment:
-  dependency_builds:
-    execution:
-      type: docker
-      image: "gcc:13"
-      user: "${UID}:${GID}"
-```
-
-**Per-dependency override:**
+Build a fetched dependency in a Docker container with its `execution` section:
 
 ```yaml
 # buildy_config/dependencies.yaml

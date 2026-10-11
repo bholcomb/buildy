@@ -10,597 +10,378 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Known top-level keys in buildy.yaml
-var knownTopLevelKeys = map[string]bool{
-	"project":      true,
-	"variables":    true,
-	"workspace":    true,
-	"dependencies": true,
-	"environment":  true,
-	"targets":      true,
-	"artifacts":    true,
-	"staging":      true,
-	"install":      true,
-	// Legacy keys
-	"library":     true,
-	"executable":  true,
-	"config":      true,
-	"platforms":   true,
-	"tasks":       true,
-	"output":      true,
+// loadConfigFile reads and validates a buildy.yaml: the workspace root (root true) or a module.
+// It is the only way configuration is read. yaml.v3 rejects duplicate keys; ValidateConfig
+// rejects unknown keys and missing required fields. Every error names the file.
+func loadConfigFile(path string, root bool) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("invalid YAML in %s: %w", path, err)
+	}
+	if config == nil {
+		config = map[string]any{}
+	}
+	if problems := NewYAMLParser().ValidateConfig(config, root); len(problems) > 0 {
+		return nil, fmt.Errorf("%s is not a valid buildy config:\n  - %s", path, strings.Join(problems, "\n  - "))
+	}
+	return config, nil
 }
 
-// Known keys for various sections
-var knownProjectKeys = map[string]bool{
-	"name": true, "version": true, "description": true,
+// keySet is the set of keys a mapping may have.
+type keySet map[string]bool
+
+func keys(names ...string) keySet {
+	set := keySet{}
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
-var knownVariablesKeys = map[string]bool{
-	"import_env_vars": true, "platforms": true,
-	// Allow any other key as user-defined variable
+// The schema: the keys the generator reads. A key outside it would be ignored, so it is an error.
+var (
+	knownTopLevelKeys = keys("project", "variables", "workspace", "dependencies", "environment",
+		"targets", "artifacts", "staging", "install", "output", "toolchain",
+		"platforms", "architectures", "configurations", "config")
+	knownProjectKeys     = keys("name", "version", "description", "toolchain")
+	knownWorkspaceKeys   = keys("modules", "discover", "exclude")
+	knownDependenciesKey = keys("file")
+	knownEnvironmentKeys = keys("toolchains", "compile", "link", "configurations")
+	knownOutputKeys      = keys("base_dir", "pattern")
+	knownTargetsKeys     = keys("static_libraries", "shared_libraries", "executables")
+	knownTargetKeys      = keys("name", "type", "language", "sources", "path",
+		"include_dirs", "lib_dirs", "libs", "frameworks", "deps", "depends_on",
+		"defines", "flags", "remove_flags", "remove_defines", "compile", "link", "output_prefix",
+		// Go
+		"build_tags", "ldflags", "gcflags", "buildmode",
+		// Rust
+		"features", "bin")
+	knownDependsOnKeys    = keys("targets", "artifacts")
+	knownTargetCompileKey = keys("flags", "remove_flags", "defines")
+	knownTargetLinkKeys   = keys("flags", "remove_flags")
+	knownArtifactsKeys    = keys("copy", "transform", "generate")
+	knownTransformKeys    = keys("name", "tool", "inputs", "outputs", "args")
+	knownGenerateKeys     = keys("name", "template", "output", "variables", "tool", "inputs", "outputs", "args")
+	knownCopyKeys         = keys("name", "sources", "source", "target", "destination", "dest", "depends_on")
+	knownStagingKeys      = keys("name", "destination", "use_symlinks", "contents")
+	knownStagingEntryKeys = keys("folder", "targets", "artifacts", "files", "contents")
+	knownInstallKeys      = keys("name", "staging", "destination", "format", "follow_symlinks", "filename")
+)
+
+// sectionsReplacedBy names the legacy sections the generator never built, with what replaces them.
+var sectionsReplacedBy = map[string]string{
+	"library":    "targets.static_libraries or targets.shared_libraries",
+	"executable": "targets.executables",
+	"tasks":      "targets",
 }
 
-var knownWorkspaceKeys = map[string]bool{
-	"modules": true, "discover": true, "exclude": true,
-}
-
-var knownEnvironmentKeys = map[string]bool{
-	"toolchains": true, "compile": true, "configurations": true, "dependency_builds": true,
-}
-
-var knownTargetKeys = map[string]bool{
-	"static_libraries": true, "shared_libraries": true, "executables": true,
-}
-
-var knownLibraryKeys = map[string]bool{
-	"name": true, "type": true, "language": true, "sources": true,
-	"include_dirs": true, "deps": true, "libs": true, "depends_on": true,
-	"compile": true, "link": true, "toolchain": true, "defines": true, "flags": true,
-}
-
-var knownExecutableKeys = map[string]bool{
-	"name": true, "language": true, "sources": true, "include_dirs": true,
-	"deps": true, "libs": true, "depends_on": true,
-	"compile": true, "link": true, "toolchain": true, "defines": true, "flags": true,
-	// Go-specific keys (when language: go)
-	"path": true, "output": true, "build_tags": true, "ldflags": true,
-	// Rust-specific keys (when language: rust)
-	"features": true, "bin": true,
-}
-
-var knownDependsOnKeys = map[string]bool{
-	"targets": true, "deps": true, "artifacts": true,
-}
-
-var knownArtifactsKeys = map[string]bool{
-	"copy": true, "transform": true, "generate": true, "install": true,
-}
-
-// knownDependencySectionKeys are keys allowed within a dependency's platform section
-var knownDependencySectionKeys = map[string]bool{
-	"description": true, "version": true,
-	"git": true, "url": true, "ref": true, "checksum": true, "extract": true,
-	"pkg_config": true, "root": true,
-	"include_dirs": true, "lib_dirs": true, "libs": true, "frameworks": true, "defines": true,
-	"build": true, "execution": true,
-	// Platform sections
-	"common": true, "linux": true, "windows": true, "macos": true, "darwin": true,
-	"android": true, "ios": true,
-}
-
-// YAMLParser handles raw YAML parsing and validation
-type YAMLParser struct {
-	ConfigFileDir string
-}
+// YAMLParser validates parsed configuration.
+type YAMLParser struct{}
 
 // NewYAMLParser creates a new YAMLParser
 func NewYAMLParser() *YAMLParser {
 	return &YAMLParser{}
 }
 
-// ParseFile parses a YAML build configuration file
-func (yp *YAMLParser) ParseFile(configFile string) (map[string]any, error) {
-	// Store the directory of the config file for relative path resolution
-	absPath, err := filepath.Abs(configFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve config file path: %w", err)
-	}
-	yp.ConfigFileDir = filepath.Dir(absPath)
+// ValidateConfig checks a parsed buildy.yaml against the schema and returns every problem.
+// root is true for the workspace's root config: it alone may have a dependencies section, and it
+// must name the project.
+func (yp *YAMLParser) ValidateConfig(config map[string]any, root bool) []string {
+	v := &validator{}
 
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return nil, fmt.Errorf("error reading config file %s: %w", configFile, err)
-	}
-
-	var config map[string]any
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("error parsing config file %s: %w", configFile, err)
-	}
-
-	return config, nil
-}
-
-// ParseData parses YAML data from bytes
-func (yp *YAMLParser) ParseData(data []byte) (map[string]any, error) {
-	var config map[string]any
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("error parsing YAML data: %w", err)
-	}
-	return config, nil
-}
-
-// ValidateConfig validates configuration and returns list of errors
-// This performs strict validation - unknown keys are treated as errors
-func (yp *YAMLParser) ValidateConfig(config map[string]any) []string {
-	errors := []string{}
-
-	// Check for unknown top-level keys
-	for key := range config {
+	for _, key := range sortedKeys(config) {
+		if replacement, ok := sectionsReplacedBy[key]; ok {
+			v.add("'%s' is not supported: define targets under %s", key, replacement)
+			continue
+		}
 		if !knownTopLevelKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown top-level key '%s'. Did you mean one of: %s?",
-				key, yp.suggestKey(key, knownTopLevelKeys)))
+			v.unknown("", key, knownTopLevelKeys)
 		}
 	}
 
-	// Validate project section (required)
-	project, hasProject := config["project"].(map[string]any)
-	if !hasProject {
-		errors = append(errors, "Missing required 'project' section")
-	} else {
-		errors = append(errors, yp.validateProject(project)...)
+	if project, ok := v.mapping(config, "project", ""); ok {
+		v.keys(project, "project", knownProjectKeys)
+		for _, field := range []string{"name", "version", "description", "toolchain"} {
+			v.optionalString(project, field, "project")
+		}
+		if name, _ := project["name"].(string); strings.TrimSpace(name) == "" && root {
+			v.add("project.name is required in the workspace's root config")
+		}
+	} else if root && config["project"] == nil {
+		v.add("the workspace's root config needs a project section with a name")
 	}
 
-	// Validate workspace section
-	if workspace, ok := config["workspace"].(map[string]any); ok {
-		errors = append(errors, yp.validateWorkspace(workspace)...)
+	if workspace, ok := v.mapping(config, "workspace", ""); ok {
+		v.keys(workspace, "workspace", knownWorkspaceKeys)
 	}
 
-	// Validate environment section
-	if environment, ok := config["environment"].(map[string]any); ok {
-		errors = append(errors, yp.validateEnvironment(environment)...)
+	if deps, ok := v.mapping(config, "dependencies", ""); ok {
+		if !root {
+			v.add("dependencies: only the workspace's root config declares dependencies (in buildy_config/)")
+		}
+		v.keys(deps, "dependencies", knownDependenciesKey)
+		v.optionalString(deps, "file", "dependencies")
 	}
 
-	// Validate targets section
-	if targets, ok := config["targets"].(map[string]any); ok {
-		errors = append(errors, yp.validateTargets(targets)...)
-	}
-
-	// Validate artifacts section
-	if artifacts, ok := config["artifacts"].(map[string]any); ok {
-		errors = append(errors, yp.validateArtifacts(artifacts)...)
-	}
-
-	// Validate staging section
-	if staging, ok := config["staging"].(map[string]any); ok {
-		errors = append(errors, yp.validateStaging(staging)...)
-	}
-
-	// Validate install section
-	if install, ok := config["install"].([]any); ok {
-		errors = append(errors, yp.validateInstall(install)...)
-	}
-
-	// Validate dependencies section
-	if deps, ok := config["dependencies"].(map[string]any); ok {
-		errors = append(errors, yp.validateDependencies(deps)...)
-	}
-
-	// Validate legacy library format
-	if library, ok := config["library"]; ok {
-		errors = append(errors, yp.validateLegacyTargetSection(library, "library", knownLibraryKeys)...)
-	}
-
-	// Validate legacy executable format
-	if executable, ok := config["executable"]; ok {
-		errors = append(errors, yp.validateLegacyTargetSection(executable, "executable", knownExecutableKeys)...)
-	}
-
-	// Validate output paths don't escape project
-	if outputConfig, ok := config["output"].(map[string]any); ok {
-		if baseDir, ok := outputConfig["base_dir"].(string); ok {
-			if strings.Contains(baseDir, "..") || filepath.IsAbs(baseDir) {
-				errors = append(errors, fmt.Sprintf("Invalid output.base_dir '%s' - must be relative and not contain '..'", baseDir))
+	if env, ok := v.mapping(config, "environment", ""); ok {
+		v.keys(env, "environment", knownEnvironmentKeys)
+		v.mapping(env, "toolchains", "environment")
+		v.mapping(env, "compile", "environment")
+		v.mapping(env, "link", "environment")
+		if configs, ok := v.mapping(env, "configurations", "environment"); ok {
+			for _, name := range sortedKeys(configs) {
+				v.mapping(configs, name, "environment.configurations")
 			}
 		}
 	}
 
-	return errors
-}
-
-// validateProject validates the project section
-func (yp *YAMLParser) validateProject(project map[string]any) []string {
-	errors := []string{}
-
-	// Check for unknown keys
-	for key := range project {
-		if !knownProjectKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'project.%s'. Valid keys are: name, version, description", key))
+	if output, ok := v.mapping(config, "output", ""); ok {
+		v.keys(output, "output", knownOutputKeys)
+		if baseDir, ok := output["base_dir"].(string); ok && (strings.Contains(baseDir, "..") || filepath.IsAbs(baseDir)) {
+			v.add("output.base_dir '%s' must be relative and not contain '..'", baseDir)
 		}
 	}
 
-	// Validate required fields
-	if name, ok := project["name"].(string); !ok || strings.TrimSpace(name) == "" {
-		errors = append(errors, "Missing or empty 'project.name' (required)")
+	v.optionalString(config, "toolchain", "")
+	for _, section := range []string{"platforms", "architectures", "configurations", "config", "variables"} {
+		v.mapping(config, section, "")
 	}
 
-	// Validate optional field types
-	if version, exists := project["version"]; exists {
-		if _, ok := version.(string); !ok {
-			errors = append(errors, "'project.version' must be a string")
-		}
-	}
-
-	if desc, exists := project["description"]; exists {
-		if _, ok := desc.(string); !ok {
-			errors = append(errors, "'project.description' must be a string")
-		}
-	}
-
-	return errors
-}
-
-// validateWorkspace validates the workspace section
-func (yp *YAMLParser) validateWorkspace(workspace map[string]any) []string {
-	errors := []string{}
-
-	for key := range workspace {
-		if !knownWorkspaceKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'workspace.%s'. Did you mean one of: %s?",
-				key, yp.suggestKey(key, knownWorkspaceKeys)))
-		}
-	}
-
-	// Validate modules structure
-	if modules, ok := workspace["modules"].(map[string]any); ok {
-		validPlatforms := map[string]bool{"common": true, "linux": true, "windows": true, "macos": true}
-		for platform := range modules {
-			if !validPlatforms[platform] {
-				errors = append(errors, fmt.Sprintf("Unknown platform 'workspace.modules.%s'. Valid platforms: common, linux, windows, macos", platform))
+	if targets, ok := v.mapping(config, "targets", ""); ok {
+		v.keys(targets, "targets", knownTargetsKeys)
+		for _, section := range []string{"static_libraries", "shared_libraries", "executables"} {
+			for i, target := range v.list(targets, section, "targets") {
+				v.target(target, fmt.Sprintf("targets.%s[%d]", section, i))
 			}
 		}
 	}
 
-	return errors
-}
-
-// validateEnvironment validates the environment section
-func (yp *YAMLParser) validateEnvironment(environment map[string]any) []string {
-	errors := []string{}
-
-	for key := range environment {
-		if !knownEnvironmentKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'environment.%s'. Did you mean one of: %s?",
-				key, yp.suggestKey(key, knownEnvironmentKeys)))
+	if artifacts, ok := v.mapping(config, "artifacts", ""); ok {
+		v.keys(artifacts, "artifacts", knownArtifactsKeys)
+		for i, item := range v.list(artifacts, "transform", "artifacts") {
+			where := fmt.Sprintf("artifacts.transform[%d]", i)
+			v.keys(item, where, knownTransformKeys)
+			v.required(item, where, "tool", "inputs", "outputs")
 		}
-	}
-
-	// Validate toolchains is a map
-	if toolchains, exists := environment["toolchains"]; exists {
-		if _, ok := toolchains.(map[string]any); !ok {
-			errors = append(errors, "'environment.toolchains' must be a map (e.g., default: gcc-linux)")
-		}
-	}
-
-	// Validate configurations structure
-	if configs, ok := environment["configurations"].(map[string]any); ok {
-		for configName, configData := range configs {
-			if _, ok := configData.(map[string]any); !ok {
-				errors = append(errors, fmt.Sprintf("'environment.configurations.%s' must be a map", configName))
-			}
-		}
-	}
-
-	return errors
-}
-
-// validateTargets validates the targets section
-func (yp *YAMLParser) validateTargets(targets map[string]any) []string {
-	errors := []string{}
-
-	for key := range targets {
-		if !knownTargetKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'targets.%s'. Valid keys: static_libraries, shared_libraries, executables", key))
-		}
-	}
-
-	// Validate static_libraries
-	if libs, ok := targets["static_libraries"].([]any); ok {
-		for i, libRaw := range libs {
-			if lib, ok := libRaw.(map[string]any); ok {
-				errors = append(errors, yp.validateLibrary(lib, i, "static_libraries")...)
+		for i, item := range v.list(artifacts, "generate", "artifacts") {
+			where := fmt.Sprintf("artifacts.generate[%d]", i)
+			v.keys(item, where, knownGenerateKeys)
+			if _, ok := item["template"]; ok {
+				v.required(item, where, "output")
+			} else if _, ok := item["tool"]; ok {
+				v.required(item, where, "inputs", "outputs")
 			} else {
-				errors = append(errors, fmt.Sprintf("targets.static_libraries[%d] must be a map", i))
+				v.add("%s needs either 'template' (with 'output') or 'tool' (with 'inputs' and 'outputs')", where)
+			}
+		}
+		for i, item := range v.list(artifacts, "copy", "artifacts") {
+			where := fmt.Sprintf("artifacts.copy[%d]", i)
+			v.keys(item, where, knownCopyKeys)
+			_, sources := item["sources"]
+			_, source := item["source"]
+			_, target := item["target"]
+			_, destination := item["destination"]
+			_, dest := item["dest"]
+			if !sources && !source && !target {
+				v.add("%s needs 'sources', 'source' or 'target'", where)
+			}
+			if !destination && !dest {
+				v.add("%s needs 'destination'", where)
 			}
 		}
 	}
 
-	// Validate shared_libraries
-	if libs, ok := targets["shared_libraries"].([]any); ok {
-		for i, libRaw := range libs {
-			if lib, ok := libRaw.(map[string]any); ok {
-				errors = append(errors, yp.validateLibrary(lib, i, "shared_libraries")...)
-			} else {
-				errors = append(errors, fmt.Sprintf("targets.shared_libraries[%d] must be a map", i))
-			}
-		}
+	if staging, ok := v.mapping(config, "staging", ""); ok {
+		v.keys(staging, "staging", knownStagingKeys)
+		v.stagingContents(staging, "staging")
 	}
 
-	// Validate executables
-	if exes, ok := targets["executables"].([]any); ok {
-		for i, exeRaw := range exes {
-			if exe, ok := exeRaw.(map[string]any); ok {
-				errors = append(errors, yp.validateExecutable(exe, i)...)
-			} else {
-				errors = append(errors, fmt.Sprintf("targets.executables[%d] must be a map", i))
-			}
-		}
+	for i, item := range v.list(config, "install", "") {
+		where := fmt.Sprintf("install[%d]", i)
+		v.keys(item, where, knownInstallKeys)
+		v.required(item, where, "name")
 	}
 
-	return errors
+	return v.problems
 }
 
-// validateLibrary validates a library target
-func (yp *YAMLParser) validateLibrary(lib map[string]any, index int, section string) []string {
-	errors := []string{}
-	targetName := fmt.Sprintf("targets.%s[%d]", section, index)
-
-	if name, ok := lib["name"].(string); ok {
-		targetName = fmt.Sprintf("library '%s'", name)
-	} else {
-		errors = append(errors, fmt.Sprintf("targets.%s[%d] missing required 'name' field", section, index))
-	}
-
-	// Check for unknown keys
-	for key := range lib {
-		if !knownLibraryKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key in %s: '%s'. Did you mean one of: %s?",
-				targetName, key, yp.suggestKey(key, knownLibraryKeys)))
-		}
-	}
-
-	// Validate required fields
-	if _, ok := lib["sources"]; !ok {
-		errors = append(errors, fmt.Sprintf("%s missing required 'sources' field", targetName))
-	}
-
-	// Validate type if present
-	if libType, exists := lib["type"]; exists {
-		if typeStr, ok := libType.(string); ok {
-			validTypes := map[string]bool{"static_library": true, "shared_library": true}
-			if !validTypes[typeStr] {
-				errors = append(errors, fmt.Sprintf("%s has invalid 'type': '%s'. Must be 'static_library' or 'shared_library'", targetName, typeStr))
-			}
-		} else {
-			errors = append(errors, fmt.Sprintf("%s 'type' must be a string", targetName))
-		}
-	}
-
-	// Validate language if present
-	if lang, exists := lib["language"]; exists {
-		if langStr, ok := lang.(string); ok {
-			validLangs := map[string]bool{"c": true, "c++": true, "cpp": true}
-			if !validLangs[langStr] {
-				errors = append(errors, fmt.Sprintf("%s has invalid 'language': '%s'. Must be 'c' or 'c++'", targetName, langStr))
-			}
-		}
-	}
-
-	return errors
+// validator collects schema problems.
+type validator struct {
+	problems []string
 }
 
-// validateExecutable validates an executable target
-func (yp *YAMLParser) validateExecutable(exe map[string]any, index int) []string {
-	errors := []string{}
-	targetName := fmt.Sprintf("targets.executables[%d]", index)
+func (v *validator) add(format string, args ...any) {
+	v.problems = append(v.problems, fmt.Sprintf(format, args...))
+}
 
-	if name, ok := exe["name"].(string); ok {
-		targetName = fmt.Sprintf("executable '%s'", name)
-	} else {
-		errors = append(errors, fmt.Sprintf("targets.executables[%d] missing required 'name' field", index))
+func join(parent, key string) string {
+	if parent == "" {
+		return key
 	}
+	return parent + "." + key
+}
 
-	// Check for unknown keys
-	for key := range exe {
-		if !knownExecutableKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key in %s: '%s'. Did you mean one of: %s?",
-				targetName, key, yp.suggestKey(key, knownExecutableKeys)))
+// unknown reports a key outside the schema, suggesting the closest known key.
+func (v *validator) unknown(parent, key string, known keySet) {
+	if near := closestKey(key, known); near != "" {
+		v.add("unknown key '%s' (did you mean '%s'?)", join(parent, key), near)
+		return
+	}
+	v.add("unknown key '%s' (expected one of: %s)", join(parent, key), strings.Join(sortedKeys(known), ", "))
+}
+
+// keys reports every key of m outside known.
+func (v *validator) keys(m map[string]any, where string, known keySet) {
+	for _, key := range sortedKeys(m) {
+		if !known[key] {
+			v.unknown(where, key, known)
 		}
 	}
+}
 
-	// Validate required fields
-	if _, ok := exe["sources"]; !ok {
-		errors = append(errors, fmt.Sprintf("%s missing required 'sources' field", targetName))
+// mapping returns m[key] if it is a mapping. It reports a value of another type; a missing key
+// is not a problem.
+func (v *validator) mapping(m map[string]any, key, where string) (map[string]any, bool) {
+	value, ok := m[key]
+	if !ok || value == nil {
+		return nil, false
 	}
-
-	return errors
-}
-
-// validateArtifacts validates the artifacts section
-func (yp *YAMLParser) validateArtifacts(artifacts map[string]any) []string {
-	errors := []string{}
-
-	for key := range artifacts {
-		if !knownArtifactsKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'artifacts.%s'. Valid keys: copy, transform, generate, install", key))
-		}
+	section, ok := value.(map[string]any)
+	if !ok {
+		v.add("'%s' must be a mapping", join(where, key))
 	}
-
-	return errors
+	return section, ok
 }
 
-// Known staging keys
-var knownStagingKeys = map[string]bool{
-	"name": true, "destination": true, "use_symlinks": true, "contents": true,
-}
-
-// Known staging folder entry keys
-var knownStagingFolderKeys = map[string]bool{
-	"folder": true, "targets": true, "artifacts": true, "files": true, "contents": true,
-}
-
-// validateStaging validates the staging section
-func (yp *YAMLParser) validateStaging(staging map[string]any) []string {
-	errors := []string{}
-
-	for key := range staging {
-		if !knownStagingKeys[key] {
-			errors = append(errors, fmt.Sprintf("Unknown key 'staging.%s'. Valid keys: name, destination, use_symlinks, contents", key))
-		}
+// list returns the mappings in the list m[key], reporting a value that isn't a list of mappings.
+func (v *validator) list(m map[string]any, key, where string) []map[string]any {
+	value, ok := m[key]
+	if !ok || value == nil {
+		return nil
 	}
-
-	// Validate contents section if present (array of folder entries)
-	if contents, ok := staging["contents"].([]any); ok {
-		for i, itemRaw := range contents {
-			if item, ok := itemRaw.(map[string]any); ok {
-				for key := range item {
-					if !knownStagingFolderKeys[key] {
-						errors = append(errors, fmt.Sprintf("Unknown key 'staging.contents[%d].%s'. Valid keys: folder, targets, artifacts, files, contents", i, key))
-					}
-				}
-			}
-		}
+	items, ok := value.([]any)
+	if !ok {
+		v.add("'%s' must be a list", join(where, key))
+		return nil
 	}
-
-	return errors
-}
-
-// Known install keys
-var knownInstallKeys = map[string]bool{
-	"name": true, "staging": true, "destination": true, "format": true,
-	"follow_symlinks": true, "filename": true,
-}
-
-// validateInstall validates the install section
-func (yp *YAMLParser) validateInstall(install []any) []string {
-	errors := []string{}
-
-	for i, itemRaw := range install {
-		item, ok := itemRaw.(map[string]any)
+	var result []map[string]any
+	for i, item := range items {
+		mapping, ok := item.(map[string]any)
 		if !ok {
-			errors = append(errors, fmt.Sprintf("install[%d] must be a map", i))
+			v.add("%s[%d] must be a mapping", join(where, key), i)
 			continue
 		}
-
-		for key := range item {
-			if !knownInstallKeys[key] {
-				errors = append(errors, fmt.Sprintf("Unknown key 'install[%d].%s'. Valid keys: name, staging, destination, format, follow_symlinks, filename", i, key))
-			}
-		}
-
-		// Validate required fields
-		if _, ok := item["name"]; !ok {
-			errors = append(errors, fmt.Sprintf("install[%d] missing required 'name' field", i))
-		}
+		result = append(result, mapping)
 	}
-
-	return errors
+	return result
 }
 
-// validateDependencies validates the dependencies section
-// In the new format, each top-level key is a dependency name, so we validate the sections within
-func (yp *YAMLParser) validateDependencies(deps map[string]any) []string {
-	errors := []string{}
-
-	for depName, depData := range deps {
-		depMap, ok := depData.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		for key := range depMap {
-			if !knownDependencySectionKeys[key] {
-				// Check if it's a platform-arch combo (e.g., linux-x86_64)
-				if !isPlatformArchKey(key) {
-					errors = append(errors, fmt.Sprintf("Unknown key '%s.%s'. Did you mean one of: %s?",
-						depName, key, yp.suggestKey(key, knownDependencySectionKeys)))
-				}
-			}
+func (v *validator) optionalString(m map[string]any, key, where string) {
+	if value, ok := m[key]; ok && value != nil {
+		if _, ok := value.(string); !ok {
+			v.add("'%s' must be a string", join(where, key))
 		}
 	}
-
-	return errors
 }
 
-// isPlatformArchKey checks if a key is a platform-architecture combination
-func isPlatformArchKey(key string) bool {
-	platforms := []string{"linux", "windows", "macos", "darwin", "android", "ios"}
-	archs := []string{"x86_64", "arm64", "x86", "arm", "aarch64"}
-
-	for _, p := range platforms {
-		for _, a := range archs {
-			if key == p+"-"+a {
-				return true
-			}
+func (v *validator) required(m map[string]any, where string, fields ...string) {
+	for _, field := range fields {
+		if value, ok := m[field]; !ok || value == nil {
+			v.add("%s is missing required '%s'", where, field)
 		}
 	}
-	return false
 }
 
-// validateLegacyTargetSection validates legacy library/executable sections
-func (yp *YAMLParser) validateLegacyTargetSection(section any, sectionName string, knownKeys map[string]bool) []string {
-	errors := []string{}
+// target checks a target: C and C++ targets list sources; Go and Rust targets name the path of
+// their package or crate.
+func (v *validator) target(target map[string]any, where string) {
+	name, _ := target["name"].(string)
+	if name == "" {
+		v.add("%s is missing required 'name'", where)
+	} else {
+		where = fmt.Sprintf("%s (%s)", where, name)
+	}
+	v.keys(target, where, knownTargetKeys)
 
-	var targets []any
-	switch v := section.(type) {
-	case map[string]any:
-		targets = []any{v}
-	case []any:
-		targets = v
-	default:
-		errors = append(errors, fmt.Sprintf("'%s' must be a dictionary or list of dictionaries", sectionName))
-		return errors
+	language, ok := target["language"].(string)
+	if !ok || language == "" {
+		v.add("%s is missing required 'language'", where)
+	}
+	switch language {
+	case "c", "cpp":
+		v.required(target, where, "sources")
+	case "go", "rust":
+		v.required(target, where, "path")
 	}
 
-	for i, targetRaw := range targets {
-		target, ok := targetRaw.(map[string]any)
-		if !ok {
-			errors = append(errors, fmt.Sprintf("%s[%d] must be a dictionary", sectionName, i))
-			continue
-		}
-
-		targetName := fmt.Sprintf("%s[%d]", sectionName, i)
-		if name, ok := target["name"].(string); ok {
-			targetName = fmt.Sprintf("%s '%s'", sectionName, name)
-		}
-
-		// Check for unknown keys
-		for key := range target {
-			if !knownKeys[key] {
-				errors = append(errors, fmt.Sprintf("Unknown key in %s: '%s'", targetName, key))
-			}
-		}
-
-		// Validate required fields
-		if _, ok := target["name"].(string); !ok {
-			errors = append(errors, fmt.Sprintf("%s missing required 'name' field", targetName))
-		}
-		if _, ok := target["sources"]; !ok {
-			errors = append(errors, fmt.Sprintf("%s missing required 'sources' field", targetName))
+	if dependsOn, ok := target["depends_on"]; ok {
+		switch d := dependsOn.(type) {
+		case map[string]any:
+			v.keys(d, where+".depends_on", knownDependsOnKeys)
+		case []any:
+		default:
+			v.add("%s.depends_on must be a mapping (targets, artifacts) or a list of targets", where)
 		}
 	}
-
-	return errors
+	if compile, ok := v.mapping(target, "compile", where); ok {
+		v.keys(compile, where+".compile", knownTargetCompileKey)
+	}
+	if link, ok := v.mapping(target, "link", where); ok {
+		v.keys(link, where+".link", knownTargetLinkKeys)
+	}
 }
 
-// suggestKey returns a comma-separated list of valid keys for error messages
-func (yp *YAMLParser) suggestKey(unknownKey string, knownKeys map[string]bool) string {
-	keys := make([]string, 0, len(knownKeys))
-	for k := range knownKeys {
-		keys = append(keys, k)
+// stagingContents checks the nested folder entries of a staging section.
+func (v *validator) stagingContents(m map[string]any, where string) {
+	for i, entry := range v.list(m, "contents", where) {
+		entryWhere := fmt.Sprintf("%s.contents[%d]", where, i)
+		v.keys(entry, entryWhere, knownStagingEntryKeys)
+		v.stagingContents(entry, entryWhere)
 	}
-	sort.Strings(keys)
-	
-	// Find closest match using simple prefix matching
-	for _, k := range keys {
-		if strings.HasPrefix(k, unknownKey[:min(3, len(unknownKey))]) {
-			return k + " (or see documentation for all options)"
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	result := make([]string, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// closestKey returns the known key within two edits of key, if there is one.
+func closestKey(key string, known keySet) string {
+	best, bestDistance := "", 3
+	for _, candidate := range sortedKeys(known) {
+		if d := editDistance(key, candidate); d < bestDistance {
+			best, bestDistance = candidate, d
 		}
 	}
-	
-	if len(keys) <= 5 {
-		return strings.Join(keys, ", ")
+	return best
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
 	}
-	return strings.Join(keys[:5], ", ") + "..."
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
 }
 
 // ExtractSection extracts a typed section from config
@@ -609,36 +390,4 @@ func (yp *YAMLParser) ExtractSection(config map[string]any, key string) map[stri
 		return section
 	}
 	return make(map[string]any)
-}
-
-// ExtractList extracts a list section from config
-func (yp *YAMLParser) ExtractList(config map[string]any, key string) []any {
-	if list, ok := config[key].([]any); ok {
-		return list
-	}
-	return []any{}
-}
-
-// MergeConfigs merges configuration sections (later configs override earlier ones)
-// Lists are concatenated, maps are merged recursively
-func (yp *YAMLParser) MergeConfigs(configs ...any) map[string]any {
-	merged := make(map[string]any)
-	for _, configRaw := range configs {
-		config, ok := configRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		for key, value := range config {
-			if valueList, ok := value.([]any); ok {
-				if existingList, ok := merged[key].([]any); ok {
-					merged[key] = append(existingList, valueList...)
-				} else {
-					merged[key] = value
-				}
-			} else {
-				merged[key] = value
-			}
-		}
-	}
-	return merged
 }

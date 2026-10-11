@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"buildy/pkg/util"
@@ -119,17 +120,24 @@ func NewDependencyResolver(platform, architecture, toolchain, configuration, cac
 	}
 }
 
-// LoadDependencies loads dependencies from the workspace
-func (dr *DependencyResolver) LoadDependencies(workspaceRoot string) error {
-	// Check for dependencies.yaml file
-	depsFile := filepath.Join(workspaceRoot, "buildy_config", "dependencies.yaml")
-	if _, err := os.Stat(depsFile); err == nil {
-		if err := dr.loadDependenciesFile(depsFile); err != nil {
-			return err
+// LoadDependencies loads the dependency definitions: file (dependencies.file in buildy.yaml, by
+// default buildy_config/dependencies.yaml) and every buildy_config/dependencies/*.yaml. A file
+// some dependency names as its build.override is a buildy config for building that dependency,
+// not a list of definitions, and is skipped. Every definition is validated.
+func (dr *DependencyResolver) LoadDependencies(workspaceRoot, file string) error {
+	var files []string
+	if file != "" {
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(workspaceRoot, file)
 		}
+		if _, err := os.Stat(file); err != nil {
+			return fmt.Errorf("dependencies.file: %w", err)
+		}
+		files = append(files, file)
+	} else if defaultFile := filepath.Join(workspaceRoot, "buildy_config", "dependencies.yaml"); fileExists(defaultFile) {
+		files = append(files, defaultFile)
 	}
 
-	// Check for dependencies/*.yaml directory
 	depsDir := filepath.Join(workspaceRoot, "buildy_config", "dependencies")
 	if info, err := os.Stat(depsDir); err == nil && info.IsDir() {
 		entries, err := os.ReadDir(depsDir)
@@ -138,45 +146,196 @@ func (dr *DependencyResolver) LoadDependencies(workspaceRoot string) error {
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".yaml") || strings.HasSuffix(entry.Name(), ".yml")) {
-				filePath := filepath.Join(depsDir, entry.Name())
-				if err := dr.loadDependenciesFile(filePath); err != nil {
-					return err
-				}
+				files = append(files, filepath.Join(depsDir, entry.Name()))
 			}
+		}
+	}
+
+	parsed := make(map[string]map[string]any, len(files))
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read dependencies file %s: %w", path, err)
+		}
+		var raw map[string]any
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("failed to parse dependencies file %s: %w", path, err)
+		}
+		parsed[path] = raw
+	}
+
+	// Override configs are named relative to buildy_config/dependencies/
+	overrides := map[string]bool{}
+	for _, raw := range parsed {
+		for _, depData := range raw {
+			for _, override := range buildOverrides(depData) {
+				overrides[filepath.Join(depsDir, override)] = true
+			}
+		}
+	}
+
+	definedIn := map[string]string{}
+	for _, path := range files {
+		if overrides[path] {
+			continue
+		}
+		if err := dr.loadDependenciesFile(path, parsed[path], definedIn); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// loadDependenciesFile loads dependencies from a single YAML file
-func (dr *DependencyResolver) loadDependenciesFile(filePath string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read dependencies file %s: %w", filePath, err)
-	}
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
-	var rawConfig map[string]any
-	if err := yaml.Unmarshal(data, &rawConfig); err != nil {
-		return fmt.Errorf("failed to parse dependencies file %s: %w", filePath, err)
+// buildOverrides returns the build.override files a dependency definition names, in any section.
+func buildOverrides(depData any) []string {
+	dep, ok := depData.(map[string]any)
+	if !ok {
+		return nil
 	}
+	var overrides []string
+	sections := []map[string]any{dep}
+	for _, value := range dep {
+		if section, ok := value.(map[string]any); ok {
+			sections = append(sections, section)
+		}
+	}
+	for _, section := range sections {
+		if build, ok := section["build"].(map[string]any); ok {
+			if override, ok := build["override"].(string); ok && override != "" {
+				overrides = append(overrides, override)
+			}
+		}
+	}
+	return overrides
+}
+
+// loadDependenciesFile validates and registers the dependencies defined in one file
+func (dr *DependencyResolver) loadDependenciesFile(filePath string, rawConfig map[string]any, definedIn map[string]string) error {
+	names := make([]string, 0, len(rawConfig))
+	for name := range rawConfig {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 
 	// Each top-level key is a dependency name
-	for depName, depData := range rawConfig {
-		depMap, ok := depData.(map[string]any)
+	for _, depName := range names {
+		depMap, ok := rawConfig[depName].(map[string]any)
 		if !ok {
-			continue
+			return fmt.Errorf("%s: dependency '%s' must be a mapping", filePath, depName)
 		}
+		if problems := validateDependency(depMap); len(problems) > 0 {
+			return fmt.Errorf("%s: dependency '%s' is not valid:\n  - %s", filePath, depName, strings.Join(problems, "\n  - "))
+		}
+		if other, ok := definedIn[depName]; ok {
+			return fmt.Errorf("dependency '%s' is defined in both %s and %s", depName, other, filePath)
+		}
+		definedIn[depName] = filePath
 
 		config, err := dr.parseDependencyConfig(depName, depMap)
 		if err != nil {
-			return fmt.Errorf("failed to parse dependency '%s': %w", depName, err)
+			return fmt.Errorf("%s: dependency '%s': %w", filePath, depName, err)
 		}
 
 		dr.configs[depName] = config
 	}
 
 	return nil
+}
+
+// The keys a dependency definition may have: metadata, platform sections, and the fields a
+// section holds (directly, when there are no sections).
+var (
+	dependencyMetadataKeys = map[string]bool{"description": true, "version": true}
+	dependencyFieldKeys    = map[string]bool{
+		"git": true, "url": true, "ref": true, "checksum": true, "extract": true,
+		"pkg_config": true, "root": true,
+		"include_dirs": true, "lib_dirs": true, "libs": true, "frameworks": true, "defines": true,
+		"build": true, "execution": true,
+	}
+	dependencyBuildKeys = map[string]bool{"system": true, "override": true, "args": true}
+)
+
+// isDependencySection reports whether key names a platform section: common, a platform, or
+// platform-architecture.
+func isDependencySection(key string) bool {
+	platforms := []string{"common", "linux", "windows", "macos", "darwin", "android", "ios"}
+	archs := []string{"x86_64", "arm64", "x86", "arm", "aarch64"}
+	for _, p := range platforms {
+		if key == p {
+			return true
+		}
+		for _, a := range archs {
+			if key == p+"-"+a {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// validateDependency checks one dependency definition against the schema.
+func validateDependency(dep map[string]any) []string {
+	var problems []string
+	checkFields := func(section map[string]any, where string) {
+		for _, key := range sortedMapKeys(section) {
+			if !dependencyFieldKeys[key] {
+				problems = append(problems, fmt.Sprintf("unknown key '%s%s'", where, key))
+			}
+		}
+		if build, ok := section["build"]; ok {
+			buildMap, ok := build.(map[string]any)
+			if !ok {
+				problems = append(problems, fmt.Sprintf("'%sbuild' must be a mapping", where))
+			}
+			for _, key := range sortedMapKeys(buildMap) {
+				if !dependencyBuildKeys[key] {
+					problems = append(problems, fmt.Sprintf("unknown key '%sbuild.%s' (expected system, override, args)", where, key))
+				}
+			}
+		}
+		if execution, ok := section["execution"]; ok {
+			execMap, ok := execution.(map[string]any)
+			if !ok {
+				problems = append(problems, fmt.Sprintf("'%sexecution' must be a mapping", where))
+			} else if _, err := execSpecFromMap(execMap); err != nil {
+				problems = append(problems, fmt.Sprintf("%s%v", where, err))
+			}
+		}
+	}
+
+	direct := map[string]any{}
+	for _, key := range sortedMapKeys(dep) {
+		value := dep[key]
+		switch {
+		case dependencyMetadataKeys[key]:
+		case isDependencySection(key):
+			section, ok := value.(map[string]any)
+			if !ok {
+				problems = append(problems, fmt.Sprintf("section '%s' must be a mapping", key))
+				continue
+			}
+			checkFields(section, key+".")
+		default:
+			direct[key] = value
+		}
+	}
+	checkFields(direct, "")
+	return problems
+}
+
+func sortedMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // parseDependencyConfig parses a single dependency configuration
@@ -616,8 +775,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 	if buildSystemName == "auto" || buildSystemName == "" {
 		bsConfig = dr.buildSystemManager.Detect(dest)
 		if bsConfig == nil {
-			util.LogWarning("Could not detect build system for %s, skipping build", name)
-			return nil
+			return fmt.Errorf("could not detect the build system of %s in %s; set build.system", name, dest)
 		}
 		util.LogInfo("Auto-detected build system: %s for %s", bsConfig.Name, name)
 	} else {

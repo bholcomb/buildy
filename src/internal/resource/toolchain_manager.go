@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,8 +88,7 @@ func (tm *ToolchainManager) loadToolchains() error {
 		// Read all .yaml files
 		entries, err := os.ReadDir(toolchainsDir)
 		if err != nil {
-			util.LogWarning("Failed to read toolchains directory %s: %v", toolchainsDir, err)
-			continue
+			return fmt.Errorf("failed to read toolchains directory %s: %w", toolchainsDir, err)
 		}
 
 		for _, entry := range entries {
@@ -100,8 +100,7 @@ func (tm *ToolchainManager) loadToolchains() error {
 				tcFile := filepath.Join(toolchainsDir, entry.Name())
 				tc, err := LoadToolchainConfig(tcFile)
 				if err != nil {
-					util.LogInfo("ERROR: Failed to load toolchain %s: %v", tcFile, err)
-					continue
+					return fmt.Errorf("failed to load toolchain %s: %w", tcFile, err)
 				}
 
 				if _, exists := tm.toolchains[tc.Name]; exists {

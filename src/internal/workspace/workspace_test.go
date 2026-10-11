@@ -1,9 +1,16 @@
 package workspace
 
 import (
+	"io/fs"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"buildy/internal/resource"
+	"buildy/pkg/util"
+
+	"gopkg.in/yaml.v3"
 )
 
 // moduleNames loads the workspace at root for ctx and returns its module paths.
@@ -128,6 +135,130 @@ func TestModuleListErrors(t *testing.T) {
 		}
 		if _, err := ws.DiscoverModules(linuxDebug()); err == nil {
 			t.Errorf("modules: %s was accepted", modules)
+		}
+	}
+}
+
+// repoRoot is the buildy repository, which holds examples/ and buildy's own buildy.yaml.
+const repoRoot = "../../.."
+
+// The configs that ship with buildy pass the strict loader: the examples (their root configs,
+// modules, and dependency override configs) and buildy's own buildy.yaml.
+func TestShippedConfigsValidate(t *testing.T) {
+	var configs []string
+	err := filepath.WalkDir(filepath.Join(repoRoot, "examples"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == "build" || d.Name() == ".buildy_cache") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".yaml") && !strings.Contains(filepath.ToSlash(path), "/buildy_config/") {
+			configs = append(configs, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides, _ := filepath.Glob(filepath.Join(repoRoot, "examples", "*", "buildy_config", "dependencies", "*_build.yaml"))
+	configs = append(configs, overrides...)
+	configs = append(configs, filepath.Join(repoRoot, "buildy.yaml"))
+	if len(configs) < 5 {
+		t.Fatalf("found only %v", configs)
+	}
+
+	for _, path := range configs {
+		root := filepath.Base(filepath.Dir(path)) == "examples" || filepath.Dir(path) == repoRoot ||
+			filepath.Base(filepath.Dir(filepath.Dir(path))) == "examples" || strings.HasSuffix(path, "_build.yaml")
+		if _, err := loadConfigFile(path, root); err != nil {
+			t.Errorf("%v", err)
+		}
+	}
+
+	// The examples' dependency definitions
+	examples, _ := filepath.Glob(filepath.Join(repoRoot, "examples", "*"))
+	for _, example := range examples {
+		deps := resource.NewDependencyResolver("linux", "x86_64", "", "debug", t.TempDir(), example, util.NewVariableEnvironment(nil))
+		if err := deps.LoadDependencies(example, ""); err != nil {
+			t.Errorf("%s: %v", example, err)
+		}
+	}
+}
+
+// Finding 11: an unknown key, at the top level or in a target, fails the load naming the key and
+// the file.
+func TestUnknownKeysFailToLoad(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: ws}\nbogus_key: 1\n",
+	})
+	_, err := NewWorkspace(root)
+	if err == nil || !strings.Contains(err.Error(), "bogus_key") || !strings.Contains(err.Error(), filepath.Join(root, "buildy.yaml")) {
+		t.Fatalf("got %v", err)
+	}
+
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":     "project: {name: ws}\nworkspace:\n  modules: [app]\n",
+		"app/buildy.yaml": "targets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp], defnies: [X=1]}\n",
+	})
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ws.DiscoverModules(linuxDebug())
+	if err == nil || !strings.Contains(err.Error(), "defnies") || !strings.Contains(err.Error(), "did you mean 'defines'") ||
+		!strings.Contains(err.Error(), filepath.Join(root, "app", "buildy.yaml")) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// The schema matches what the generator reads: Go and Rust targets have a path, not sources.
+func TestSchemaAcceptsWhatTheGeneratorReads(t *testing.T) {
+	config := map[string]any{}
+	if err := yaml.Unmarshal([]byte(`
+project: {name: ok, toolchain: gcc-cpp-linux}
+toolchain: gcc-cpp-linux
+architectures: {x86_64: {defines: [X64]}}
+configurations: {debug: {defines: [DBG]}}
+environment:
+  link: {flags: [-pthread]}
+targets:
+  executables:
+    - {name: goapp, language: go, path: cmd/app, ldflags: [-s], gcflags: "-N", buildmode: pie}
+    - {name: rustapp, language: rust, path: app, features: [a], bin: other}
+    - name: cppapp
+      language: cpp
+      sources: [main.cpp]
+      lib_dirs: [lib]
+      frameworks: [Cocoa]
+      output_prefix: ""
+      remove_flags: [-O2]
+      remove_defines: [X]
+      compile: {flags: [-g], remove_flags: [-O0], defines: [Y]}
+      link: {flags: [-s], remove_flags: [-g]}
+  static_libraries:
+    - {name: rustlib, language: rust, path: lib}
+`), &config); err != nil {
+		t.Fatal(err)
+	}
+	if problems := NewYAMLParser().ValidateConfig(config, true); len(problems) > 0 {
+		t.Errorf("rejected: %v", problems)
+	}
+
+	for _, bad := range []string{
+		"project: {name: x}\ntargets:\n  executables:\n    - {name: a, language: cpp}\n",
+		"project: {name: x}\ntargets:\n  executables:\n    - {name: a, language: go}\n",
+		"project: {name: x}\nlibrary: {name: a}\n",
+		"project: {name: x}\nenvironment:\n  dependency_builds: {}\n",
+		"targets: {}\n",
+	} {
+		config := map[string]any{}
+		if err := yaml.Unmarshal([]byte(bad), &config); err != nil {
+			t.Fatal(err)
+		}
+		if problems := NewYAMLParser().ValidateConfig(config, true); len(problems) == 0 {
+			t.Errorf("accepted:\n%s", bad)
 		}
 	}
 }

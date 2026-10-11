@@ -52,6 +52,7 @@ type TaskGenerator struct {
 	artifactTaskIDs    map[string][]string // artifact name -> task IDs
 	outputToTaskID     map[string]string   // output file path -> task ID
 	stagingTasksByName map[string][]string // staging name -> task IDs
+	stagingDestByName  map[string]string   // staging name -> destination directory
 }
 
 // NewTaskGenerator creates a new TaskGenerator
@@ -77,6 +78,7 @@ func NewTaskGenerator(
 		artifactTaskIDs:    make(map[string][]string),
 		outputToTaskID:     make(map[string]string),
 		stagingTasksByName: make(map[string][]string),
+		stagingDestByName:  make(map[string]string),
 	}
 }
 
@@ -750,15 +752,13 @@ func (tg *TaskGenerator) generateTransformTasks(
 		}
 
 		if toolName == "" || len(inputPatterns) == 0 || outputPattern == "" {
-			util.LogWarning("artifacts.transform item '%s' missing required fields (tool, inputs, outputs)", name)
-			continue
+			return nil, fmt.Errorf("artifacts.transform '%s' in module %s needs tool, inputs and outputs", name, tg.moduleName())
 		}
 
 		// Look up the toolchain by name
 		toolchain := tg.ToolchainManager.GetToolchain(toolName)
 		if toolchain == nil {
-			util.LogWarning("artifacts.transform '%s': toolchain '%s' not found", name, toolName)
-			continue
+			return nil, fmt.Errorf("artifacts.transform '%s' in module %s: %w", name, tg.moduleName(), unknownToolchain(toolName, "tool"))
 		}
 		execSpec, err := resource.ExecSpecFromToolchain(toolchain)
 		if err != nil {
@@ -774,8 +774,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 			}
 		}
 		if tool == nil {
-			util.LogWarning("artifacts.transform '%s': no transform/convert/compile tool found in toolchain '%s'", name, toolName)
-			continue
+			return nil, fmt.Errorf("artifacts.transform '%s' in module %s: toolchain '%s' has no transform, convert or compile tool", name, tg.moduleName(), toolName)
 		}
 
 		// Collect all input files from all input patterns
@@ -789,16 +788,14 @@ func (tg *TaskGenerator) generateTransformTasks(
 			// Expand glob pattern to get input files
 			inputFiles, err := filepath.Glob(inputPattern)
 			if err != nil {
-				util.LogWarning("artifacts.transform '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
-				continue
+				return nil, fmt.Errorf("artifacts.transform '%s' in module %s: invalid glob pattern '%s': %w", name, tg.moduleName(), inputPattern, err)
 			}
 
 			allInputFiles = append(allInputFiles, inputFiles...)
 		}
 
 		if len(allInputFiles) == 0 {
-			util.LogWarning("artifacts.transform '%s': no files matched any input patterns", name)
-			continue
+			return nil, fmt.Errorf("artifacts.transform '%s' in module %s: no files match its inputs %v, so it has no outputs", name, tg.moduleName(), inputPatterns)
 		}
 
 		var artifactOutputPaths []string
@@ -952,8 +949,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			}
 
 			if outputPath == "" {
-				util.LogWarning("artifacts.generate '%s' missing 'output' field", name)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s needs 'output'", name, tg.moduleName())
 			}
 
 			// Resolve template path (use module directory)
@@ -1081,15 +1077,13 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			}
 
 			if inputPattern == "" || len(outputPatterns) == 0 {
-				util.LogWarning("artifacts.generate '%s' with tool '%s' missing inputs or outputs", name, toolName)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s needs inputs and outputs", name, tg.moduleName())
 			}
 
 			// Look up the toolchain
 			toolchain := tg.ToolchainManager.GetToolchain(toolName)
 			if toolchain == nil {
-				util.LogWarning("artifacts.generate '%s': toolchain '%s' not found", name, toolName)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s: %w", name, tg.moduleName(), unknownToolchain(toolName, "tool"))
 			}
 			execSpec, err := resource.ExecSpecFromToolchain(toolchain)
 			if err != nil {
@@ -1105,8 +1099,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				}
 			}
 			if tool == nil {
-				util.LogWarning("artifacts.generate '%s': no generate/compile tool found in toolchain '%s'", name, toolName)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s: toolchain '%s' has no generate or compile tool", name, tg.moduleName(), toolName)
 			}
 
 			// Resolve input pattern (use module directory)
@@ -1117,13 +1110,11 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			// Expand glob pattern
 			inputFiles, err := filepath.Glob(inputPattern)
 			if err != nil {
-				util.LogWarning("artifacts.generate '%s': invalid glob pattern '%s': %v", name, inputPattern, err)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s: invalid glob pattern '%s': %w", name, tg.moduleName(), inputPattern, err)
 			}
 
 			if len(inputFiles) == 0 {
-				util.LogWarning("artifacts.generate '%s': no files matched pattern '%s'", name, inputPattern)
-				continue
+				return nil, fmt.Errorf("artifacts.generate '%s' in module %s: no files match its inputs '%s', so it has no outputs", name, tg.moduleName(), inputPattern)
 			}
 
 			var artifactOutputPaths []string
@@ -1339,6 +1330,7 @@ func (tg *TaskGenerator) generateStagingTasks(
 
 	// Register staging tasks for install dependencies
 	tg.stagingTasksByName[stagingName] = stagingTaskIDs
+	tg.stagingDestByName[stagingName] = destination
 	util.LogInfo("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
 
 	return tasks, nil
@@ -1420,11 +1412,11 @@ func (tg *TaskGenerator) processStagingContents(
 					useSymlink = false
 				}
 
-				// Look up the target - try to determine if it's an executable or library
-				task := tg.createTargetStagingTask(targetName, folderPath, useSymlink, isWindows, outputDir)
-				if task != nil {
-					tasks = append(tasks, task)
+				task, err := tg.createTargetStagingTask(targetName, folderPath, useSymlink, isWindows)
+				if err != nil {
+					return nil, err
 				}
+				tasks = append(tasks, task)
 			}
 		}
 
@@ -1458,8 +1450,7 @@ func (tg *TaskGenerator) processStagingContents(
 				outputs := tg.artifactOutputs[artifactName]
 				taskIDs := tg.artifactTaskIDs[artifactName]
 				if len(outputs) == 0 {
-					util.LogWarning("artifact '%s' has no outputs for staging", artifactName)
-					continue
+					return nil, fmt.Errorf("staging folder '%s': artifact '%s' is not an artifact of module %s with outputs", folderName, artifactName, tg.moduleName())
 				}
 
 				for i, sourcePath := range outputs {
@@ -1513,8 +1504,7 @@ func (tg *TaskGenerator) processStagingContents(
 				if strings.Contains(sourcePattern, "*") {
 					matches, err := filepath.Glob(sourcePattern)
 					if err != nil {
-						util.LogWarning("invalid glob pattern '%s': %v", sourcePattern, err)
-						continue
+						return nil, fmt.Errorf("staging folder '%s': invalid glob pattern '%s': %w", folderName, sourcePattern, err)
 					}
 
 					for _, match := range matches {
@@ -1577,14 +1567,13 @@ func (tg *TaskGenerator) processStagingContents(
 	return tasks, nil
 }
 
-// createTargetStagingTask creates a staging task for a target (auto-detects executable vs library)
+// createTargetStagingTask creates a staging task copying (or linking) a target's output
 func (tg *TaskGenerator) createTargetStagingTask(
 	targetName string,
 	destFolder string,
 	useSymlink bool,
 	isWindows bool,
-	outputDir string,
-) *BuildTask {
+) (*BuildTask, error) {
 	// Look up the target's task ID - first try local generatedTargets, then global registry
 	taskID, found := tg.generatedTargets[targetName]
 	if !found {
@@ -1592,70 +1581,15 @@ func (tg *TaskGenerator) createTargetStagingTask(
 		taskID, found = globalTaskRegistry.GetLinkTaskID(targetName)
 	}
 	if !found {
-		util.LogWarning("staging target '%s' not found in generated targets or global registry", targetName)
-		return nil
+		return nil, fmt.Errorf("staging folder %s in module %s: '%s' is not a target of the workspace", destFolder, tg.moduleName(), targetName)
 	}
-
-	// First, try to get the registered output path from the registry
-	var sourcePath string
-	if registeredOutput, ok := globalTaskRegistry.GetTargetOutputPath(targetName); ok && registeredOutput != "" {
-		sourcePath = registeredOutput
-		util.LogInfo("Using registered output path for target '%s': %s", targetName, sourcePath)
-	} else {
-		// Fallback: Try to find the output file by checking multiple locations
-		possiblePaths := []string{
-			// Executable paths
-			filepath.Join(outputDir, "bin", targetName),
-			filepath.Join(outputDir, "bin", targetName+".exe"),
-			// Library paths (with lib prefix)
-			filepath.Join(outputDir, "lib", "lib"+targetName+".so"),
-			filepath.Join(outputDir, "lib", "lib"+targetName+".a"),
-			filepath.Join(outputDir, "lib", "lib"+targetName+".dylib"),
-			// Library paths (without lib prefix)
-			filepath.Join(outputDir, "lib", targetName+".so"),
-			filepath.Join(outputDir, "lib", targetName+".a"),
-			filepath.Join(outputDir, "lib", targetName+".dylib"),
-			// Windows library paths
-			filepath.Join(outputDir, "lib", targetName+".dll"),
-			filepath.Join(outputDir, "lib", targetName+".lib"),
-		}
-
-		for _, p := range possiblePaths {
-			// For now, construct based on platform conventions
-			// The actual file may not exist yet at task generation time
-			if isWindows {
-				if strings.HasSuffix(p, ".exe") || strings.HasSuffix(p, ".dll") || strings.HasSuffix(p, ".lib") {
-					sourcePath = p
-					break
-				}
-			} else if strings.Contains(tg.Platform, "darwin") || strings.Contains(tg.Platform, "macos") {
-				if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") {
-					if strings.HasSuffix(p, ".dylib") || !strings.Contains(p, ".") || strings.HasSuffix(p, ".a") {
-						sourcePath = p
-						break
-					}
-				}
-			} else {
-				// Linux
-				if !strings.HasSuffix(p, ".exe") && !strings.HasSuffix(p, ".dll") && !strings.HasSuffix(p, ".lib") && !strings.HasSuffix(p, ".dylib") {
-					sourcePath = p
-					break
-				}
-			}
-		}
-
-		if sourcePath == "" {
-			// Default fallback - assume executable
-			if isWindows {
-				sourcePath = filepath.Join(outputDir, "bin", targetName+".exe")
-			} else {
-				sourcePath = filepath.Join(outputDir, "bin", targetName)
-			}
-		}
+	sourcePath, ok := globalTaskRegistry.GetTargetOutputPath(targetName)
+	if !ok || sourcePath == "" {
+		return nil, fmt.Errorf("staging folder %s in module %s: target '%s' has no output", destFolder, tg.moduleName(), targetName)
 	}
 
 	destPath := filepath.Join(destFolder, filepath.Base(sourcePath))
-	return tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, []string{taskID})
+	return tg.createSymlinkOrCopyTask(sourcePath, destPath, useSymlink, isWindows, []string{taskID}), nil
 }
 
 // createSymlinkOrCopyTask creates a task that either symlinks or copies a file
@@ -1789,11 +1723,15 @@ func (tg *TaskGenerator) generateInstallTasks(
 			filename = resolved
 		}
 
-		// Get staging directory path
-		stagingDir := filepath.Join(outputDir, "staging")
-		if stagingName != "" {
-			// Look up staging destination from config (we'd need to track this, for now use convention)
-			stagingDir = filepath.Join(outputDir, "staging")
+		// The install packages its staging area's destination (the module's only one if unnamed)
+		if stagingName == "" && len(tg.stagingDestByName) == 1 {
+			for only := range tg.stagingDestByName {
+				stagingName = only
+			}
+		}
+		stagingDir, ok := tg.stagingDestByName[stagingName]
+		if !ok {
+			return nil, fmt.Errorf("install '%s' in module %s: staging '%s' is not a staging section of the module", name, tg.moduleName(), stagingName)
 		}
 
 		// Determine output file extension
@@ -1938,15 +1876,14 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 				dest = d
 			}
 
-			if len(sourcePatterns) == 0 || dest == "" {
-				util.LogWarning("artifacts.copy batch item missing sources or destination")
-				continue
-			}
-
 			// Get artifact name for registration
 			artifactName := ""
 			if n, ok := copyItem["name"].(string); ok {
 				artifactName = n
+			}
+
+			if len(sourcePatterns) == 0 || dest == "" {
+				return nil, fmt.Errorf("artifacts.copy '%s' in module %s needs sources and destination", artifactName, tg.moduleName())
 			}
 
 			// Create a child VarEnv for this copy batch with output_dir set
@@ -1985,8 +1922,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 				// Expand glob pattern
 				files, err := filepath.Glob(pattern)
 				if err != nil {
-					util.LogWarning("artifacts.copy '%s': invalid glob pattern '%s': %v", artifactName, pattern, err)
-					continue
+					return nil, fmt.Errorf("artifacts.copy '%s' in module %s: invalid glob pattern '%s': %w", artifactName, tg.moduleName(), pattern, err)
 				}
 
 				// Create a copy task for each file
@@ -2048,8 +1984,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 				source = outputPath
 				util.LogInfo("Resolved target '%s' to output path: %s", targetName, source)
 			} else {
-				util.LogWarning("artifacts.copy target '%s' not found in registry or has no output path", targetName)
-				continue
+				return nil, fmt.Errorf("artifacts.copy in module %s: target '%s' is not a target of the workspace", tg.moduleName(), targetName)
 			}
 			// Auto-add dependency on the target's link task
 			if taskID, found := globalTaskRegistry.GetLinkTaskID(targetName); found {
@@ -2069,8 +2004,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		}
 
 		if source == "" || dest == "" {
-			util.LogWarning("artifacts.copy item missing source/target or dest/destination")
-			continue
+			return nil, fmt.Errorf("artifacts.copy in module %s: an item needs source or target, and destination", tg.moduleName())
 		}
 
 		// Create a child VarEnv for this copy task
@@ -2110,7 +2044,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 						dependencies = append(dependencies, taskID)
 						util.LogInfo("Resolved dependency '%s' -> task '%s' (from registry)", depStr, taskID)
 					} else {
-						util.LogWarning("artifacts.copy dependency '%s' not found", depStr)
+						return nil, fmt.Errorf("artifacts.copy in module %s depends on '%s', which is not a target of the workspace", tg.moduleName(), depStr)
 					}
 				}
 			}

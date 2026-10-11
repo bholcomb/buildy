@@ -47,13 +47,6 @@ environment:
     windows: msvc-cpp-windows
     macos: clang-cpp-macos
 
-  dependency_builds:
-    execution:
-      type: docker
-      image: "gcc:13"
-      user: "${UID}:${GID}"
-    default_phases: [configure, build, install]
-
   compile:
     cpp_standard: "c++17"
     warnings: extra
@@ -112,19 +105,8 @@ environment:
 
 Uses the Docker-based C++ toolchain for project builds.
 
-**Global Docker execution for dependencies:**
-
-```yaml
-environment:
-  dependency_builds:
-    execution:
-      type: docker
-      image: "gcc:13"
-      user: "${UID}:${GID}"
-    default_phases: [configure, build, install]
-```
-
-All fetched dependencies build in Docker by default.
+**Docker execution for a dependency:** each fetched dependency that should build in Docker says
+so in its own `execution` section (Step 2).
 
 ## Step 2: Fetch Dependencies
 
@@ -254,22 +236,9 @@ For CMake, these become `-D` flags. For other build systems, they're passed appr
 
 ## Step 4: Docker Execution
 
-### Global Default
+### Per-Dependency Execution
 
-Set a default Docker environment for all dependency builds:
-
-```yaml
-environment:
-  dependency_builds:
-    execution:
-      type: docker
-      image: "gcc:13"
-      user: "${UID}:${GID}"
-```
-
-### Per-Dependency Override
-
-Override for specific dependencies:
+A dependency builds in Docker when its definition has an `execution` section:
 
 ```yaml
 fetch:
@@ -375,9 +344,6 @@ environment:
   toolchains:
     default: gcc-cpp-linux
 
-  dependency_builds:
-    execution:
-      type: native
 ```
 
 ### Docker Toolchains
@@ -495,7 +461,7 @@ fetch:
 - **URL dependencies**: Use `url:` with `checksum:` for verification
 - **Header-only**: Set `type: header_only` to skip building
 - **Build systems**: Buildy auto-detects or specify explicitly
-- **Docker execution**: Configure at global or per-dependency level
+- **Docker execution**: Configure per dependency, or use a Docker toolchain for the project
 - **Lockfiles**: Use `--update-lock` for reproducibility
 
 ## Next Steps

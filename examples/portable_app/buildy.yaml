@@ -15,16 +15,6 @@ environment:
     windows: msvc-cpp-windows
     macos: clang-cpp-macos
 
-  dependency_builds:
-    execution:
-      type: docker
-      image: "gcc:13"
-      volumes:
-        - "${PWD}:/workspace"
-      working_dir: "/workspace"
-      user: "${UID}:${GID}"
-    default_phases: [configure, build, install]
-
   compile:
     cpp_standard: "c++17"
     warnings: extra

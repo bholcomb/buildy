@@ -158,3 +158,57 @@ staging:
 		t.Errorf("got %d staging copies, want 1", len(staged))
 	}
 }
+
+// S12: configuration errors found while generating stop the build instead of being skipped with
+// a warning.
+func TestGenerationConfigErrors(t *testing.T) {
+	cases := map[string]struct {
+		config string
+		files  map[string]string
+		want   string
+	}{
+		"transform with an unknown toolchain": {
+			config: "artifacts:\n  transform:\n    - {name: shaders, tool: nosuch, inputs: \"*.vert\", outputs: \"${output_dir}/${basename}.spv\"}\n",
+			files:  map[string]string{"a.vert": ""},
+			want:   "toolchain 'nosuch'",
+		},
+		"transform whose inputs match nothing": {
+			config: "artifacts:\n  transform:\n    - {name: shaders, tool: glslc, inputs: \"*.vert\", outputs: \"${output_dir}/${basename}.spv\"}\n",
+			want:   "no files match",
+		},
+		"staging an unknown target": {
+			config: "staging:\n  contents:\n    - {folder: bin, targets: [nosuch]}\n",
+			want:   "'nosuch' is not a target",
+		},
+		"staging an unknown artifact": {
+			config: "staging:\n  contents:\n    - {folder: data, artifacts: [nosuch]}\n",
+			want:   "artifact 'nosuch'",
+		},
+		"install of an unknown staging area": {
+			config: "staging:\n  name: one\n  contents: []\ninstall:\n  - {name: pkg, staging: two}\n",
+			want:   "staging 'two'",
+		},
+		"copy of an unknown target": {
+			config: "artifacts:\n  copy:\n    - {target: nosuch, destination: out}\n",
+			want:   "target 'nosuch'",
+		},
+		"unknown environment toolchain": {
+			config: "environment:\n  toolchains: {default: nosuch}\n",
+			want:   "toolchain 'nosuch' (from environment.toolchains.default)",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			files := map[string]string{"buildy.yaml": "project: {name: c}\n" + tc.config}
+			for k, v := range tc.files {
+				files[k] = v
+			}
+			writeFiles(t, root, files)
+			_, err := generateTasks(t, root)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
