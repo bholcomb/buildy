@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -243,7 +244,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 		defer te.ShutdownManager.TaskDone()
 	}
 
-	runErr := te.run(task)
+	output, runErr := te.run(task)
 	executionTime := time.Since(startTime).Seconds()
 
 	// Remove from pending outputs tracking
@@ -263,7 +264,12 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 		return te.fail(task, executionTime, runErr)
 	}
 
-	util.LogProgress("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
+	// What the command printed (warnings), in one message: it stays together under -j
+	message := fmt.Sprintf("[%d/%d] %s (%.1fs) - completed", task.TaskNumber, te.totalTaskCount, task.TaskID, executionTime)
+	if output != "" {
+		message += ", with output:\n" + indent(output)
+	}
+	util.LogProgress("%s", message)
 	te.mu.Lock()
 	te.ExecutionStats.CacheMisses++
 	if te.BuildResult != nil {
@@ -338,10 +344,11 @@ func checkOutputs(task *workspace.BuildTask) error {
 	return nil
 }
 
-// run executes the task's work: its native operation, or its command.
-func (te *TaskExecutor) run(task *workspace.BuildTask) error {
+// run executes the task's work: its native operation, or its command. It returns what the command
+// printed; when the command fails, the error has its command line and output.
+func (te *TaskExecutor) run(task *workspace.BuildTask) (string, error) {
 	if task.Native != nil {
-		return runNative(task)
+		return "", runNative(task)
 	}
 
 	// Arguments over the host's limits go in a response file, in the cache directory (which a
@@ -349,25 +356,32 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 	env := append(os.Environ(), util.EnvList(task.Exec.Env)...)
 	command, remove, err := withResponseFile(task.Command, env, te.responseFilePath(task))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer remove()
 
 	// Natively or in Docker, as the task's toolchain says; in its directory, else the workspace root
 	result, err := te.runCommand(task.Exec, command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if result.ReturnCode != 0 {
-		if result.Stderr != "" {
-			util.LogProgress("  stderr: %s", result.Stderr)
+		message := fmt.Sprintf("exit code %d\n    command: %s", result.ReturnCode, task.Command)
+		if result.Output != "" {
+			message += "\n" + indent(result.Output)
 		}
-		if result.Stdout != "" {
-			util.LogProgress("  stdout: %s", result.Stdout)
-		}
-		return fmt.Errorf("exit code %d", result.ReturnCode)
+		return "", errors.New(message)
 	}
-	return nil
+	return result.Output, nil
+}
+
+// indent indents every line of a command's output, to set it off from buildy's.
+func indent(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = "    " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // responseFilePath is where a task's response file goes, if it needs one.

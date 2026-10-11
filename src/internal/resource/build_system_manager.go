@@ -199,7 +199,7 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 		}
 
 		if result.ReturnCode != 0 {
-			return fmt.Errorf("phase '%s' failed with exit code %d: %s", phaseName, result.ReturnCode, result.Stderr)
+			return fmt.Errorf("phase '%s' failed with exit code %d:\n%s", phaseName, result.ReturnCode, result.Output)
 		}
 
 		util.LogInfo("Phase '%s' completed successfully", phaseName)

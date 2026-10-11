@@ -1,6 +1,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,11 +13,11 @@ import (
 	"time"
 )
 
-// ExecutionResult represents the result of command execution
+// ExecutionResult is how a command ended: its exit code, and what it wrote to its standard output
+// and error, in the order it wrote it (cl.exe writes diagnostics to stdout, gcc to stderr).
 type ExecutionResult struct {
 	ReturnCode int
-	Stdout     string
-	Stderr     string
+	Output     string
 }
 
 // ExecSpec says where a command runs: natively on the host, or in a Docker container. It comes
@@ -144,13 +145,13 @@ func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, tim
 		}
 	}
 
-	// Capture stdout and stderr separately (cl.exe writes diagnostics to stdout)
-	var stdoutBuf, stderrBuf strings.Builder
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	// One buffer for both streams: os/exec then writes them from one goroutine, in order
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 
 	err := cmd.Run()
-	result := &ExecutionResult{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
+	result := &ExecutionResult{Output: output.String()}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
 			result.ReturnCode = exitErr.ExitCode()

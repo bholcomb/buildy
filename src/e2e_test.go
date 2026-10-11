@@ -875,3 +875,53 @@ targets:
 		t.Errorf("an unchanged build ran tasks:\n%s", tail(out, 20))
 	}
 }
+
+// Finding 5.1: a compiler's warnings are shown at the default level, under the task that
+// produced them, each task's output in one piece under -j.
+func TestE2EWarningsAreShown(t *testing.T) {
+	needTools(t, "gcc")
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: the C cases run on Linux and macOS")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), `project:
+  name: warnings
+environment:
+  compile:
+    c_standard: c11
+    flags: [-Wall]
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: [a.c, b.c, main.c]
+`)
+	for _, name := range []string{"a", "b"} {
+		writeFile(t, filepath.Join(dir, name+".c"), fmt.Sprintf("int %s(void) { int unused_%s; return 0; }\n", name, name))
+	}
+	writeFile(t, filepath.Join(dir, "main.c"), "int main(void) { return 0; }\n")
+	out := mustBuildy(t, dir, "-j", "3")
+	for _, name := range []string{"a", "b"} {
+		// The task's completion line, then its indented output, which names the variable
+		lines := strings.Split(out, "\n")
+		found := false
+		for i, line := range lines {
+			if strings.Contains(line, fmt.Sprintf("_%s_c_", name)) && strings.HasSuffix(line, "with output:") {
+				for _, next := range lines[i+1:] {
+					if !strings.HasPrefix(next, "    ") {
+						break
+					}
+					if strings.Contains(next, "unused_"+name) {
+						found = true
+					}
+					if strings.Contains(next, "unused_") && !strings.Contains(next, "unused_"+name) {
+						t.Errorf("the output of %s.c has another file's warning: %s", name, next)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Errorf("the warning of %s.c isn't shown under its task:\n%s", name, out)
+		}
+	}
+}
