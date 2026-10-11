@@ -1167,6 +1167,9 @@ The staging section defines how to assemble build outputs into a product directo
 - Use **staging** (workspace root) for assembling a complete distribution package
 - Use **artifacts.copy** (in modules) for post-build deployment tasks like copying native libraries for interop
 
+Staging names targets and artifacts of any module: target and artifact names are unique across
+the workspace. A name that is neither is an error.
+
 Staging is useful for:
 - Testing the final product layout before packaging
 - Fast developer iteration with symlinks

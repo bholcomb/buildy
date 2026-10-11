@@ -671,6 +671,18 @@ func (tg *TaskGenerator) moduleName() string {
 	return tg.CurrentModule
 }
 
+// registerArtifact records a named artifact's outputs and the tasks that produce them, for the
+// module's targets and staging, and for staging in other modules. Artifact names are unique
+// across the workspace.
+func (tg *TaskGenerator) registerArtifact(name string, outputs, taskIDs []string) error {
+	if name == "" {
+		return nil
+	}
+	tg.artifactOutputs[name] = outputs
+	tg.artifactTaskIDs[name] = taskIDs
+	return globalTaskRegistry.RegisterArtifact(name, tg.moduleName(), outputs, taskIDs)
+}
+
 // GetArtifactOutputs returns the outputs for a named artifact
 func (tg *TaskGenerator) GetArtifactOutputs(name string) []string {
 	return tg.artifactOutputs[name]
@@ -895,8 +907,9 @@ func (tg *TaskGenerator) generateTransformTasks(
 
 		// Register artifact outputs and task IDs for staging
 		if name != "" {
-			tg.artifactOutputs[name] = artifactOutputPaths
-			tg.artifactTaskIDs[name] = artifactTaskIDList
+			if err := tg.registerArtifact(name, artifactOutputPaths, artifactTaskIDList); err != nil {
+				return nil, err
+			}
 			util.LogInfo("Registered artifact '%s' with %d outputs", name, len(artifactOutputPaths))
 		}
 	}
@@ -1041,8 +1054,9 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 			// Register artifact outputs and task IDs
 			if name != "" {
-				tg.artifactOutputs[name] = []string{outputPath}
-				tg.artifactTaskIDs[name] = []string{taskID}
+				if err := tg.registerArtifact(name, []string{outputPath}, []string{taskID}); err != nil {
+					return nil, err
+				}
 			}
 			// Register output path -> task ID mapping for dependency lookup
 			tg.outputToTaskID[outputPath] = taskID
@@ -1225,8 +1239,9 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 			// Register artifact outputs and task IDs
 			if name != "" {
-				tg.artifactOutputs[name] = artifactOutputPaths
-				tg.artifactTaskIDs[name] = artifactTaskIDList
+				if err := tg.registerArtifact(name, artifactOutputPaths, artifactTaskIDList); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1446,11 +1461,14 @@ func (tg *TaskGenerator) processStagingContents(
 					useSymlink = false
 				}
 
-				// Get artifact outputs and their producing task IDs
-				outputs := tg.artifactOutputs[artifactName]
-				taskIDs := tg.artifactTaskIDs[artifactName]
+				// Get artifact outputs and their producing task IDs: the module's own, or another
+				// module's (workspace-level staging assembles the artifacts of every module)
+				outputs, taskIDs := tg.artifactOutputs[artifactName], tg.artifactTaskIDs[artifactName]
 				if len(outputs) == 0 {
-					return nil, fmt.Errorf("staging folder '%s': artifact '%s' is not an artifact of module %s with outputs", folderName, artifactName, tg.moduleName())
+					outputs, taskIDs, _ = globalTaskRegistry.GetArtifact(artifactName)
+				}
+				if len(outputs) == 0 {
+					return nil, fmt.Errorf("staging folder '%s' in module %s: no module defines artifact '%s' with outputs", folderName, tg.moduleName(), artifactName)
 				}
 
 				for i, sourcePath := range outputs {
@@ -1964,8 +1982,9 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 
 			// Register artifact outputs for staging
 			if artifactName != "" && len(artifactOutputPaths) > 0 {
-				tg.artifactOutputs[artifactName] = artifactOutputPaths
-				tg.artifactTaskIDs[artifactName] = artifactTaskIDList
+				if err := tg.registerArtifact(artifactName, artifactOutputPaths, artifactTaskIDList); err != nil {
+					return nil, err
+				}
 				util.LogInfo("Registered copy artifact '%s' with %d outputs", artifactName, len(artifactOutputPaths))
 			}
 

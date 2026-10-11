@@ -212,3 +212,48 @@ func TestGenerationConfigErrors(t *testing.T) {
 		})
 	}
 }
+
+// Workspace-level staging assembles artifacts of the modules (the game_engine example stages
+// its shader module's outputs); it used to find none and skip them with a warning.
+func TestWorkspaceStagingOfModuleArtifacts(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": `
+project: {name: ws}
+workspace:
+  modules: [shaders]
+staging:
+  contents:
+    - {folder: shaders, artifacts: [vertex_shaders]}
+`,
+		"shaders/buildy.yaml": `
+artifacts:
+  transform:
+    - {name: vertex_shaders, tool: glslc, inputs: "src/*.vert", outputs: "${output_dir}/shaders/${basename}.vert.spv"}
+`,
+		"shaders/src/basic.vert": "",
+	})
+	tasks := mustGenerateTasks(t, root)
+	if err := graphOf(t, tasks...).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transforms := tasksOfType(tasks, "transform")
+	copies := tasksOfType(tasks, "copy")
+	if len(transforms) != 1 || len(copies) != 1 {
+		t.Fatalf("got %d transforms and %d copies, want 1 each", len(transforms), len(copies))
+	}
+	if !hasString(copies[0].Dependencies, transforms[0].TaskID) {
+		t.Errorf("the staging copy doesn't depend on the transform: %v", copies[0].Dependencies)
+	}
+
+	// Two modules defining one artifact name is an error naming both.
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":         "project: {name: ws}\nworkspace:\n  modules: [shaders, more]\n",
+		"more/buildy.yaml":    "artifacts:\n  transform:\n    - {name: vertex_shaders, tool: glslc, inputs: \"src/*.vert\", outputs: \"${output_dir}/more/${basename}.spv\"}\n",
+		"more/src/other.vert": "",
+	})
+	_, err := generateTasks(t, root)
+	if err == nil || !strings.Contains(err.Error(), "module more") || !strings.Contains(err.Error(), "module shaders") {
+		t.Fatalf("got %v", err)
+	}
+}

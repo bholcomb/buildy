@@ -86,6 +86,36 @@ type TaskIDRegistry struct {
 	
 	// outputPathToTask maps normalized output path -> task ID (for all outputs including secondary)
 	outputPathToTask map[string]string
+
+	// artifacts maps artifact name -> its module, outputs and producing tasks
+	artifacts map[string]registeredArtifact
+}
+
+// registeredArtifact is a named artifact of a module.
+type registeredArtifact struct {
+	module  string
+	outputs []string
+	taskIDs []string
+}
+
+// RegisterArtifact records an artifact's outputs and producing tasks. Two modules may not define
+// artifacts of the same name.
+func (r *TaskIDRegistry) RegisterArtifact(name, module string, outputs, taskIDs []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.artifacts[name]; ok && existing.module != module {
+		return fmt.Errorf("artifact '%s' is defined in module %s and in module %s; artifact names must be unique across the workspace", name, existing.module, module)
+	}
+	r.artifacts[name] = registeredArtifact{module: module, outputs: outputs, taskIDs: taskIDs}
+	return nil
+}
+
+// GetArtifact returns an artifact's outputs and producing tasks.
+func (r *TaskIDRegistry) GetArtifact(name string) (outputs, taskIDs []string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	a, ok := r.artifacts[name]
+	return a.outputs, a.taskIDs, ok
 }
 
 // NewTaskIDRegistry creates a new TaskIDRegistry
@@ -96,6 +126,7 @@ func NewTaskIDRegistry() *TaskIDRegistry {
 		moduleTargets:    make(map[string][]string),
 		targetOutputPath: make(map[string]string),
 		outputPathToTask: make(map[string]string),
+		artifacts:        make(map[string]registeredArtifact),
 	}
 }
 
@@ -233,6 +264,7 @@ func (r *TaskIDRegistry) Clear() {
 	r.moduleTargets = make(map[string][]string)
 	r.targetOutputPath = make(map[string]string)
 	r.outputPathToTask = make(map[string]string)
+	r.artifacts = make(map[string]registeredArtifact)
 }
 
 // Global registry instance for cross-module dependency resolution
