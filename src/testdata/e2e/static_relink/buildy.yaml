@@ -1,0 +1,18 @@
+project:
+  name: static_relink
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+targets:
+  static_libraries:
+    - name: calc
+      language: cpp
+      sources: ["add.cpp"]
+
+  executables:
+    - name: app
+      language: cpp
+      sources: ["main.cpp"]
+      libs: [calc]

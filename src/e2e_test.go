@@ -256,3 +256,20 @@ func TestE2ECwdIndependent(t *testing.T) {
 		t.Errorf("no object at %s:\n  %s", filepath.Clean(want), strings.Join(fromRoot, "\n  "))
 	}
 }
+
+// Finding 3: a changed static library relinks the executable.
+func TestE2EStaticRelink(t *testing.T) {
+	needCpp(t)
+	dir := fixture(t, "static_relink")
+	app := filepath.Join(outDir(dir, "debug"), "bin", "app")
+
+	mustBuildy(t, dir)
+	if got := run(t, app); got != "5" {
+		t.Fatalf("app printed %q, want 5", got)
+	}
+	writeFile(t, filepath.Join(dir, "add.cpp"), "int add(int a, int b) { return a * b; }\n")
+	mustBuildy(t, dir)
+	if got := run(t, app); got != "6" {
+		t.Errorf("after changing add(), app printed %q, want 6: it was not relinked", got)
+	}
+}

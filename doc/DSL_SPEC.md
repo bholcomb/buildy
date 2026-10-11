@@ -978,6 +978,10 @@ Two targets with the same name, in one module or in two, are an error naming bot
 `depends_on.targets` name that is not a target is an error; a `libs` name that is not a target is
 a system library.
 
+A link's inputs include every library it links that the build produces (`libcalc.a`, a shared
+library and its import library) and every `deps:` library found in the dependency's `lib_dirs`, so
+a changed library relinks whatever links it. System libraries are not hashed.
+
 **Why separate?**
 
 1. **deps are external**: They provide platform-specific settings (includes, libs, defines) from `buildy_config/dependencies.yaml`

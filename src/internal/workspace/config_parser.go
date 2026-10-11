@@ -422,12 +422,13 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) 
 
 // resolveCrossModuleDependencies resolves dependencies by target name, now that every module's
 // targets are registered. A dependency is a task ID or a target name (depends_on.targets); a name
-// that is neither is an error. A link task's libraries that are workspace targets become
-// dependencies on their link tasks; the others are system libraries.
+// that is neither is an error. A link task's libraries that are workspace targets become inputs:
+// the library files their final task produces, so a changed library relinks (and graph
+// validation orders the link after it). The others are system libraries.
 func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) error {
-	taskIDs := make(map[string]bool, len(allTasks))
+	tasksByID := make(map[string]*BuildTask, len(allTasks))
 	for _, task := range allTasks {
-		taskIDs[task.TaskID] = true
+		tasksByID[task.TaskID] = task
 	}
 
 	for _, task := range allTasks {
@@ -438,7 +439,7 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) er
 			}
 		}
 		for _, dep := range task.Dependencies {
-			if taskIDs[dep] {
+			if tasksByID[dep] != nil {
 				add(dep)
 			} else if linkID, ok := globalTaskRegistry.GetLinkTaskID(dep); ok {
 				util.LogInfo("Resolved dependency '%s' to task '%s' in task '%s'", dep, linkID, task.TaskID)
@@ -448,16 +449,30 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) er
 			}
 		}
 		for _, lib := range task.LinkLibs {
-			if linkID, ok := globalTaskRegistry.GetLinkTaskID(lib); ok {
-				add(linkID)
-			} else {
+			linkID, ok := globalTaskRegistry.GetLinkTaskID(lib)
+			if !ok {
 				util.LogVerbose("Library '%s' of task '%s' is not a workspace target: a system library", lib, task.TaskID)
+				continue
+			}
+			for _, output := range tasksByID[linkID].Outputs {
+				if !hasInput(task, output) {
+					task.Inputs = append(task.Inputs, NewTaskInput(output))
+				}
 			}
 		}
 		task.Dependencies = resolvedDeps
 	}
 
 	return nil
+}
+
+func hasInput(task *BuildTask, path string) bool {
+	for _, input := range task.Inputs {
+		if input.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 // GenerateTasks generates tasks from configuration with variable resolution

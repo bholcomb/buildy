@@ -389,9 +389,15 @@ func (tg *TaskGenerator) generateTargetTasks(
 	if err != nil {
 		return nil, fmt.Errorf("target '%s' in module %s: %w", targetName, tg.moduleName(), err)
 	}
+	depLibFiles := ExtractStringList(targetConfig["dep_lib_files"])
 	for _, task := range tasks {
 		task.Module = tg.CurrentModule
 		task.Target = targetName
+		if len(task.LinkLibs) > 0 {
+			for _, file := range depLibFiles {
+				task.Inputs = append(task.Inputs, NewTaskInput(file))
+			}
+		}
 		for _, id := range artifactTaskIDs {
 			if !hasString(task.Dependencies, id) {
 				task.Dependencies = append(task.Dependencies, id)
@@ -649,6 +655,16 @@ func (tg *TaskGenerator) resolveDeps(targetConfig map[string]any) error {
 		targetConfig["lib_dirs"] = append(mergedDep.LibDirs, existing...)
 	}
 
+	// The dependencies' library files are inputs of the target's link, like workspace libraries:
+	// a rebuilt dependency relinks. Libraries not in a dependency's lib dirs are system libraries.
+	var libFiles []string
+	for _, lib := range mergedDep.Libs {
+		if file := tg.findLibrary(lib, mergedDep.LibDirs); file != "" {
+			libFiles = append(libFiles, file)
+		}
+	}
+	targetConfig["dep_lib_files"] = libFiles
+
 	if len(mergedDep.Libs) > 0 {
 		existing := ExtractStringList(targetConfig["libs"])
 		targetConfig["libs"] = append(mergedDep.Libs, existing...)
@@ -670,6 +686,28 @@ func (tg *TaskGenerator) resolveDeps(targetConfig map[string]any) error {
 	}
 
 	return nil
+}
+
+// findLibrary returns the file the linker would use for -l<lib> from one of dirs, or "".
+func (tg *TaskGenerator) findLibrary(lib string, dirs []string) string {
+	var names []string
+	switch {
+	case tg.isWindows():
+		names = []string{lib + ".lib", "lib" + lib + ".dll.a", "lib" + lib + ".a"}
+	case tg.Platform == "macos" || tg.Platform == "darwin":
+		names = []string{"lib" + lib + ".dylib", "lib" + lib + ".tbd", "lib" + lib + ".a"}
+	default:
+		names = []string{"lib" + lib + ".so", "lib" + lib + ".a"}
+	}
+	for _, dir := range dirs {
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				return path
+			}
+		}
+	}
+	return ""
 }
 
 // moduleName names the generator's module for messages.
