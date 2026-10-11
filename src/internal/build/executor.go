@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ type TaskExecutor struct {
 	pendingOutputs  map[string][]string // Track outputs of in-progress tasks for cleanup
 	totalTaskCount  int                 // Total number of tasks for logging
 	producers       map[string]string   // Normalized output path -> task ID that produces it
+	tools           *toolIdentities     // What each program is, for cache keys
 
 	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
 	runCommand func(spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeoutSeconds int) (*util.ExecutionResult, error)
@@ -63,6 +65,7 @@ func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, 
 		producers:       make(map[string]string),
 		runCommand:      util.Run,
 	}
+	te.tools = newToolIdentities(buildCache.HashFile)
 
 	// Register cleanup for pending outputs on shutdown
 	if te.ShutdownManager != nil {
@@ -240,6 +243,14 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	// Every declared input exists by now (its producer has run); hash them once, here.
 	if err := te.checkInputs(task); err != nil {
 		return te.fail(task, 0, err)
+	}
+	// What the command runs is part of the key: the program's path and content, or the image
+	if task.Native == nil {
+		tool, err := te.tools.of(context.TODO(), task.Exec, task.Command, te.WorkDir)
+		if err != nil {
+			return te.fail(task, 0, err)
+		}
+		task.Tool = tool
 	}
 	if err := task.HashInputs(te.Cache.HashFile); err != nil {
 		return te.fail(task, 0, err)

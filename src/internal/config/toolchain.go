@@ -20,6 +20,7 @@ type Toolchain struct {
 	Host         PlatformArch               `yaml:"host" json:"host"`
 	Variables    Ordered[string]            `yaml:"variables" json:"variables"`
 	Execution    util.ExecSpec              `yaml:"execution" json:"execution"`
+	ReadsEnv     StringList                 `yaml:"reads_env" json:"reads_env"` // environment variables its tools read: their values are in every task's cache key
 	OutputPrefix string                     `yaml:"output_prefix" json:"output_prefix"`
 	FlagMappings Ordered[Ordered[[]string]] `yaml:"flag_mappings" json:"flag_mappings"` // keyword -> value -> flags
 	Tools        Ordered[*Tool]             `yaml:"tools" json:"tools"`
@@ -228,6 +229,11 @@ func (tc *Toolchain) validate(d *decoder) {
 	}
 	if err := tc.Execution.Validate(); err != nil {
 		d.errorAt(tc.Pos, "toolchain.execution: %v", err)
+	}
+	for _, name := range tc.ReadsEnv {
+		if name == "" || strings.ContainsAny(name, "= \t") {
+			d.errorAt(tc.Pos, "toolchain.reads_env: '%s' is not an environment variable name", name)
+		}
 	}
 
 	linkTools := map[string]string{} // output type -> tool

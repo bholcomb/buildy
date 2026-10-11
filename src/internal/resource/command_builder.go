@@ -201,5 +201,7 @@ func ExecSpecFromToolchain(toolchain *ToolchainConfig) (util.ExecSpec, error) {
 	if err := toolchain.Execution.Validate(); err != nil {
 		return util.ExecSpec{}, fmt.Errorf("toolchain %s: %w", toolchain.Name, err)
 	}
-	return toolchain.Execution, nil
+	spec := toolchain.Execution
+	spec.ReadsEnv = append([]string(nil), toolchain.ReadsEnv...)
+	return spec, nil
 }

@@ -27,6 +27,27 @@ type ExecSpec struct {
 	Volumes []string          `yaml:"volumes" json:"volumes,omitempty"` // Extra docker -v mounts (${UID} and ${GID} expand)
 	User    string            `yaml:"user" json:"user,omitempty"`       // Docker -u; the invoking user if empty
 	Env     map[string]string `yaml:"env" json:"env,omitempty"`         // Environment variables for the command
+	// The environment variables the toolchain's tools read (toolchain.reads_env), whose values a
+	// native task's cache key holds. A Docker container sees only Env.
+	ReadsEnv []string `yaml:"-" json:"reads_env,omitempty"`
+}
+
+// EnvValues returns the value of each variable in ReadsEnv that the command will see: Env's, else
+// the environment's. An unset variable is absent. Docker commands see only Env, already in the
+// spec, so there are none.
+func (s ExecSpec) EnvValues() map[string]string {
+	if s.IsDocker() || len(s.ReadsEnv) == 0 {
+		return nil
+	}
+	values := make(map[string]string, len(s.ReadsEnv))
+	for _, name := range s.ReadsEnv {
+		if v, ok := s.Env[name]; ok {
+			values[name] = v
+		} else if v, ok := os.LookupEnv(name); ok {
+			values[name] = v
+		}
+	}
+	return values
 }
 
 // IsDocker reports whether the spec runs in Docker.

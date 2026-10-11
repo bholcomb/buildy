@@ -814,3 +814,64 @@ targets:
 		t.Errorf("a define on two reran other tasks:\n%s", tail(out, 20))
 	}
 }
+
+// buildyEnv runs buildy in dir with extra environment variables, and fails the test if it fails.
+func buildyEnv(t *testing.T, dir string, env []string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(buildyBinary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(append(os.Environ(), "GOFLAGS=-buildvcs=false"), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("buildy %s in %s failed: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return string(out)
+}
+
+// Finding 1.3: a header found through CPATH, or another gcc earlier on the PATH, rebuilds.
+func TestE2EToolchainIdentity(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping: the case uses gcc on Linux")
+	}
+	needTools(t, "gcc")
+	gcc, _ := exec.LookPath("gcc")
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), `project:
+  name: identity
+environment:
+  compile:
+    c_standard: c11
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: [main.c]
+`)
+	writeFile(t, filepath.Join(dir, "main.c"), "#include <stdio.h>\n#include \"value.h\"\n#ifndef WRAPPED\n#define WRAPPED 0\n#endif\nint main(void) { printf(\"%d %d\\n\", VALUE, WRAPPED); return 0; }\n")
+	writeFile(t, filepath.Join(dir, "one", "value.h"), "#define VALUE 1\n")
+	writeFile(t, filepath.Join(dir, "two", "value.h"), "#define VALUE 2\n")
+	app := filepath.Join(outDir(dir, "debug"), "bin", "app")
+
+	buildyEnv(t, dir, []string{"CPATH=" + filepath.Join(dir, "one")})
+	if got := run(t, app); got != "1 0" {
+		t.Fatalf("app printed %q, want 1 0", got)
+	}
+	buildyEnv(t, dir, []string{"CPATH=" + filepath.Join(dir, "two")})
+	if got := run(t, app); got != "2 0" {
+		t.Errorf("after changing CPATH the app printed %q, want 2 0", got)
+	}
+
+	// A gcc wrapper earlier on the PATH
+	wrapper := filepath.Join(dir, "wrapper", "gcc")
+	writeFile(t, wrapper, "#!/bin/sh\nexec "+gcc+" -DWRAPPED=1 \"$@\"\n")
+	os.Chmod(wrapper, 0o755)
+	path := "PATH=" + filepath.Dir(wrapper) + string(os.PathListSeparator) + os.Getenv("PATH")
+	buildyEnv(t, dir, []string{"CPATH=" + filepath.Join(dir, "two"), path})
+	if got := run(t, app); got != "2 1" {
+		t.Errorf("with another gcc on the PATH the app printed %q, want 2 1", got)
+	}
+	out := buildyEnv(t, dir, []string{"CPATH=" + filepath.Join(dir, "two"), path})
+	if !strings.Contains(out, "2 cache hits, 0 executed") {
+		t.Errorf("an unchanged build ran tasks:\n%s", tail(out, 20))
+	}
+}

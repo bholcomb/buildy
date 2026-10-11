@@ -90,6 +90,7 @@ type BuildTask struct {
 	Configuration        string               `json:"configuration"`
 	Toolchain            string               `json:"toolchain"` // Name of the toolchain that produced the task
 	Exec                 util.ExecSpec        `json:"exec"`      // Where the command runs (native or docker), from that toolchain
+	Tool                 string               `json:"-"`         // What the command runs (ToolIdentity), filled in when the task is about to run
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
@@ -136,11 +137,13 @@ func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string,
 // directories, standard and output paths are in its command and outputs), so a change to one
 // target's config reruns that target's tasks and no others.
 type cacheKeyContent struct {
-	Inputs  [][2]string   `json:"inputs"`  // each declared input's path and content hash
-	Outputs []string      `json:"outputs"` // where the outputs go
-	Command util.Command  `json:"command"` // the arguments (or script) and directory
-	Native  *NativeOp     `json:"native"`  // or the native operation
-	Exec    util.ExecSpec `json:"exec"`    // natively or in which image, with which environment
+	Inputs  [][2]string       `json:"inputs"`  // each declared input's path and content hash
+	Outputs []string          `json:"outputs"` // where the outputs go
+	Command util.Command      `json:"command"` // the arguments (or script) and directory
+	Native  *NativeOp         `json:"native"`  // or the native operation
+	Exec    util.ExecSpec     `json:"exec"`    // natively or in which image, with which environment
+	Tool    string            `json:"tool"`    // the program the command runs: its path and content, or the image's ID
+	Env     map[string]string `json:"env"`     // the values of the variables the toolchain reads
 }
 
 // CalculateCacheKey calculates the content-addressable cache key from the task's definition and
@@ -153,6 +156,8 @@ func (t *BuildTask) CalculateCacheKey() string {
 		Command: t.Command,
 		Native:  t.Native,
 		Exec:    t.Exec,
+		Tool:    t.Tool,
+		Env:     t.Exec.EnvValues(),
 	}
 	for i, inp := range t.Inputs {
 		content.Inputs[i] = [2]string{util.NormalizePathForCache(inp.Path), inp.Hash}

@@ -13,6 +13,10 @@ toolchain:
   
   execution:
     type: native
+
+  # Environment variables the tools read: their values are part of every task's cache key, so
+  # changing one rebuilds what it affects.
+  reads_env: [INCLUDE, LIB, LIBPATH, CL, _CL_, LINK, _LINK_, EXTERNAL_INCLUDE]
   
   flag_mappings:
     optimization:

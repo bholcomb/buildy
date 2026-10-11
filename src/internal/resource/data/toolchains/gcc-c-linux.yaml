@@ -13,6 +13,10 @@ toolchain:
   
   execution:
     type: native
+
+  # Environment variables the tools read: their values are part of every task's cache key, so
+  # changing one rebuilds what it affects.
+  reads_env: [CPATH, C_INCLUDE_PATH, CPLUS_INCLUDE_PATH, OBJC_INCLUDE_PATH, LIBRARY_PATH, COMPILER_PATH, GCC_EXEC_PREFIX, LD_RUN_PATH, SOURCE_DATE_EPOCH]
   
   flag_mappings:
     optimization:

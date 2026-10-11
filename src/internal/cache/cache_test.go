@@ -230,3 +230,48 @@ func TestCacheKeyIncludesExec(t *testing.T) {
 		t.Errorf("keys collide: native %s, docker %s, gcc:14 %s, environment %s", native, docker, otherImage, otherEnv)
 	}
 }
+
+// Finding 1.3: the program a command runs and the environment variables its toolchain reads are
+// in the key.
+func TestCacheKeyIncludesToolAndEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "main.cpp"), "int main() {}")
+	key := func(mutate func(*workspace.BuildTask)) string {
+		task := compileTask(t, dir)
+		task.Exec.ReadsEnv = []string{"CPATH"}
+		mutate(task)
+		if err := task.HashInputs(util.HashFile); err != nil {
+			t.Fatal(err)
+		}
+		return task.CacheKey
+	}
+	t.Setenv("CPATH", "/one")
+	one := key(func(*workspace.BuildTask) {})
+	if again := key(func(*workspace.BuildTask) {}); again != one {
+		t.Error("the key isn't stable")
+	}
+	t.Setenv("CPATH", "/two")
+	if two := key(func(*workspace.BuildTask) {}); two == one {
+		t.Error("changing CPATH kept the key")
+	}
+	os.Unsetenv("CPATH")
+	unset := key(func(*workspace.BuildTask) {})
+	t.Setenv("CPATH", "")
+	if empty := key(func(*workspace.BuildTask) {}); empty == unset {
+		t.Error("an empty CPATH has the key of an unset one")
+	}
+	// Exec.Env sets what the command sees
+	if set := key(func(task *workspace.BuildTask) { task.Exec.Env = map[string]string{"CPATH": "/one"} }); set == unset {
+		t.Error("the toolchain's own CPATH didn't change the key")
+	}
+	if other := key(func(task *workspace.BuildTask) { task.Tool = "/usr/bin/gcc abc" }); other == unset {
+		t.Error("another tool kept the key")
+	}
+	// A Docker container sees none of the host's environment
+	t.Setenv("CPATH", "/one")
+	d1 := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}} })
+	t.Setenv("CPATH", "/two")
+	if d2 := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}} }); d1 != d2 {
+		t.Error("the host's CPATH changed a Docker task's key")
+	}
+}
