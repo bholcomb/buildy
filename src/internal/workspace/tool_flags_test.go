@@ -98,3 +98,37 @@ artifacts:
 		}
 	}
 }
+
+// A C++ target's frameworks reach its link on macOS (the C++ toolchains had no ${frameworks}).
+func TestMacOSCppLinkHasFrameworks(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: mac}\n" + cppEnvironment + `targets:
+  executables:
+    - {name: app, language: cpp, sources: [main.cpp], frameworks: [Cocoa, IOKit]}
+  shared_libraries:
+    - {name: lib, language: cpp, sources: [lib.cpp], frameworks: [CoreVideo]}
+`,
+		"main.cpp": "int main() {}", "lib.cpp": "int f() { return 1; }",
+	})
+	for _, arch := range []string{"arm64", "x86_64"} {
+		tasks, err := generateTasksFor(t, root, "macos", arch, "release")
+		if err != nil {
+			t.Fatal(err)
+		}
+		links := tasksOfType(tasks, "link")
+		if len(links) != 2 {
+			t.Fatalf("%d link tasks, want 2", len(links))
+		}
+		for _, link := range links {
+			got := strings.Join(link.Command.Args, " ")
+			want := "-framework Cocoa -framework IOKit -o "
+			if link.Target == "lib" {
+				want = "-framework CoreVideo -o "
+			}
+			if !strings.Contains(got, want) {
+				t.Errorf("macos %s: %s links %q, want %q", arch, link.Target, got, want)
+			}
+		}
+	}
+}

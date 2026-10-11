@@ -192,3 +192,24 @@ func TestToolResponseFile(t *testing.T) {
 		}
 	}
 }
+
+// Every macOS toolchain links shared libraries and executables with the target's frameworks
+// (GLFW needs Cocoa, IOKit and CoreVideo).
+func TestMacOSLinksTakeFrameworks(t *testing.T) {
+	for _, name := range []string{"clang-c-macos", "clang-c-macos-arm64", "clang-cpp-macos", "clang-cpp-macos-arm64"} {
+		tc := builtinToolchain(t, name)
+		for _, link := range tc.ToolsWithAction("link") {
+			if link.Supports.OutputType == "static_library" {
+				continue
+			}
+			cmd, _, err := NewCommandBuilder(tc, nil, "macos", "release").BuildLinkCommand(link, []string{"/a.o"}, "/out", []string{"/opt/lib"}, []string{"glfw3"}, []string{"Cocoa", "IOKit"}, nil)
+			if err != nil {
+				t.Fatalf("%s %s: %v", name, link.Name, err)
+			}
+			got := argv(cmd.Args)
+			if !strings.Contains(got, "-lglfw3 | -framework | Cocoa | -framework | IOKit | -o | /out") {
+				t.Errorf("%s %s links %s", name, link.Name, got)
+			}
+		}
+	}
+}

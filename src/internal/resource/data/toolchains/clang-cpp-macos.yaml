@@ -83,7 +83,7 @@ toolchain:
     # Shared library linking (dylib on macOS)
     link_shared_library:
       action: link
-      command: "clang++ -dynamiclib ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      command: "clang++ -dynamiclib ${flags} ${objects} ${lib_dirs} ${libs} ${frameworks} -o ${output}"
       response_file: gnu
       input_extensions: [".o"]
       output_extension: ".dylib"
@@ -98,6 +98,8 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: true
+        framework_flag: "-framework "  # the trailing space: -framework and the name are two arguments
     
     # Static library archiving
     link_static_library:
@@ -118,7 +120,7 @@ toolchain:
     # Executable linking
     link_executable:
       action: link
-      command: "clang++ ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      command: "clang++ ${flags} ${objects} ${lib_dirs} ${libs} ${frameworks} -o ${output}"
       response_file: gnu
       input_extensions: [".o"]
       output_extension: ""
@@ -133,3 +135,5 @@ toolchain:
         lib_dir_flag: "-L"
         libs: true
         lib_flag: "-l"
+        frameworks: true
+        framework_flag: "-framework "  # the trailing space: -framework and the name are two arguments
