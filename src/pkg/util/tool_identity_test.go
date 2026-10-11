@@ -1,4 +1,4 @@
-package build
+package util
 
 import (
 	"context"
@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"buildy/pkg/util"
 )
 
 // writeProgram writes an executable file.
@@ -30,10 +28,10 @@ func TestToolIdentityFollowsThePath(t *testing.T) {
 	dir := t.TempDir()
 	writeProgram(t, filepath.Join(dir, "a", "cc"), "#!/bin/sh\necho a\n")
 	writeProgram(t, filepath.Join(dir, "b", "cc"), "#!/bin/sh\necho b\n")
-	command := util.Command{Args: []string{"cc", "-c", "x.c"}}
+	command := Command{Args: []string{"cc", "-c", "x.c"}}
 	identify := func() string {
 		t.Helper()
-		id, err := newToolIdentities(util.HashFile).of(context.Background(), util.ExecSpec{}, command, dir)
+		id, err := NewToolIdentities(HashFile).Of(context.Background(), ExecSpec{}, command, dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +52,7 @@ func TestToolIdentityFollowsThePath(t *testing.T) {
 	}
 	// A symlink to a program is that program
 	os.Symlink(filepath.Join(dir, "a", "cc"), filepath.Join(dir, "c-cc"))
-	command = util.Command{Args: []string{"./c-cc"}}
+	command = Command{Args: []string{"./c-cc"}}
 	if linked := identify(); linked != a {
 		t.Errorf("a link to a's cc is %s, want %s", linked, a)
 	}
@@ -63,7 +61,7 @@ func TestToolIdentityFollowsThePath(t *testing.T) {
 // A program that isn't there fails the identity, naming it.
 func TestToolIdentityOfAMissingProgram(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	_, err := newToolIdentities(util.HashFile).of(context.Background(), util.ExecSpec{}, util.Command{Args: []string{"no-such-cc"}}, t.TempDir())
+	_, err := NewToolIdentities(HashFile).Of(context.Background(), ExecSpec{}, Command{Args: []string{"no-such-cc"}}, t.TempDir())
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -78,9 +76,9 @@ func TestToolIdentityIsResolvedOnce(t *testing.T) {
 	writeProgram(t, filepath.Join(dir, "cc"), "#!/bin/sh\n")
 	t.Setenv("PATH", dir)
 	hashes := 0
-	ti := newToolIdentities(func(path string) (string, error) { hashes++; return util.HashFile(path) })
+	ti := NewToolIdentities(func(path string) (string, error) { hashes++; return HashFile(path) })
 	for range 3 {
-		if _, err := ti.of(context.Background(), util.ExecSpec{}, util.Command{Args: []string{"cc"}}, dir); err != nil {
+		if _, err := ti.Of(context.Background(), ExecSpec{}, Command{Args: []string{"cc"}}, dir); err != nil {
 			t.Fatal(err)
 		}
 	}

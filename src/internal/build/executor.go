@@ -35,9 +35,9 @@ type TaskExecutor struct {
 	ExecutionStats ExecutionStats
 	BuildResult    *BuildResult // Optional: for tracking execution in build report
 	mu             sync.Mutex
-	totalTaskCount int               // Total number of tasks for logging
-	producers      map[string]string // Normalized output path -> task ID that produces it
-	tools          *toolIdentities   // What each program is, for cache keys
+	totalTaskCount int                  // Total number of tasks for logging
+	producers      map[string]string    // Normalized output path -> task ID that produces it
+	tools          *util.ToolIdentities // What each program is, for cache keys
 
 	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
 	runCommand func(ctx context.Context, spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeout time.Duration) (*util.ExecutionResult, error)
@@ -64,7 +64,7 @@ func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers int, workDir strin
 		runCommand:   util.Run,
 		Context:      context.Background(),
 	}
-	te.tools = newToolIdentities(buildCache.HashFile)
+	te.tools = util.NewToolIdentities(buildCache.HashFile)
 	return te
 }
 
@@ -177,7 +177,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	}
 	// What the command runs is part of the key: the program's path and content, or the image
 	if task.Native == nil {
-		tool, err := te.tools.of(te.Context, task.Exec, task.Command, te.WorkDir)
+		tool, err := te.tools.Of(te.Context, task.Exec, task.Command, te.WorkDir)
 		if err != nil {
 			return te.fail(task, 0, err)
 		}

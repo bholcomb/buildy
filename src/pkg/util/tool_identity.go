@@ -1,4 +1,4 @@
-package build
+package util
 
 import (
 	"context"
@@ -8,18 +8,16 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-
-	"buildy/pkg/util"
 )
 
-// toolIdentities tells, once per run per program, what a command runs, for its task's cache key:
+// ToolIdentities tells, once per run per program, what a command runs, for its task's cache key:
 // a native program's resolved path and content hash, or a Docker image's ID. Upgrading the
 // compiler, or putting another one earlier on the PATH, changes the key of every task it runs.
 //
 // The content hash goes through the cache's file hashes, so an unchanged compiler is not read
 // again in a later run (its stat is). A driver such as gcc finds its own programs (cc1, as, ld)
 // relative to itself: a compiler package upgrade replaces the driver too.
-type toolIdentities struct {
+type ToolIdentities struct {
 	hash func(path string) (string, error)
 	mu   sync.Mutex
 	ids  map[string]*toolIdentity
@@ -31,13 +29,14 @@ type toolIdentity struct {
 	err  error
 }
 
-func newToolIdentities(hash func(path string) (string, error)) *toolIdentities {
-	return &toolIdentities{hash: hash, ids: map[string]*toolIdentity{}}
+// NewToolIdentities returns an empty set of identities, which hashes programs with hash.
+func NewToolIdentities(hash func(path string) (string, error)) *ToolIdentities {
+	return &ToolIdentities{hash: hash, ids: map[string]*toolIdentity{}}
 }
 
-// of returns the identity of what command runs where spec says. A relative program path is
+// Of returns the identity of what command runs where spec says. A relative program path is
 // relative to the command's directory (dir, the workspace root if empty).
-func (ti *toolIdentities) of(ctx context.Context, spec util.ExecSpec, command util.Command, workspaceRoot string) (string, error) {
+func (ti *ToolIdentities) Of(ctx context.Context, spec ExecSpec, command Command, workspaceRoot string) (string, error) {
 	var key string
 	var resolve func() (string, error)
 	switch {
@@ -74,7 +73,7 @@ func (ti *toolIdentities) of(ctx context.Context, spec util.ExecSpec, command ut
 }
 
 // programID is a native program's real path (symlinks resolved) and content hash.
-func (ti *toolIdentities) programID(program string) (string, error) {
+func (ti *ToolIdentities) programID(program string) (string, error) {
 	path, err := exec.LookPath(program)
 	if err != nil {
 		return "", fmt.Errorf("can't find the program %s: %w", program, err)
@@ -93,7 +92,7 @@ func (ti *toolIdentities) programID(program string) (string, error) {
 	return real + " " + hash, nil
 }
 
-// shellProgram is the shell a script runs with on this host (util.Run).
+// shellProgram is the shell a script runs with on this host (Run).
 func shellProgram() string {
 	if runtime.GOOS == "windows" {
 		return "cmd.exe"
@@ -110,7 +109,7 @@ func dockerImageID(ctx context.Context, image string) (string, error) {
 	}
 	id, err := inspect()
 	if err != nil {
-		util.LogProgress("Pulling the Docker image %s", image)
+		LogProgress("Pulling the Docker image %s", image)
 		if out, pullErr := exec.CommandContext(ctx, "docker", "pull", "--quiet", image).CombinedOutput(); pullErr != nil {
 			return "", fmt.Errorf("docker pull %s: %v\n%s", image, pullErr, out)
 		}
