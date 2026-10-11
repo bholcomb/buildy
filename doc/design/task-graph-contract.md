@@ -405,7 +405,8 @@ The open questions, as decided:
 3. **Go and Rust always run their tool** and are reported as "ran", not as cache hits.
 4. **Docker** mounts the workspace and cache dir at their host paths; the `/workspace` convention
    is dropped.
-5. **Validation** stays map-based with a corrected schema.
+5. **Validation** stays map-based with a corrected schema. *Superseded by
+   [typed configuration](typed-config.md) (review phase 1): every file is read into typed models.*
 6. **Dependency builds** stay a phase before generation; dry-run plans them.
 
 ## 12. Implementation notes

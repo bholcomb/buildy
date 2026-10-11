@@ -92,9 +92,11 @@ myproject/
 
 ## Core Concepts
 
-Every config file is validated strictly before anything is built: a misspelled or unsupported key
-is an error naming the file and the key (with a suggestion), not a setting silently ignored. See
-[Strict Validation](DSL_SPEC.md#strict-validation).
+Every config file (buildy.yaml, dependency definitions, toolchains, templates) is validated
+strictly before anything is built: a misspelled or unsupported key, a value of the wrong type, a
+filter key that names no platform, architecture, configuration or toolchain, and an abstract
+keyword no toolchain knows are errors naming the file, the line and the key (with a suggestion),
+not settings silently ignored. See [Strict Validation](DSL_SPEC.md#strict-validation).
 
 ### Project Metadata
 
@@ -131,6 +133,9 @@ variables:
     - name: BUILD_NUMBER
       default: "dev"             # Optional with default
 ```
+
+Variables of the root `buildy.yaml` (and its imported environment variables) reach every module;
+a module's own variables override them.
 
 **Platform-specific variables:**
 
@@ -262,6 +267,10 @@ targets:
 ```
 
 Compile flags and link flags are completely separate — a flag in `compile:` never reaches the linker, and vice versa. Use `remove_flags` within either section to strip flags inherited from higher levels.
+
+A module's settings add to the root's: mappings merge key by key, lists append and single values
+override, so a module that adds `environment.compile.defines` keeps the root's standard, flags and
+defines. See [How Settings Merge](DSL_SPEC.md#how-settings-merge).
 
 ### Generated Sources
 
@@ -683,7 +692,7 @@ targets:
 
 ### Dependencies File Organization
 
-Dependencies are defined in `buildy_config/dependencies.yaml`. For larger projects, you can organize them into separate files under `buildy_config/dependencies/`:
+Dependencies are defined in `buildy_config/dependencies.yaml`. For larger projects, you can organize them into separate files under `buildy_config/dependencies/`; every file there is loaded, so `dependencies.yaml` doesn't list them (a `name: {file: ...}` entry is an error):
 
 ```
 buildy_config/
