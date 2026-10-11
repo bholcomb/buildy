@@ -983,6 +983,10 @@ toolchain:
       output_extension: ".mesh"
 ```
 
+A transform or generate tool gets the module's abstract keywords as its own toolchain's
+`flag_mappings` map them, then its `common` flags, then the configuration's (`debug`, `release`),
+like a compile tool.
+
 A tool's command runs without a shell: buildy splits it into words, and each placeholder that is a
 word of its own becomes its values, each one argument (`${flags}` may be several, an empty one
 none), while one inside a word (`-o${output}`) must have one value. A tool that needs pipes or
@@ -1128,10 +1132,15 @@ This creates `buildy_config/compile_commands.json` which IDEs and language serve
 
 ## Cache Management
 
-Buildy uses content-addressable caching for incremental builds. A task's cache key covers its
-type, command (its argument list and directory, or for a copy, symlink, template or archive, what
-buildy does), declared outputs, platform, architecture, configuration, toolchain, the module's
-configuration, and the content of every declared input. A task is skipped (a cache hit) only when:
+Buildy uses content-addressable caching for incremental builds. A task's cache key covers exactly
+what decides its outputs: its command (its argument list and directory, or for a copy, symlink,
+template or archive, what buildy does), its declared outputs, the content of every declared input,
+where it runs (natively, or in which Docker image, with the toolchain's `env`), the program it runs
+(its path and content: another or an upgraded compiler rebuilds), and the values of the environment
+variables its toolchain reads (`reads_env`: `CPATH`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET`,
+`INCLUDE`...). The rest of the configuration reaches a task through its command, so changing one
+target, or adding one, reruns that target's tasks and no others. A task is skipped (a cache hit)
+only when:
 
 - the cache has an entry for that key,
 - every declared output still exists with the content recorded when the task last ran, and
@@ -1148,7 +1157,11 @@ Every task also follows these rules when it runs:
 - If it exits 0 without producing a declared output, it fails:
   `link_app__root exited 0 but did not produce declared output …`.
 
-The cache stores no copies of outputs; it records what each task last produced.
+The cache stores no copies of outputs; it records what each task last produced. Each task's entry
+is appended to `cache_journal.jsonl` as it finishes, and at the end of the run, interrupted or not,
+the newest entry of each task goes into `cache_index.json`. Files are read once per run, and not at
+all when their size, times and inode say they haven't changed since an earlier run
+(`file_hashes.json`). See [the design note](design/execution.md).
 
 ```bash
 buildy --cache-stats      # Show cache statistics
@@ -1199,6 +1212,20 @@ buildy -n 5                      # Debug level logging
 buildy --dry-run                 # Show what would build
 ```
 
+What a command prints, such as compiler warnings, is shown under its task at the default level,
+each task's output in one piece however many tasks run at once; a failed task shows its command
+line and its output.
+
+### Stopping a Build
+
+Ctrl-C (SIGINT or SIGTERM) stops a build at any point, while dependencies are fetched or built
+too. The running commands are killed with every process they started (Docker containers with
+`docker kill`), their partial outputs are removed, the tasks that finished keep their cache
+entries, and buildy exits with 130. A second Ctrl-C exits at once.
+
+There is no time limit by default; `--timeout 30m` kills a task or dependency build step that runs
+longer, the same way.
+
 ### All Options
 
 | Option | Short | Description |
@@ -1209,10 +1236,11 @@ buildy --dry-run                 # Show what would build
 | `--architecture` | `-a` | Target architecture |
 | `--toolchain` | `-t` | Override toolchain |
 | `--target` | | Build a target and everything it depends on, in any module (repeatable); an unknown name is an error |
-| `--workers` | `-j` | Parallel workers |
+| `--workers` | `-j` | How many tasks run at once; each task starts as soon as its dependencies have finished |
+| `--timeout` | | Kill a task, or a dependency build step, that runs longer than this Go duration (`90s`, `30m`, `2h`); no limit by default |
 | `--force` | `-f` | Ignore cache |
 | `--clean` | | Clean artifacts |
-| `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks that would run; fetch, build and run nothing |
+| `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for; fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
 | `--update-lock` | | Update lockfile |

@@ -118,6 +118,10 @@ The changes from today are `outputs`, `exec`, `toolchain_hash` in place of the n
 inputs that are complete. `config_hash` stays: it is blunt but safe, and removing it is an
 optimisation for later.
 
+*Review phase 3 replaced this key with exactly what decides a task's outputs: `config_hash`,
+`toolchain_hash`, the task type and the context names left it; the program the command runs and the
+environment variables its toolchain reads joined it ([execution.md](execution.md#the-cache-key)).*
+
 A lookup is a **hit** only if an entry exists for the key, **every declared output** exists with
 its recorded hash (today only outputs that happened to exist at record time are checked),
 and every input from the depfile is unchanged. That is Ninja's model, which buildy already
@@ -444,7 +448,9 @@ Where the implementation differs from the design above, or had to add to it:
   inside a container, on host paths), not `gcc:13`, so the test needs no large image.
 
 Out of scope, deliberately: compiler versions in cache keys, system headers (`-MMD` convention),
-Docker image digests, and a remote cache.
+Docker image digests, and a remote cache. *The compiler's identity and the Docker image's ID joined
+the key in [review phase 3](execution.md#the-cache-key), with the environment the toolchain reads;
+the toolchain's content hash left it, and so did ConfigHash.*
 
 ---
 

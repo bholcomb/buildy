@@ -80,6 +80,8 @@ project/
 │       └── buildy.yaml            # Shader compilation module
 └── .buildy_cache/                 # Build cache (git-ignored)
     ├── cache_index.json           # Cache index: what each task last produced
+    ├── cache_journal.jsonl        # Entries of the tasks that finished, until the run ends
+    ├── file_hashes.json           # File hashes, kept with each file's size, times and inode
     ├── deps/                      # Fetched dependency sources
     │   ├── glfw3/                 # Extracted dependency
     │   └── glfw3.extracted.json   # What glfw3/ was extracted from (URL, SHA256)
@@ -1224,6 +1226,10 @@ artifacts:
       args: ["-f", "BC7_UNORM"]
 ```
 
+A transform or generate tool's `${flags}` are, in order: the module's abstract keywords as the
+tool's toolchain maps them (glslc maps `optimization: speed` to `-O`), the tool's `common` flags,
+and the configuration's.
+
 ### Generate
 
 ```yaml
@@ -1372,9 +1378,9 @@ Symlinks provide fast developer iteration:
 ### Cache Integration
 
 Staging operations are cached tasks:
-- For symlinks: cache key includes source path and symlink flag
-- For copies: cache key includes source content hash
-- The cache automatically detects when staging needs to update
+- For symlinks: the cache key includes the source path and the operation
+- For copies: the cache key includes the source's content hash
+- The cache detects when staging needs to update
 
 ---
 
@@ -1513,6 +1519,8 @@ toolchain:
   execution:
     type: native              # native or docker
 
+  reads_env: [CPATH, LIBRARY_PATH]   # Environment variables the tools read
+
   tools:
     cpp_compile:
       action: compile
@@ -1532,6 +1540,7 @@ toolchain:
 | `variables` | Toolchain-specific variables |
 | `output_prefix` | Default library filename prefix (e.g., `"lib"` or `""`) |
 | `execution` | Execution configuration (native, the default, or docker) |
+| `reads_env` | Environment variables the tools read: their values are part of every native task's cache key, so changing one rebuilds (unset differs from empty) |
 | `flag_mappings` | Abstract keywords: keyword -> value -> flags |
 | `tools` | Map of tool definitions, in the order written |
 
@@ -1585,7 +1594,7 @@ tools:
 | `input_extensions` | File extensions this tool accepts |
 | `output_extension` | Extension for output files |
 | `output_pattern` | Pattern for output filename (supports `${name}`, `${output_prefix}`) |
-| `flags` | Configuration-specific flags (common, debug, release) |
+| `flags` | Flags by configuration: `common`, then the configuration's (`debug`, `release`, ...). Every tool gets both; a compile, transform or generate tool gets the abstract keywords as its toolchain maps them before them |
 | `supports` | Capability flags and flag formats |
 | `command_params` | Data-driven parameter definitions (for `build` action) |
 
@@ -1836,9 +1845,22 @@ tasks run natively. A Docker task runs `docker run --rm` with the workspace root
 directory if it lies elsewhere, mounted **at their host paths**, and `-w <workspace root>` (or the
 command's own directory), so the absolute host paths in its command are valid in the container.
 The command's arguments are arguments of `docker run`, after the image; a shell tool's command
-runs as `sh -c` in the container. The execution settings and
-the toolchain's content are part of every task's cache key: switching a toolchain to another
-image rebuilds.
+runs as `sh -c` in the container. The execution settings are part
+of every task's cache key, with the ID of the image: switching a toolchain to another image, or
+pulling a new version of it, rebuilds.
+
+A Docker task runs with `--init` and a name, and on a timeout or Ctrl-C buildy stops it with
+`docker kill`. A native command runs in a process group of its own, killed as a whole.
+
+### What a Task's Cache Key Holds
+
+Exactly what decides its outputs: its command (arguments and directory) or native operation, its
+declared outputs, the content of its declared inputs, its execution settings, the program it runs
+(found as it will run: on the `PATH`, its symlinks resolved; its path and content, read once per
+run), or the Docker image's ID, and the values of the toolchain's `reads_env` variables. The rest
+of the configuration (flags, defines, include directories, standard, output prefix) reaches a task
+through its command and outputs: changing one target reruns that target's tasks only. See
+[the design note](design/execution.md#the-cache-key).
 
 #### Execution Configuration Fields
 
@@ -2581,10 +2603,11 @@ buildy --target game
 buildy --compile-commands  # Generate buildy_config/compile_commands.json for IDE tooling
 
 # Other options
-buildy --jobs 8            # Parallel jobs
+buildy -j 8                # Tasks run at once (each starts when its dependencies finish)
+buildy --timeout 30m       # Kill a task or dependency build step that runs longer (no limit by default)
 buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging
-buildy --dry-run           # Plan: what would be fetched, built and run (does none of it)
+buildy --dry-run           # Plan: what would be fetched and built, and the tasks in an order they can run in
 buildy --clean             # Clean build outputs
 buildy --force             # Ignore cache, rebuild all
 ```

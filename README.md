@@ -202,13 +202,19 @@ Options:
   -a, --arch <name>     Target architecture (x86_64, arm64)
   -t, --toolchain <name> Override toolchain selection
   --target <name>       Build a target and what it depends on (repeatable)
-  -j, --workers <n>     Number of parallel workers
+  -j, --workers <n>     Number of tasks run at once
   -d, --dry-run         Plan: show what would be fetched, built and run
   --clean               Clean build outputs
   -f, --force           Ignore cache, rebuild all
   --compile-commands    Generate compile_commands.json
   -n, --notify <level>  Log level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug
+  --timeout <duration>  Kill a task or dependency build step that runs longer (e.g. 30m; default: no limit)
 ```
+
+Each task starts as soon as the tasks it depends on have finished. What a compiler prints
+(warnings) is shown under its task. Ctrl-C stops the build at any point, fetches and dependency
+builds included: running commands are killed with everything they started, and buildy exits with
+130 (a second Ctrl-C exits at once).
 
 ## Project Structure
 
@@ -227,6 +233,8 @@ my-project/
 ├── build/                   # Output directory (auto-created)
 └── .buildy_cache/           # Build cache (git-ignored)
     ├── cache_index.json     # What each task last produced
+    ├── cache_journal.jsonl  # Entries of the tasks of a run, until it ends
+    ├── file_hashes.json     # File hashes, by size, times and inode
     ├── deps/                # Fetched dependencies
     └── downloads/           # Cached archives
 ```
@@ -319,8 +327,8 @@ This eliminates hardcoded language-specific logic and makes the build system ful
 ┌─────────────────────────────────────────────────────────────┐
 │                      Task Graph                              │
 │  - Build dependency graph                                    │
-│  - Topological sort                                          │
-│  - Parallel execution stages                                 │
+│  - Topological order (a cycle is an error)                   │
+│  - Each task starts when its dependencies finish             │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
