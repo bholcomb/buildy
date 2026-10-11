@@ -1,6 +1,7 @@
 # Task Graph Contract
 
-Status: **proposal, awaiting approval.** Nothing here is implemented yet.
+Status: **approved.** The open questions are decided ([section 11](#11-decisions)); the steps in
+[section 10](#10-implementation-order) land one commit at a time.
 
 This document answers the external design review of buildy (reviewed at `3fd9618`; the code is
 the same as `main` at `b6316c5` apart from `bootstrap.sh`). It records how each finding was
@@ -317,14 +318,12 @@ Because the root is fresh and private, these lexical checks are sufficient: ther
 concurrent writer to race. The download cache is keyed by `sha256(url)` plus the basename for
 readability (S1), and the extraction is recorded against that key.
 
-**`os.Root` versus doing it by hand.** `os.Root` (Go 1.24) confines every operation, including
-following symlinks, and would replace steps 1 to 3. But `Root.MkdirAll`, `Root.Symlink` and
-`Root.Link` arrived only in Go 1.25, so 1.24 would still need hand-written directory creation and
-symlink checks. Moving `go.mod` from 1.22 to 1.25 makes every machine that builds buildy fetch a
-toolchain (local Go is 1.22.2; `bootstrap.sh` would trigger the download). The CI branch reads
-`go-version-file: src/go.mod` and would follow automatically. Recommendation: **implement it by
-hand on 1.22** (a small function with table tests) and switch to `os.Root` when Go is upgraded for
-another reason.
+**`os.Root`.** Buildy requires Go 1.25 (`go 1.25.0` in `go.mod`, so a local Go with
+`GOTOOLCHAIN=auto` fetches it, and CI's `setup-go` follows `go-version-file: src/go.mod`). The
+extraction root is opened as an `os.Root`, which confines every operation, including following
+symlinks, to the temporary directory; `Root.MkdirAll`, `Root.Symlink` and `Root.Link` (new in 1.25)
+create the tree. The checks in steps 1 to 4 stay for clear error messages and for symlink targets,
+which `Root.Symlink` does not validate.
 
 A dependency's own build scripts run with full user rights anyway, so extraction safety is about
 not clobbering files during unpacking, not about sandboxing the dependency.
@@ -388,25 +387,23 @@ order puts severity and leverage first.
 | 9. One strict loader | 11, S12 (config errors) | `workspace.go` loaders, `yaml_parser.go` schema, dependency file loading, delete `ParseConfigFile`. |
 | 10. Target closure and dry-run | 8, 10, S10 | `config_parser.go` (no filter in generation), `task_graph.go` (closure), `builder.go`, `main.go`, `dependency_resolver.go` (plan mode). |
 
-Coordination: the `ci-releases` branch touches `main.go` and `toolchain_manager.go`. Steps 8 and 10
-edit `main.go`, so they should land after that branch merges, or be rebased onto it.
+Coordination: the `ci-releases` branch touches `main.go` and `toolchain_manager.go`. The steps are
+built on top of it.
 
 ---
 
-## 11. Open questions
+## 11. Decisions
 
-1. **Go version.** Keep Go 1.22 and implement extraction containment by hand (recommended), or move
-   `go.mod` to 1.25 for `os.Root`?
-2. **Same-named targets in different modules.** Reject them (recommended), or give each module its
-   own `bin/` and `lib/`?
-3. **Go and Rust always run their tool** (tens of milliseconds per target when nothing changed) and
-   report "ran" rather than "cache hit". Acceptable?
-4. **Docker** mounts the workspace and cache dir at their host paths and drops the `/workspace`
-   convention. Acceptable?
-5. **Validation** stays map-based with a corrected schema; typed config with `KnownFields` only if
-   the generator moves to typed config. Acceptable?
-6. **Dependency builds** stay a phase before generation, with dry-run planning them instead of
-   running them, rather than becoming graph tasks. Acceptable?
+The open questions, as decided:
+
+1. **Go version.** Move `go.mod` to Go 1.25 and use `os.Root` for extraction (section 8). Extraction
+   still goes into a private temporary directory that is renamed into place.
+2. **Same-named targets in different modules** are rejected, with an error naming both modules.
+3. **Go and Rust always run their tool** and are reported as "ran", not as cache hits.
+4. **Docker** mounts the workspace and cache dir at their host paths; the `/workspace` convention
+   is dropped.
+5. **Validation** stays map-based with a corrected schema.
+6. **Dependency builds** stay a phase before generation; dry-run plans them.
 
 Out of scope, deliberately: compiler versions in cache keys, system headers (`-MMD` convention),
 Docker image digests, and a remote cache.

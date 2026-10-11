@@ -15,6 +15,9 @@ A modern, data-driven build system for multi-language projects.
 
 ### Building Buildy
 
+Buildy needs Go 1.25 or later (`src/go.mod`). With `GOTOOLCHAIN=auto`, the Go default, an
+older `go` downloads it.
+
 ```bash
 # Bootstrap build (first time)
 ./bootstrap.sh

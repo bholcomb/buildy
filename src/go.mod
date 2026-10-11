@@ -1,6 +1,6 @@
 module buildy
 
-go 1.22.2
+go 1.25.0
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1
