@@ -10,8 +10,10 @@ import (
 	"buildy/pkg/util"
 )
 
-// sanitizeModuleNameForPath converts a module name to a filesystem-safe path component.
-// This handles special prefixes like "@fetch:" which contain characters invalid on Windows.
+// sanitizeModuleNameForPath converts a module name to a filesystem-safe path that stays inside
+// the directory it is joined to. This handles special prefixes like "@fetch:", which contain
+// characters invalid on Windows, and modules outside the workspace root ("../lib"), whose ".."
+// components become "_up" as in object paths.
 func sanitizeModuleNameForPath(moduleName string) string {
 	if moduleName == "" {
 		return moduleName
@@ -21,7 +23,13 @@ func sanitizeModuleNameForPath(moduleName string) string {
 	result := moduleName
 	result = strings.ReplaceAll(result, "@", "_")
 	result = strings.ReplaceAll(result, ":", "_")
-	return result
+	parts := strings.Split(filepath.ToSlash(result), "/")
+	for i, part := range parts {
+		if part == ".." {
+			parts[i] = "_up"
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 // TaskGenerator generates build tasks from configuration

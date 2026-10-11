@@ -1865,6 +1865,8 @@ data. There are no setup tasks: the executor creates every output's directory.
 Every output path is a function of the output directory (which already contains
 `<platform>-<arch>-<config>`), the module, the target, and the source's path relative to the
 module: object files go to `${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}`.
+A `..` in a module path (a module outside the workspace root) becomes `_up`, as in `source_rel`, so
+objects stay under `obj/`.
 Two targets compiling the same source get separate objects, and nothing depends on the directory
 buildy was started from: sources, include directories and outputs are absolute paths, and every
 command runs in the workspace root.

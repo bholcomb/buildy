@@ -124,3 +124,23 @@ targets:
 		t.Errorf("no object at %s; got %v", want, fromRoot)
 	}
 }
+
+// A module outside the workspace root ("../lib", as Monstro's CI workspace lists its library)
+// keeps its objects under obj/; they used to land outside the output directory.
+func TestObjectPathsOfModulesOutsideTheRoot(t *testing.T) {
+	top := t.TempDir()
+	root := filepath.Join(top, "ws")
+	writeFiles(t, top, map[string]string{
+		"ws/buildy.yaml":  "project: {name: ws}\n" + cppEnvironment + "workspace:\n  modules: [../lib]\n",
+		"lib/buildy.yaml": "targets:\n  static_libraries:\n    - {name: calc, language: cpp, sources: [add.cpp]}\n",
+		"lib/add.cpp":     "int add(int a, int b) { return a + b; }",
+	})
+	compiles := tasksOfType(mustGenerateTasks(t, root), "compile")
+	if len(compiles) != 1 {
+		t.Fatalf("got %d compiles", len(compiles))
+	}
+	want := filepath.Join(root, "build", "linux-x86_64-debug", "obj", "_up", "lib", "calc", "add.o")
+	if got := compiles[0].Outputs[0]; got != want {
+		t.Errorf("object at %s, want %s", got, want)
+	}
+}
