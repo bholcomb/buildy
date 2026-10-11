@@ -13,7 +13,7 @@ import (
 
 // File is a buildy.yaml: the workspace root, a module, or a dependency's override config.
 type File struct {
-	Path string `yaml:"-"`
+	Path string `yaml:"-" json:"-"`
 
 	Project        *Project                    `yaml:"project"`
 	Variables      Variables                   `yaml:"variables"`
@@ -37,8 +37,8 @@ type File struct {
 	Tasks      replaced `yaml:"tasks"`
 
 	// The filter keys and abstract keywords the file uses, checked once the toolchains are known
-	FilterKeys []NameUse `yaml:"-"`
-	Keywords   []NameUse `yaml:"-"`
+	FilterKeys []NameUse `yaml:"-" json:"-"`
+	Keywords   []NameUse `yaml:"-" json:"-"`
 }
 
 // replaced is a legacy section; having one is an error.

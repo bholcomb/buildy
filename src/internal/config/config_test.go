@@ -327,3 +327,17 @@ build_system:
 		t.Errorf("err = %v", err)
 	}
 }
+
+// A filtered list of one item may be written as the item, as before.
+func TestFilteredListOfOne(t *testing.T) {
+	var v struct {
+		Sources Filtered[Source] `yaml:"sources"`
+		Defines Filtered[string] `yaml:"defines"`
+		Libs    Filtered[string] `yaml:"libs"`
+	}
+	d := decodeInto(t, "sources: main.c\ndefines: {pattern: x}\nlibs: {linux: [m]}\n", &v)
+	if got := v.Sources.Resolve(Context{}); len(got) != 1 || got[0].Pattern != "main.c" {
+		t.Errorf("sources = %+v", got)
+	}
+	wantProblems(t, d, "'defines' must be a list, not a mapping", "'libs' must be a list, not a mapping")
+}

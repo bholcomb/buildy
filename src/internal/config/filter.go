@@ -87,6 +87,11 @@ func (f *Filtered[T]) decodeNode(d *decoder, n *yaml.Node, path string) {
 			}
 		}
 		*f = list
+	case n.Kind == yaml.ScalarNode || (n.Kind == yaml.MappingNode && isLeafMapping[T](n)):
+		// One item for a list of one, as YAML lets a list of one be written
+		if it, ok := decodeFilterItem[T](d, n, path); ok {
+			*f = Filtered[T]{it}
+		}
 	default:
 		d.errorf(n, "'%s' must be a list, not %s", path, kindName(n))
 	}
