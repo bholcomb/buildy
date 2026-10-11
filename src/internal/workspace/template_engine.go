@@ -793,9 +793,7 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		return nil, err
 	}
 	// The tool runs in the target's directory (the module for go build, the crate for cargo)
-	if workingDir != "." {
-		command.Dir = workingDir
-	}
+	command.Dir = workingDir
 
 	// The tool tracks its own inputs (imports outside the target directory, go.mod, Cargo.toml,
 	// path dependencies, build scripts, embedded files): a tool-cached task always runs and lets

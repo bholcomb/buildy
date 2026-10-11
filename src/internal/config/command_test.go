@@ -1,11 +1,21 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"buildy/pkg/util"
 )
+
+// MustParseCommandTemplate parses a command written in a test.
+func MustParseCommandTemplate(text string) CommandTemplate {
+	t, err := ParseCommandTemplate(text)
+	if err != nil {
+		panic(fmt.Sprintf("command %q: %v", text, err))
+	}
+	return t
+}
 
 func TestCommandTemplateExpand(t *testing.T) {
 	values := MapValues(map[string][]string{

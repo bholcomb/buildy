@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -52,7 +53,7 @@ func (s ExecSpec) Validate() error {
 type Command struct {
 	Args         []string `json:"args,omitempty"`          // the program, then its arguments
 	Script       string   `json:"script,omitempty"`        // instead of Args: run by sh -c, or cmd.exe /c on a Windows host
-	Dir          string   `json:"dir,omitempty"`           // the working directory; the workspace root if empty
+	Dir          string   `json:"dir,omitempty"`           // the working directory, relative to the workspace root (the root if empty)
 	ResponseFile string   `json:"response_file,omitempty"` // how the program reads arguments from an @file, if it can
 }
 
@@ -85,7 +86,7 @@ func ShellQuoter(spec ExecSpec) func(string) (string, error) {
 	return func(s string) (string, error) { return QuotePOSIX(s), nil }
 }
 
-// Run runs command natively or in Docker, in its directory (defaultDir if it names none). A
+// Run runs command natively or in Docker, in its directory (relative to defaultDir). A
 // Docker container gets mounts (the workspace root, and the cache directory when it lies
 // elsewhere) at their host paths, so the absolute host paths in commands are valid inside it.
 func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, timeoutSeconds int) (*ExecutionResult, error) {
@@ -95,8 +96,8 @@ func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, tim
 	if command.IsZero() {
 		return nil, fmt.Errorf("no command to run")
 	}
-	if command.Dir == "" {
-		command.Dir = defaultDir
+	if !filepath.IsAbs(command.Dir) {
+		command.Dir = filepath.Join(defaultDir, command.Dir)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)

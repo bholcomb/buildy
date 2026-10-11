@@ -127,15 +127,6 @@ func ParseCommandTemplate(text string) (CommandTemplate, error) {
 	return t, nil
 }
 
-// MustParseCommandTemplate parses a command written in Go code.
-func MustParseCommandTemplate(text string) CommandTemplate {
-	t, err := ParseCommandTemplate(text)
-	if err != nil {
-		panic(fmt.Sprintf("command %q: %v", text, err))
-	}
-	return t
-}
-
 // IsZero reports whether the template is unset.
 func (t CommandTemplate) IsZero() bool {
 	return t.Text == "" && len(t.words) == 0
