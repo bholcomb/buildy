@@ -735,10 +735,10 @@ func zipNames(t *testing.T, path string) []string {
 	return names
 }
 
-// Finding 2.2: an archive of 1500 objects runs with a response file. buildy runs with a 1 MiB
-// stack limit, so Linux lets a program start with 256 KiB of arguments and environment; the
-// archive's ~300 KiB command line is over it, and over the 128 KiB that sh -c took as one
-// argument.
+// Finding 2.2: an archive of 1500 objects, and an executable linked from 1500 objects, run with
+// response files. buildy runs with a 1 MiB stack limit, so Linux lets a program start with 256 KiB
+// of arguments and environment; the archive's and the link's ~300 KiB command lines are over it,
+// and over the 128 KiB that sh -c took as one argument. A second build runs nothing.
 func TestE2EManyObjects(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping: the limits measured are Linux's")
@@ -749,23 +749,32 @@ func TestE2EManyObjects(t *testing.T) {
 	for i := 1; i <= 1500; i++ {
 		writeFile(t, filepath.Join(dir, long, fmt.Sprintf("f_%04d.c", i)), fmt.Sprintf("int f_%04d(void) { return %d; }\n", i, i))
 	}
-	cmd := exec.Command("sh", "-c", `ulimit -s 1024 && exec "$0" "$@"`, buildyBinary, "-j", fmt.Sprint(runtime.NumCPU()), "-n", "3")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("buildy failed: %v\n%s", err, tail(string(out), 40))
+	build := func() string {
+		cmd := exec.Command("sh", "-c", `ulimit -s 1024 && exec "$0" "$@"`, buildyBinary, "-j", fmt.Sprint(runtime.NumCPU()), "-n", "3")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("buildy failed: %v\n%s", err, tail(string(out), 40))
+		}
+		return string(out)
 	}
-	if !strings.Contains(string(out), "Arguments in response file") {
-		t.Errorf("the archive ran without a response file:\n%s", tail(string(out), 40))
+	out := build()
+	if n := strings.Count(out, "Arguments in response file"); n != 2 {
+		t.Errorf("%d commands ran with a response file, want 2 (the archive and the link):\n%s", n, tail(out, 40))
 	}
-	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "1501" {
-		t.Errorf("app printed %q, want 1501", got)
+	for _, app := range []string{"app", "direct"} {
+		if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", app)); got != "1501" {
+			t.Errorf("%s printed %q, want 1501", app, got)
+		}
 	}
 	if members := strings.Fields(run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libmany.a"))); len(members) != 1500 {
 		t.Errorf("libmany.a has %d members, want 1500", len(members))
 	}
 	if rsp, _ := filepath.Glob(filepath.Join(dir, ".buildy_cache", "response_files", "*")); len(rsp) != 0 {
 		t.Errorf("response files left behind: %v", rsp)
+	}
+	if out := build(); !strings.Contains(out, "3005 cache hits, 0 executed") {
+		t.Errorf("a second build ran tasks:\n%s", tail(out, 20))
 	}
 }
 

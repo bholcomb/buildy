@@ -1,6 +1,7 @@
-# 1500 objects (finding 2.2): the archive of `many` is over the command line limit the test
-# sets (buildy runs with a 1 MiB stack, which allows 256 KiB of arguments and environment), so
-# ar gets its arguments in a response file. The test writes the sources, src/<long>/f_NNNN.c.
+# 1500 objects (finding 2.2): the archive of `many`, and the link of `direct` from the same 1500
+# sources, are over the command line limit the test sets (buildy runs with a 1 MiB stack, which
+# allows 256 KiB of arguments and environment), so ar and gcc get their arguments in response
+# files. The test writes the sources, src/<long>/f_NNNN.c.
 project:
   name: many_objects
 
@@ -18,3 +19,6 @@ targets:
       language: c
       sources: ["main.c"]
       libs: [many]
+    - name: direct
+      language: c
+      sources: ["src/*/*.c", "main.c"]
