@@ -40,7 +40,7 @@ func ran(t *testing.T, bc *BuildCache, task *workspace.BuildTask, dir string) {
 	if err := task.HashInputs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := bc.Record(task, 0.1, dir); err != nil {
+	if err := bc.Record(task, dir); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -164,7 +164,7 @@ func TestRecordFailsWithoutADeclaredOutput(t *testing.T) {
 	if err := task.HashInputs(); err != nil {
 		t.Fatal(err)
 	}
-	err = bc.Record(task, 0, dir)
+	err = bc.Record(task, dir)
 	if err == nil || !strings.Contains(err.Error(), "main.o") {
 		t.Fatalf("expected an error naming main.o, got %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRecordFailsOnAnUnparsableDepFile(t *testing.T) {
 	if err := task.HashInputs(); err != nil {
 		t.Fatal(err)
 	}
-	if err := bc.Record(task, 0, dir); err == nil {
+	if err := bc.Record(task, dir); err == nil {
 		t.Fatal("expected an error for an unparsable dependency file")
 	}
 }

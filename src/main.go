@@ -361,10 +361,9 @@ func main() {
 		if err != nil {
 			util.LogFatal("Failed to open the cache: %v", err)
 		}
-		stats := buildCache.GetCacheStats()
 		util.LogProgress("Cache Statistics:")
-		util.LogProgress("  Total entries: %d", stats["total_entries"])
-		util.LogProgress("  Cache directory: %s", stats["cache_directory"])
+		util.LogProgress("  Total entries: %d", buildCache.Entries())
+		util.LogProgress("  Cache directory: %s", buildCache.CacheDir())
 		os.Exit(0)
 	}
 

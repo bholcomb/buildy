@@ -113,8 +113,8 @@ func TestExecutorFailsWhenADeclaredOutputIsMissing(t *testing.T) {
 	if te.ExecutionStats.FailedTasks != 1 {
 		t.Errorf("failed tasks = %d, want 1", te.ExecutionStats.FailedTasks)
 	}
-	if stats := te.Cache.GetCacheStats(); stats["total_entries"] != 0 {
-		t.Errorf("cache entries = %v, want 0", stats["total_entries"])
+	if n := te.Cache.Entries(); n != 0 {
+		t.Errorf("cache entries = %d, want 0", n)
 	}
 }
 

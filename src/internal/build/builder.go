@@ -127,6 +127,12 @@ func (b *Builder) BuildWorkspace(
 	executor.BuildResult = result // Pass result for tracking
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
+	// Compact the cache: what the finished tasks recorded goes into its index
+	if err := b.Cache.Close(); err != nil {
+		result.Finish(false)
+		return result, err
+	}
+
 	result.ExecDuration = time.Since(execStart).Seconds()
 	util.LogProgress("Task execution completed in %.2fs", result.ExecDuration)
 

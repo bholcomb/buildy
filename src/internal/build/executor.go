@@ -295,7 +295,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 		runErr = checkOutputs(task)
 	}
 	if runErr == nil && !task.ToolCached {
-		runErr = te.Cache.Record(task, executionTime, te.WorkDir)
+		runErr = te.Cache.Record(task, te.WorkDir)
 	}
 	if runErr != nil {
 		// Clean up partial outputs on failure
