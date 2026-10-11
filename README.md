@@ -196,9 +196,9 @@ Options:
   -p, --platform <name> Target platform (linux, windows, macos)
   -a, --arch <name>     Target architecture (x86_64, arm64)
   -t, --toolchain <name> Override toolchain selection
-  --target <name>       Build specific target(s)
+  --target <name>       Build a target and what it depends on (repeatable)
   -j, --workers <n>     Number of parallel workers
-  -d, --dry-run         Show what would be built
+  -d, --dry-run         Plan: show what would be fetched, built and run
   --clean               Clean build outputs
   -f, --force           Ignore cache, rebuild all
   --compile-commands    Generate compile_commands.json

@@ -108,7 +108,7 @@ func main() {
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
 	release := flag.BoolP("release", "r", false, "Build in release mode (shortcut for --config=release)")
 	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
-	dryRun := flag.BoolP("dry-run", "d", false, "Generate tasks but don't execute")
+	dryRun := flag.BoolP("dry-run", "d", false, "Plan the build: list what would be fetched, built and run, without doing any of it")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
@@ -124,7 +124,7 @@ func main() {
 
 	// Custom flag for multiple targets
 	var targets []string
-	flag.StringArrayVar(&targets, "target", []string{}, "Build specific target(s) (workspace mode only, can be used multiple times)")
+	flag.StringArrayVar(&targets, "target", []string{}, "Build this target and everything it depends on, in any module (can be used multiple times)")
 
 	// Custom flag for additional data directories
 	var additionalDataDirs []string
@@ -332,12 +332,6 @@ func main() {
 	}
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
-	// Determine target filter
-	var targetFilter []string
-	if len(targets) > 0 {
-		targetFilter = targets
-	}
-
 	// Create variable environment for package resolution
 	rootVarEnv := util.NewVariableEnvironment(nil)
 	rootVarEnv.SetVariable("platform", *platform, "builtin")
@@ -405,8 +399,9 @@ func main() {
 			util.LogFatal("Failed to load dependencies: %v", err)
 		}
 
-		// Resolve all dependencies
-		if err := depResolver.ResolveAll(); err != nil {
+		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
+		// builds nothing, and uses what is already on disk.
+		if err := depResolver.ResolveAll(*dryRun); err != nil {
 			util.LogFatal("Failed to resolve dependencies: %v", err)
 		}
 	}
@@ -436,12 +431,12 @@ func main() {
 		CompileCommands: *compileCommands,
 	}
 
-	// Build the workspace
-	// Note: All dependencies (cmake, make, meson, buildy) are already built during ResolveAll()
+	// Generate, validate, select (--target) and execute (or, with --dry-run, print the plan).
+	// The dependencies (cmake, make, meson, buildy) were built by ResolveAll.
 	result, err := builder.BuildWorkspace(
 		ws,
 		configParser,
-		targetFilter,
+		targets,
 		buildOptions,
 	)
 	

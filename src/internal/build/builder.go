@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"buildy/internal/cache"
@@ -38,7 +40,7 @@ func NewBuilder(cacheDir string, maxWorkers int) (*Builder, error) {
 func (b *Builder) BuildWorkspace(
 	ws *workspace.Workspace,
 	configParser *workspace.ConfigParser,
-	targetFilter []string,
+	targets []string,
 	options BuildOptions,
 ) (*BuildResult, error) {
 	util.LogProgress("Starting workspace build...")
@@ -69,26 +71,41 @@ func (b *Builder) BuildWorkspace(
 	taskGenStart := time.Now()
 
 	// Generate tasks for all modules
-	allTasks, err := configParser.GenerateWorkspaceTasks(targetFilter)
+	allTasks, err := configParser.GenerateWorkspaceTasks()
 	if err != nil {
 		result.Finish(false)
 		return result, fmt.Errorf("failed to generate workspace tasks: %w", err)
 	}
 
-	result.TotalTasks = len(allTasks)
-
-	// Build and validate the task graph (under --dry-run too)
+	// Build and validate the whole task graph (under --dry-run too)
 	graph := workspace.NewTaskGraph()
 	for _, task := range allTasks {
 		if err := graph.AddTask(task); err != nil {
 			result.Finish(false)
 			return result, err
 		}
-		result.TasksByType[task.TaskType]++
 	}
 	if err := graph.Validate(); err != nil {
 		result.Finish(false)
 		return result, err
+	}
+
+	// --target: run the named targets and everything they depend on, in any module
+	if len(targets) > 0 {
+		if graph, err = graph.Select(targets); err != nil {
+			result.Finish(false)
+			return result, err
+		}
+		allTasks = allTasks[:0]
+		for _, task := range graph.Tasks {
+			allTasks = append(allTasks, task)
+		}
+		sort.Slice(allTasks, func(i, j int) bool { return allTasks[i].TaskID < allTasks[j].TaskID })
+		util.LogProgress("Selected %d tasks for %s", len(allTasks), strings.Join(targets, ", "))
+	}
+	result.TotalTasks = len(allTasks)
+	for _, task := range allTasks {
+		result.TasksByType[task.TaskType]++
 	}
 
 	// Save task graph for debugging

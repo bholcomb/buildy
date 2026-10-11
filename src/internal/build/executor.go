@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -418,28 +420,13 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 	return nil
 }
 
-// printDryRun prints dry run information
+// printDryRun prints the execution plan: every task, stage by stage, without running any
 func (te *TaskExecutor) printDryRun(graph *workspace.TaskGraph) {
-	plan, err := graph.GetExecutionPlan()
-	if err != nil {
-		util.LogInfo("ERROR: Failed to get execution plan: %v", err)
-		return
-	}
-
-	util.LogInfo("Execution Plan:")
-	util.LogInfo("  Total tasks: %v", plan["total_tasks"])
-	util.LogInfo("  Total stages: %v", plan["total_stages"])
-	util.LogInfo("  Estimated time: %.1fs", plan["estimated_time_seconds"])
-	util.LogInfo("  Max parallel tasks: %v", plan["max_parallel_tasks"])
-
-	if stages, ok := plan["stages"].([]map[string]any); ok {
-		for _, stageInfo := range stages {
-			for stageKey, tasksRaw := range stageInfo {
-				if tasks, ok := tasksRaw.([]string); ok {
-					util.LogInfo("  %s: %v", stageKey, tasks)
-				}
-			}
-		}
+	util.LogProgress("Dry run: %d tasks in %d stages (nothing is executed)", len(graph.Tasks), len(graph.ExecutionStages))
+	for i, stage := range graph.ExecutionStages {
+		ids := append([]string{}, stage...)
+		sort.Strings(ids)
+		util.LogProgress("  Stage %d: %s", i+1, strings.Join(ids, ", "))
 	}
 }
 

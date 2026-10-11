@@ -1,0 +1,13 @@
+project:
+  name: dry_run_dep
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+targets:
+  executables:
+    - name: app
+      language: cpp
+      sources: ["main.cpp"]
+      deps: [mydep]

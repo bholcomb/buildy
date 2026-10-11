@@ -96,6 +96,7 @@ type DependencyResolver struct {
 	buildSystemManager *BuildSystemManager
 	resolved           map[string]*ResolvedDependency
 	configs            map[string]*DependencyConfig
+	plan               bool // Dry run: report fetches and builds instead of doing them
 }
 
 // NewDependencyResolver creates a new DependencyResolver
@@ -500,9 +501,17 @@ func (dr *DependencyResolver) parseDependencySection(data map[string]any) (Depen
 	return section, nil
 }
 
-// ResolveAll resolves all loaded dependencies
-func (dr *DependencyResolver) ResolveAll() error {
-	for name, config := range dr.configs {
+// ResolveAll resolves all loaded dependencies: fetches and builds them. With plan (--dry-run), it
+// fetches and builds nothing, reports what it would do, and resolves what is already on disk.
+func (dr *DependencyResolver) ResolveAll(plan bool) error {
+	dr.plan = plan
+	names := make([]string, 0, len(dr.configs))
+	for name := range dr.configs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		config := dr.configs[name]
 		if err := dr.resolveDependency(name, config); err != nil {
 			return err
 		}
@@ -712,14 +721,27 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 
 	// Fetch the dependency
 	var err error
+	source := section.URL
 	if section.Git != "" {
+		source = section.Git
+		if section.Ref != "" {
+			source += " @ " + section.Ref
+		}
+	}
+	if dr.plan {
+		if fileExists(dest) {
+			util.LogProgress("Dry run: would fetch %s from %s (using what is in %s)", name, source, dest)
+		} else {
+			util.LogProgress("Dry run: would fetch %s from %s into %s (not on disk yet: its include and lib dirs are missing from this plan)", name, source, dest)
+		}
+	} else if section.Git != "" {
 		err = dr.fetchManager.FetchGit(section.Git, section.Ref, dest)
-		resolved.SourceGit = section.Git
-		resolved.SourceRef = section.Ref
 	} else if section.URL != "" {
 		err = dr.fetchManager.FetchURL(section.URL, section.Checksum, dest)
-		resolved.SourceURL = section.URL
 	}
+	resolved.SourceGit = section.Git
+	resolved.SourceRef = section.Ref
+	resolved.SourceURL = section.URL
 
 	if err != nil {
 		return fmt.Errorf("failed to fetch '%s': %w", name, err)
@@ -771,6 +793,11 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 
 	buildSystemName := section.Build.System
 
+	if dr.plan && !fileExists(dest) {
+		util.LogProgress("Dry run: would build %s (debug, release) with %s", name, buildSystemName)
+		return nil
+	}
+
 	var bsConfig *BuildSystemConfig
 	if buildSystemName == "auto" || buildSystemName == "" {
 		bsConfig = dr.buildSystemManager.Detect(dest)
@@ -783,6 +810,15 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		if bsConfig == nil {
 			return fmt.Errorf("unknown build system '%s' for %s", buildSystemName, name)
 		}
+	}
+
+	if dr.plan {
+		util.LogProgress("Dry run: would build %s (debug, release) with %s", name, bsConfig.Name)
+		includeDirs, libDirs := dr.buildSystemManager.GetOutputPaths(bsConfig, dest,
+			filepath.Join(dest, "_build", "debug"), filepath.Join(dest, "_install", "debug"))
+		resolved.IncludeDirs = append(resolved.IncludeDirs, includeDirs...)
+		resolved.LibDirs = append(resolved.LibDirs, libDirs...)
+		return nil
 	}
 
 	util.LogProgress("=== Building dependency: %s (using %s) ===", name, bsConfig.Name)

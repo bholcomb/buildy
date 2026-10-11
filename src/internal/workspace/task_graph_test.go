@@ -307,3 +307,40 @@ func TestAddTaskRejectsDuplicateIDs(t *testing.T) {
 		t.Fatal("a duplicate task ID was accepted")
 	}
 }
+
+// Finding 8 and S10: --target runs the target and its dependencies, in any module, and nothing
+// else; an unknown target is an error.
+func TestSelectTakesTheDependencyClosure(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":        "project: {name: ws}\n" + cppEnvironment + "workspace:\n  modules: [libmod, appmod]\n",
+		"libmod/buildy.yaml": "project: {name: libmod}\ntargets:\n  static_libraries:\n    - {name: calc, language: cpp, sources: [add.cpp]}\n",
+		"appmod/buildy.yaml": "project: {name: appmod}\ntargets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp], libs: [calc]}\n    - {name: other, language: cpp, sources: [other.cpp]}\n",
+		"libmod/add.cpp":     "int add(int a, int b) { return a + b; }",
+		"appmod/main.cpp":    "int main() {}",
+		"appmod/other.cpp":   "int main() {}",
+	})
+	graph := graphOf(t, mustGenerateTasks(t, root)...)
+	if err := graph.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := graph.Select([]string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]bool{}
+	for _, task := range selected.Tasks {
+		targets[task.Target] = true
+	}
+	if !targets["app"] || !targets["calc"] || targets["other"] || len(targets) != 2 {
+		t.Errorf("selected the tasks of %v, want app and calc", targets)
+	}
+	if _, err := selected.BuildExecutionStages(); err != nil {
+		t.Errorf("the selection is not a closed graph: %v", err)
+	}
+
+	_, err = graph.Select([]string{"nosuch"})
+	if err == nil || !strings.Contains(err.Error(), "unknown target 'nosuch'") || !strings.Contains(err.Error(), "calc") {
+		t.Errorf("got %v", err)
+	}
+}

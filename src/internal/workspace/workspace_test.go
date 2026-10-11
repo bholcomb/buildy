@@ -41,12 +41,12 @@ func linuxDebug() BuildContext {
 func TestModuleSelectionUsesTheBuildContext(t *testing.T) {
 	module := "project: {name: m}\n"
 	files := map[string]string{
-		"common/buildy.yaml":         module,
-		"platform-linux/buildy.yaml": module,
-		"platform-win/buildy.yaml":   module,
-		"arm/buildy.yaml":            module,
-		"rel/buildy.yaml":            module,
-		"parent/buildy.yaml":         "project: {name: parent}\nworkspace:\n  modules:\n    - linux: [child-linux]\n    - windows: [child-win]\n",
+		"common/buildy.yaml":             module,
+		"platform-linux/buildy.yaml":     module,
+		"platform-win/buildy.yaml":       module,
+		"arm/buildy.yaml":                module,
+		"rel/buildy.yaml":                module,
+		"parent/buildy.yaml":             "project: {name: parent}\nworkspace:\n  modules:\n    - linux: [child-linux]\n    - windows: [child-win]\n",
 		"parent/child-linux/buildy.yaml": module,
 		"parent/child-win/buildy.yaml":   module,
 		"legacy/buildy.yaml":             "project: {name: legacy}\nworkspace:\n  modules:\n    common: [shared]\n    linux: [lin]\n    windows: [win]\n",

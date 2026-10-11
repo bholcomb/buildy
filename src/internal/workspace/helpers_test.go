@@ -49,7 +49,7 @@ func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*Bui
 		t.Fatal(err)
 	}
 	cp := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil, nil)
-	return cp.GenerateWorkspaceTasks(nil)
+	return cp.GenerateWorkspaceTasks()
 }
 
 func mustGenerateTasks(t *testing.T, root string) []*BuildTask {

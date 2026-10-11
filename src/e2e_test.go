@@ -403,3 +403,80 @@ func TestE2EUnknownKey(t *testing.T) {
 		t.Error("the invalid config was built")
 	}
 }
+
+// Finding 8 and S10: --target app builds calc from another module first, and nothing else;
+// after calc changes, --target app relinks against the new calc. An unknown target fails.
+func TestE2ETargetClosure(t *testing.T) {
+	needCpp(t)
+	dir := fixture(t, "target_closure")
+	app := filepath.Join(outDir(dir, "debug"), "bin", "app")
+
+	mustBuildy(t, dir, "--target", "app")
+	if got := run(t, app); got != "5" {
+		t.Fatalf("app printed %q, want 5", got)
+	}
+
+	writeFile(t, filepath.Join(dir, "libmod", "add.cpp"), "int add(int a, int b) { return a * b; }\n")
+	if err := os.Remove(app); err != nil {
+		t.Fatal(err)
+	}
+	mustBuildy(t, dir, "--target", "app")
+	if got := run(t, app); got != "6" {
+		t.Errorf("after changing calc, app printed %q, want 6 (a stale libcalc.a was linked)", got)
+	}
+
+	out := mustFailBuildy(t, dir, "--target", "nosuch")
+	if !strings.Contains(out, "unknown target 'nosuch'") {
+		t.Errorf("--target nosuch:\n%s", out)
+	}
+}
+
+// Finding 10: --dry-run neither fetches a dependency nor runs its build.
+func TestE2EDryRunDependency(t *testing.T) {
+	needCpp(t)
+	needTools(t, "git", "make")
+	dir := fixture(t, "dry_run_dep")
+
+	// The dependency is a local git repository, outside the workspace.
+	repo := filepath.Join(t.TempDir(), "dep")
+	if err := os.Rename(filepath.Join(dir, "dep"), repo); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "add", "."},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "dep"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
+		fmt.Sprintf("mydep:\n  git: %q\n  build: {system: make}\n", repo))
+
+	out := mustBuildy(t, dir, "--dry-run")
+	cloned := filepath.Join(dir, ".buildy_cache", "deps", "mydep")
+	if _, err := os.Stat(cloned); err == nil {
+		t.Errorf("--dry-run cloned the dependency into %s", cloned)
+	}
+	for _, want := range []string{"would fetch mydep", "would build mydep"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the plan lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outDir(dir, "debug"), "bin", "app")); err == nil {
+		t.Error("--dry-run built the app")
+	}
+
+	// A real build fetches it and runs its Makefile for debug and release.
+	mustBuildy(t, dir)
+	log, err := os.ReadFile(filepath.Join(cloned, "side_effect.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(log), "built"); got != 2 {
+		t.Errorf("the dependency was built %d times, want 2 (debug and release)", got)
+	}
+}

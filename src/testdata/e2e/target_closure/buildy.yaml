@@ -1,0 +1,9 @@
+project:
+  name: target_closure
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+workspace:
+  modules: [libmod, appmod]

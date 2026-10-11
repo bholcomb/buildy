@@ -47,6 +47,10 @@ type TaskGenerator struct {
 	// Track generated targets for cross-module dependency resolution
 	generatedTargets map[string]string // target name -> link task ID
 
+	// The module's merged configuration and output directory, from GenerateTargetTasks
+	mergedConfig map[string]any
+	outputDir    string
+
 	// Artifact tracking (moved from global state for better encapsulation)
 	artifactOutputs    map[string][]string // artifact name -> output paths
 	artifactTaskIDs    map[string][]string // artifact name -> task IDs
@@ -467,7 +471,23 @@ func (tg *TaskGenerator) generateTargetTasks(
 
 // GenerateTasks generates all tasks for a configuration
 func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) ([]*BuildTask, error) {
+	tasks, err := tg.GenerateTargetTasks(config, outputDir)
+	if err != nil {
+		return nil, err
+	}
+	packaging, err := tg.GeneratePackagingTasks(config, tasks)
+	if err != nil {
+		return nil, err
+	}
+	return append(tasks, packaging...), nil
+}
+
+// GenerateTargetTasks generates a module's generate and transform artifacts and its targets.
+// Every module's targets are generated before any module's packaging tasks
+// (GeneratePackagingTasks), which may name targets of other modules.
+func (tg *TaskGenerator) GenerateTargetTasks(config map[string]any, outputDir string) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
+	tg.outputDir = outputDir
 
 	if tg.TaskIDGen == nil {
 		moduleName := tg.CurrentModule
@@ -481,6 +501,7 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to build merged config: %w", err)
 	}
+	tg.mergedConfig = mergedConfig
 
 	// IMPORTANT: Generate artifact tasks BEFORE targets so targets can depend on them
 	// This allows targets to use depends_on.artifacts for code generation workflows
@@ -545,9 +566,18 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 		}
 	}
 
+	return tasks, nil
+}
+
+// GeneratePackagingTasks generates a module's copy artifacts, staging and install tasks, once
+// every module's targets exist. existing are the module's tasks from GenerateTargetTasks.
+func (tg *TaskGenerator) GeneratePackagingTasks(config map[string]any, existing []*BuildTask) ([]*BuildTask, error) {
+	mergedConfig, outputDir := tg.mergedConfig, tg.outputDir
+	tasks := []*BuildTask{}
+
 	// Generate artifact copy tasks AFTER targets (they may depend on target outputs)
 	if artifacts, ok := config["artifacts"].(map[string]any); ok {
-		copyTasks, err := tg.generateArtifactCopyTasks(artifacts, mergedConfig, outputDir, tasks)
+		copyTasks, err := tg.generateArtifactCopyTasks(artifacts, mergedConfig, outputDir, existing)
 		if err != nil {
 			return nil, err
 		}

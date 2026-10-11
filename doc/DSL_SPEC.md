@@ -2367,7 +2367,8 @@ buildy --update-lock       # Generate/update lockfile
 buildy --require-lock      # Fail if no lockfile
 buildy --ignore-lock       # Ignore lockfile
 
-# Build specific targets
+# Build specific targets and everything they depend on (in any module); nothing else.
+# An unknown target name is an error.
 buildy --target engine_core
 buildy --target game
 
@@ -2378,7 +2379,7 @@ buildy --compile-commands  # Generate buildy_config/compile_commands.json for ID
 buildy --jobs 8            # Parallel jobs
 buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging
-buildy --dry-run           # Show what would be built
+buildy --dry-run           # Plan: what would be fetched, built and run (does none of it)
 buildy --clean             # Clean build outputs
 buildy --force             # Ignore cache, rebuild all
 ```
@@ -2440,21 +2441,18 @@ ln -s buildy_config/compile_commands.json compile_commands.json
 ## 16. Build Flow
 
 ```
-1. Parse root buildy.yaml
-2. Process import_env_vars, resolve all variables
-3. For each module in workspace.modules (filtered by platform):
-   a. Parse module's buildy.yaml
-   b. Recursively process child modules
-   c. Collect all targets and artifacts
-4. Resolve dependencies:
+1. Load: parse and validate the root buildy.yaml and every module the build context
+   (--platform, --architecture, --config) selects, recursively
+2. Prepare: resolve dependencies
    a. System: pkg-config or explicit paths
-   b. Paths: Variable expansion
-   c. Fetch: Download/cache, detect build system, build if needed
-5. Check/generate lockfile (if requested)
-6. Build unified dependency graph across all targets
-7. Execute in parallel stages with content-addressable caching
-8. Generate build report (JSON + terminal summary)
-9. Warn once about system library reproducibility (at end)
+   b. Fetch: download or clone, detect the build system, build debug and release
+   (--dry-run plans this step: it reports what it would fetch and build, and uses what is on disk)
+3. Generate: the tasks of every module, all targets first, then copies, staging and install
+4. Validate: one producer per output, every dependency a task, no unresolved ${...};
+   add the edges from producers to the tasks that read their outputs
+5. Select: with --target, the named targets' final tasks and everything they depend on
+6. Execute in parallel stages with content-addressable caching (--dry-run prints the stages)
+7. Generate build report (JSON + terminal summary)
 ```
 
 ## 17. Build Reports

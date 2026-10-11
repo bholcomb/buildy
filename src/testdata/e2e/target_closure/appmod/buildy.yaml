@@ -1,0 +1,14 @@
+project:
+  name: appmod
+
+targets:
+  executables:
+    - name: app
+      language: cpp
+      sources: ["main.cpp"]
+      libs: [calc]
+
+    # Not a dependency of app: --target app must not build it (it doesn't compile)
+    - name: other
+      language: cpp
+      sources: ["broken.cpp"]

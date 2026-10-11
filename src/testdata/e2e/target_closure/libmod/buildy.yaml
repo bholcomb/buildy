@@ -1,0 +1,8 @@
+project:
+  name: libmod
+
+targets:
+  static_libraries:
+    - name: calc
+      language: cpp
+      sources: ["add.cpp"]

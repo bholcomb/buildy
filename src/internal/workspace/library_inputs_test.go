@@ -82,7 +82,7 @@ foo:
 	if err := deps.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := deps.ResolveAll(); err != nil {
+	if err := deps.ResolveAll(false); err != nil {
 		t.Fatal(err)
 	}
 	toolchains, err := resource.NewToolchainManagerMulti(nil)
@@ -93,7 +93,7 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps, nil).GenerateWorkspaceTasks(nil)
+	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps, nil).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}

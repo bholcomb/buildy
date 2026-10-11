@@ -1180,11 +1180,11 @@ buildy --dry-run                 # Show what would build
 | `--platform` | `-p` | Target platform |
 | `--architecture` | `-a` | Target architecture |
 | `--toolchain` | `-t` | Override toolchain |
-| `--target` | | Build specific target(s) |
+| `--target` | | Build a target and everything it depends on, in any module (repeatable); an unknown name is an error |
 | `--workers` | `-j` | Parallel workers |
 | `--force` | `-f` | Ignore cache |
 | `--clean` | | Clean artifacts |
-| `--dry-run` | `-d` | Don't execute |
+| `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks that would run; fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
 | `--update-lock` | | Update lockfile |

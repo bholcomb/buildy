@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"buildy/internal/resource"
@@ -165,8 +166,10 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 	)
 }
 
-// GenerateWorkspaceTasks generates tasks for entire workspace or specific targets
-func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildTask, error) {
+// GenerateWorkspaceTasks generates the tasks of every module. A build of selected targets runs
+// part of them (TaskGraph.Select): generation is cheap, and every target is needed to resolve
+// names anyway.
+func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	if cp.Workspace == nil {
 		return nil, fmt.Errorf("no workspace configured. Use GenerateTasks() for single-file builds")
 	}
@@ -200,13 +203,36 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 	// Store workspace VarEnv for use in generateWorkspaceLevelTasks
 	cp.VarEnv = workspaceVarEnv
 
-	// Process each module
-	for modulePath, moduleInfo := range cp.Workspace.Modules {
-		moduleTasks, err := cp.processModule(modulePath, moduleInfo, targetFilter, workspaceVarEnv)
+	// Generate every module's targets, in a fixed order, then every module's packaging tasks
+	// (copies, staging, install), which may name targets of other modules
+	modulePaths := make([]string, 0, len(cp.Workspace.Modules))
+	for modulePath := range cp.Workspace.Modules {
+		modulePaths = append(modulePaths, modulePath)
+	}
+	sort.Strings(modulePaths)
+	type generated struct {
+		gen    *TaskGenerator
+		config map[string]any
+		tasks  []*BuildTask
+	}
+	modules := make([]generated, 0, len(modulePaths))
+	for _, modulePath := range modulePaths {
+		moduleTasks, gen, moduleConfig, err := cp.processModule(modulePath, cp.Workspace.Modules[modulePath], workspaceVarEnv)
 		if err != nil {
 			return nil, err
 		}
+		modules = append(modules, generated{gen, moduleConfig, moduleTasks})
 		allTasks = append(allTasks, moduleTasks...)
+	}
+	for i, modulePath := range modulePaths {
+		packaging, err := modules[i].gen.GeneratePackagingTasks(modules[i].config, modules[i].tasks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+		}
+		for _, task := range packaging {
+			task.Module = modulePath
+		}
+		allTasks = append(allTasks, packaging...)
 	}
 
 	// Second pass: resolve cross-module dependencies (target names -> task IDs)
@@ -226,26 +252,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 }
 
 // processModule generates tasks for a single module
-func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo, targetFilter []string, workspaceVarEnv *util.VariableEnvironment) ([]*BuildTask, error) {
-	// Skip if target filter specified and this module has no matching targets
-	if len(targetFilter) > 0 {
-		hasMatchingTarget := false
-		for _, target := range moduleInfo.Targets {
-			for _, filter := range targetFilter {
-				if target == filter {
-					hasMatchingTarget = true
-					break
-				}
-			}
-			if hasMatchingTarget {
-				break
-			}
-		}
-		if !hasMatchingTarget {
-			return []*BuildTask{}, nil
-		}
-	}
-
+func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo, workspaceVarEnv *util.VariableEnvironment) ([]*BuildTask, *TaskGenerator, map[string]any, error) {
 	util.LogInfo("Processing module: %s", modulePath)
 
 	// Create module-specific parser with chained variable environment
@@ -320,16 +327,16 @@ func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo,
 		moduleConfig["config"] = mergedModuleConfig
 	}
 
-	// Generate tasks for this module
-	moduleTasks, err := moduleParser.GenerateTasks(moduleConfig)
+	// Generate the module's targets; its packaging tasks come once every module's targets exist
+	moduleTasks, gen, err := moduleParser.GenerateTasks(moduleConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+		return nil, nil, nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
 	}
 	for _, task := range moduleTasks {
 		task.Module = modulePath
 	}
 
-	return moduleTasks, nil
+	return moduleTasks, gen, moduleConfig, nil
 }
 
 // generateWorkspaceLevelTasks generates staging and install tasks from the workspace root config
@@ -461,8 +468,9 @@ func hasInput(task *BuildTask, path string) bool {
 	return false
 }
 
-// GenerateTasks generates tasks from configuration with variable resolution
-func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, error) {
+// GenerateTasks generates a module's target tasks from its configuration, and returns the task
+// generator that generates its packaging tasks later
+func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, *TaskGenerator, error) {
 	if cp.TaskIDGen == nil {
 		moduleName := cp.CurrentModule
 		if moduleName == "" {
@@ -474,14 +482,14 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	// Select and initialize toolchain
 	tc, err := cp.SelectToolchain(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cp.CurrentToolchain = tc
 	cp.ToolchainHash = resource.HashToolchainConfig(tc)
 
 	toolMatcher, err := resource.NewToolMatcher(tc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cp.ToolMatcher = toolMatcher
 	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Configuration)
@@ -489,13 +497,13 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 
 	// Build variable environment
 	if err := cp.setupVariableEnvironment(config); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Compute output_dir early so it can be used in artifacts section
 	outputDir, err := cp.getOutputDir(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Add output_dir to variable environment for use in artifacts and other sections
 	cp.VarEnv.SetVariable("output_dir", outputDir, "built-in")
@@ -528,8 +536,9 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, erro
 	taskGen.TargetRegistry = cp.TargetRegistry
 	taskGen.ConfigHash = hashConfig(config)
 
-	// Generate tasks - pass raw config, resolution happens during task generation
-	return taskGen.GenerateTasks(config, outputDir)
+	// Generate the target tasks - pass raw config, resolution happens during task generation
+	tasks, err := taskGen.GenerateTargetTasks(config, outputDir)
+	return tasks, taskGen, err
 }
 
 // setupVariableEnvironment builds the variable environment hierarchy
