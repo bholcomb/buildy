@@ -369,7 +369,10 @@ func main() {
 	}
 
 	// Initialize dependency resolver and load dependencies
-	depResolver := resource.NewDependencyResolver(*platform, *architecture, *toolchain, *configuration, workspaceCacheDir, ws.RootDir, rootVarEnv)
+	depResolver, err := resource.NewDependencyResolver(*platform, *architecture, *toolchain, *configuration, workspaceCacheDir, ws.RootDir, rootVarEnv)
+	if err != nil {
+		util.LogFatal("Failed to load the build systems: %v", err)
+	}
 
 	// Skip dependency resolution in standalone mode (explicit config file provided)
 	// When a specific config file is passed on the command line, we only build what's

@@ -23,7 +23,14 @@ func writeDepFiles(t *testing.T, root string, files map[string]string) {
 }
 
 func newResolver(root string) *DependencyResolver {
-	return NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil))
+	return mustResolver(NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil)))
+}
+
+func mustResolver(dr *DependencyResolver, err error) *DependencyResolver {
+	if err != nil {
+		panic(err)
+	}
+	return dr
 }
 
 // Dependency definitions are validated; a file named as a dependency's build.override is a buildy
@@ -107,7 +114,7 @@ ok:
 	})
 	env := util.NewVariableEnvironment(nil)
 	env.SetVariable("FROM_ROOT", "/root-var", "test")
-	dr := NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env)
+	dr := mustResolver(NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env))
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +129,7 @@ ok:
 	writeDepFiles(t, root, map[string]string{
 		"buildy_config/dependencies.yaml": "bad:\n  lib_dirs: [\"/x/${architecture}\"]\n",
 	})
-	dr = NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env)
+	dr = mustResolver(NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env))
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}

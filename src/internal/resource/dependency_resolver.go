@@ -64,10 +64,10 @@ type DependencyResolver struct {
 }
 
 // NewDependencyResolver creates a new DependencyResolver
-func NewDependencyResolver(platform, architecture, toolchain, configuration, cacheDir, workspaceRoot string, varEnv *util.VariableEnvironment) *DependencyResolver {
+func NewDependencyResolver(platform, architecture, toolchain, configuration, cacheDir, workspaceRoot string, varEnv *util.VariableEnvironment) (*DependencyResolver, error) {
 	bsm, err := NewBuildSystemManager()
 	if err != nil {
-		util.LogWarning("Failed to create BuildSystemManager: %v", err)
+		return nil, err
 	}
 
 	return &DependencyResolver{
@@ -82,7 +82,7 @@ func NewDependencyResolver(platform, architecture, toolchain, configuration, cac
 		buildSystemManager: bsm,
 		resolved:           make(map[string]*ResolvedDependency),
 		configs:            make(map[string]*DependencyConfig),
-	}
+	}, nil
 }
 
 // LoadDependencies loads the dependency definitions: file (dependencies.file in buildy.yaml, by

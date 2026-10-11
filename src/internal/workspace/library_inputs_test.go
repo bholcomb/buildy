@@ -78,7 +78,10 @@ foo:
 	if _, err := ws.DiscoverModules(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}); err != nil {
 		t.Fatal(err)
 	}
-	deps := resource.NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil))
+	deps, err := resource.NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := deps.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}

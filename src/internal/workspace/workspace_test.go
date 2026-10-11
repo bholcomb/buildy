@@ -176,7 +176,10 @@ func TestShippedConfigsValidate(t *testing.T) {
 	// The examples' dependency definitions
 	examples, _ := filepath.Glob(filepath.Join(repoRoot, "examples", "*"))
 	for _, example := range examples {
-		deps := resource.NewDependencyResolver("linux", "x86_64", "", "debug", t.TempDir(), example, util.NewVariableEnvironment(nil))
+		deps, err := resource.NewDependencyResolver("linux", "x86_64", "", "debug", t.TempDir(), example, util.NewVariableEnvironment(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := deps.LoadDependencies(example, ""); err != nil {
 			t.Errorf("%s: %v", example, err)
 		}
