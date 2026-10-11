@@ -47,11 +47,11 @@ func (tr *TargetRegistry) Initialize() error {
 
 	util.LogInfo("Initializing target registry...")
 
-	// Discover all modules
-	modules, err := tr.workspace.DiscoverModules(false)
-	if err != nil {
-		return err
+	// The workspace's modules were loaded for the build context before generation
+	if !tr.workspace.discovered {
+		return fmt.Errorf("internal error: the workspace's modules were not loaded")
 	}
+	modules := tr.workspace.Modules
 
 	// Index all targets. Target names are unique across the workspace: libraries are linked by
 	// name, and executables and libraries share bin/ and lib/ in the output directory.

@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +26,7 @@ type WorkspaceConfig struct {
 	RootDir          string                   `json:"root"`
 	DiscoverPatterns []string                 `json:"discover_patterns"` // Legacy: for backward compat
 	ExcludePatterns  []string                 `json:"exclude_patterns"`  // Legacy: for backward compat
-	ExplicitModules  map[string][]ModuleEntry `json:"explicit_modules"`  // New: platform -> module entries
+	Modules          any                      `json:"modules"`           // workspace.modules as written: a filtered list, or the legacy map form
 	Variables        map[string]any           `json:"variables"`
 	DependenciesFile string                   `json:"dependencies_file"` // Path to external dependencies file
 	RawConfig        map[string]any           `json:"-"`
@@ -40,35 +38,76 @@ type ModuleEntry struct {
 	Config string `json:"config"` // Custom config filename (default: buildy.yaml)
 }
 
-// parseModuleList extracts ModuleEntry items from various input types
-func parseModuleList(raw any) []ModuleEntry {
-	entries := []ModuleEntry{}
+// resolveModuleEntries returns the modules a workspace.modules section selects for ctx. It
+// takes the same filtered-list form as every other list: plain entries ("core" or
+// {path: core, config: core.yaml}) are always included, and a filter map ({linux: [...]},
+// {x86_64: [...]}, {release: [...]}) includes its entries when the key matches the platform,
+// architecture or configuration. The legacy map form ({common: [...], linux: [...]}) includes
+// "common" and the keys that match.
+func resolveModuleEntries(raw any, ctx BuildContext) ([]ModuleEntry, error) {
+	var entries []ModuleEntry
 	switch v := raw.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return []ModuleEntry{{Path: v, Config: "buildy.yaml"}}, nil
 	case []any:
-		for _, item := range v {
+		for i, item := range v {
 			switch entry := item.(type) {
 			case string:
 				entries = append(entries, ModuleEntry{Path: entry, Config: "buildy.yaml"})
 			case map[string]any:
-				path := ""
-				configName := "buildy.yaml"
-				if p, ok := entry["path"].(string); ok {
-					path = p
-				}
-				if c, ok := entry["config"].(string); ok {
-					configName = c
-				}
-				if path != "" {
+				if pathValue, hasPath := entry["path"]; hasPath {
+					path, ok := pathValue.(string)
+					if !ok || path == "" {
+						return nil, fmt.Errorf("modules[%d]: 'path' must be a non-empty string", i)
+					}
+					configName := "buildy.yaml"
+					if c, ok := entry["config"]; ok {
+						if configName, ok = c.(string); !ok {
+							return nil, fmt.Errorf("modules[%d]: 'config' must be a string", i)
+						}
+					}
 					entries = append(entries, ModuleEntry{Path: path, Config: configName})
+					continue
 				}
+				filtered, err := resolveFilterMap(entry, ctx, false)
+				if err != nil {
+					return nil, err
+				}
+				entries = append(entries, filtered...)
+			default:
+				return nil, fmt.Errorf("modules[%d]: expected a path, {path: ...}, or a filter map, got %T", i, item)
 			}
 		}
-	case []string:
-		for _, s := range v {
-			entries = append(entries, ModuleEntry{Path: s, Config: "buildy.yaml"})
-		}
+	case map[string]any:
+		return resolveFilterMap(v, ctx, true)
+	default:
+		return nil, fmt.Errorf("modules: expected a list, got %T", raw)
 	}
-	return entries
+	return entries, nil
+}
+
+// resolveFilterMap includes the entries of each key that matches ctx (and "common" in the legacy
+// map form), in key order.
+func resolveFilterMap(m map[string]any, ctx BuildContext, legacy bool) ([]ModuleEntry, error) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var entries []ModuleEntry
+	for _, key := range keys {
+		if !matchesFilter(key, ctx) && !(legacy && key == "common") {
+			continue
+		}
+		selected, err := resolveModuleEntries(m[key], ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		entries = append(entries, selected...)
+	}
+	return entries, nil
 }
 
 // Workspace manages multi-module workspace with buildy.yaml files
@@ -201,62 +240,9 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 		workspaceSection = wsSection
 	}
 
-	// Check for explicit modules - supports both array format (with filters) and legacy map format
-	explicitModules := make(map[string][]ModuleEntry)
-	hasExplicitModules := false
-
-	// New format: modules as array with optional filter maps (uses same pattern as filtered lists)
-	// Example:
-	//   modules:
-	//     - core
-	//     - platform
-	//     - linux:
-	//         - linux_profiler
-	//     - windows:
-	//         - windows_debugger
-	if modules, ok := workspaceSection["modules"].([]any); ok {
-		hasExplicitModules = true
-		commonEntries := []ModuleEntry{}
-
-		for _, item := range modules {
-			switch entry := item.(type) {
-			case string:
-				// Plain string - always included (common)
-				commonEntries = append(commonEntries, ModuleEntry{Path: entry, Config: "buildy.yaml"})
-			case map[string]any:
-				// Could be a filter map (linux: [...]) or an object with path/config
-				// Check if it has a "path" key (object format)
-				if path, hasPath := entry["path"].(string); hasPath {
-					configName := "buildy.yaml"
-					if c, ok := entry["config"].(string); ok {
-						configName = c
-					}
-					commonEntries = append(commonEntries, ModuleEntry{Path: path, Config: configName})
-				} else {
-					// Filter map - key is platform/arch/config, value is list of modules
-					for filterKey, filterValue := range entry {
-						filterEntries := parseModuleList(filterValue)
-						if existing, ok := explicitModules[filterKey]; ok {
-							explicitModules[filterKey] = append(existing, filterEntries...)
-						} else {
-							explicitModules[filterKey] = filterEntries
-						}
-					}
-				}
-			}
-		}
-
-		// Store common entries under "common" key for compatibility
-		if len(commonEntries) > 0 {
-			explicitModules["common"] = commonEntries
-		}
-	} else if modules, ok := workspaceSection["modules"].(map[string]any); ok {
-		// Legacy format: modules as map with platform keys
-		hasExplicitModules = true
-		for platform, moduleList := range modules {
-			explicitModules[platform] = parseModuleList(moduleList)
-		}
-	}
+	// Explicit modules (resolved against the build context at discovery); without them, every
+	// buildy.yaml under the root is discovered
+	modules, hasExplicitModules := workspaceSection["modules"]
 
 	// Legacy: Get discovery patterns (only if no explicit modules)
 	discoverPatterns := []string{}
@@ -310,7 +296,7 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 		RootDir:          ws.RootDir,
 		DiscoverPatterns: discoverPatterns,
 		ExcludePatterns:  excludePatterns,
-		ExplicitModules:  explicitModules,
+		Modules:          modules,
 		Variables:        variables,
 		DependenciesFile: dependenciesFile,
 		RawConfig:        rawConfig,
@@ -318,9 +304,6 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 
 	if hasExplicitModules {
 		util.LogDebug("Loaded workspace from %s (explicit modules)", ws.RootDir)
-		for platform, modules := range explicitModules {
-			util.LogDebug("  %s: %d modules", platform, len(modules))
-		}
 	} else {
 		util.LogDebug("Loaded workspace from %s (discovery mode)", ws.RootDir)
 		util.LogDebug("Discovery patterns: %v", discoverPatterns)
@@ -330,14 +313,11 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 	return config, nil
 }
 
-// DiscoverModules discovers all buildy.yaml module files in workspace
-func (ws *Workspace) DiscoverModules(force bool) (map[string]*ModuleInfo, error) {
-	return ws.DiscoverModulesForPlatform(force, "")
-}
-
-// DiscoverModulesForPlatform discovers modules filtered by platform
-func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (map[string]*ModuleInfo, error) {
-	if ws.discovered && !force {
+// DiscoverModules loads the workspace's modules for the build context: the explicit
+// workspace.modules (and the modules those name, recursively) that ctx selects, or every
+// buildy.yaml under the root in discovery mode. It runs once; later calls return the same modules.
+func (ws *Workspace) DiscoverModules(ctx BuildContext) (map[string]*ModuleInfo, error) {
+	if ws.discovered {
 		return ws.Modules, nil
 	}
 
@@ -358,8 +338,8 @@ func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (ma
 	}
 
 	// Check if we have explicit modules defined
-	if len(ws.Config.ExplicitModules) > 0 {
-		return ws.loadExplicitModules(platform)
+	if ws.Config.Modules != nil {
+		return ws.loadExplicitModules(ctx)
 	}
 
 	// Fall back to legacy discovery mode
@@ -372,8 +352,7 @@ func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (ma
 	for _, modulePath := range discoveredFiles {
 		relPath, err := filepath.Rel(ws.RootDir, modulePath)
 		if err != nil {
-			util.LogWarning("Failed to get relative path for %s: %v", modulePath, err)
-			continue
+			return nil, fmt.Errorf("module %s: %w", modulePath, err)
 		}
 
 		moduleDir := filepath.Dir(relPath)
@@ -400,23 +379,11 @@ func (ws *Workspace) DiscoverModulesForPlatform(force bool, platform string) (ma
 	return ws.Modules, nil
 }
 
-// loadExplicitModules loads modules from explicit workspace.modules configuration
-func (ws *Workspace) loadExplicitModules(platform string) (map[string]*ModuleInfo, error) {
-	util.LogDebug("Loading explicit modules for platform: %s", platform)
-
-	// Collect modules from "common" and platform-specific sections
-	modulesToLoad := []ModuleEntry{}
-
-	// Add common modules first
-	if commonModules, ok := ws.Config.ExplicitModules["common"]; ok {
-		modulesToLoad = append(modulesToLoad, commonModules...)
-	}
-
-	// Add platform-specific modules
-	if platform != "" {
-		if platformModules, ok := ws.Config.ExplicitModules[platform]; ok {
-			modulesToLoad = append(modulesToLoad, platformModules...)
-		}
+// loadExplicitModules loads the modules workspace.modules selects for ctx
+func (ws *Workspace) loadExplicitModules(ctx BuildContext) (map[string]*ModuleInfo, error) {
+	modulesToLoad, err := resolveModuleEntries(ws.Config.Modules, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("workspace.modules in %s: %w", ws.configFile(), err)
 	}
 
 	// Track modules currently being loaded to detect cycles
@@ -424,7 +391,7 @@ func (ws *Workspace) loadExplicitModules(platform string) (map[string]*ModuleInf
 
 	// Load each module
 	for _, entry := range modulesToLoad {
-		moduleDir := entry.Path
+		moduleDir := filepath.Clean(entry.Path)
 		configFile := filepath.Join(ws.RootDir, moduleDir, entry.Config)
 
 		// Check if config file exists
@@ -442,7 +409,7 @@ func (ws *Workspace) loadExplicitModules(platform string) (map[string]*ModuleInf
 
 		// Recursively load child modules if this module has workspace.modules
 		// Pass loading stack to detect circular dependencies
-		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo.Config, platform, loadingStack); err != nil {
+		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, loadingStack); err != nil {
 			return nil, err
 		}
 	}
@@ -454,59 +421,25 @@ func (ws *Workspace) loadExplicitModules(platform string) (map[string]*ModuleInf
 	return ws.Modules, nil
 }
 
-// loadChildModules recursively loads child modules defined in a module's workspace.modules
-// Deprecated: Use loadChildModulesWithCycleDetection instead
-func (ws *Workspace) loadChildModules(parentDir string, config map[string]any, platform string) error {
-	return ws.loadChildModulesWithCycleDetection(parentDir, config, platform, make(map[string]bool))
+// configFile is the workspace's root config file.
+func (ws *Workspace) configFile() string {
+	if ws.ConfigPath != "" {
+		return ws.ConfigPath
+	}
+	return filepath.Join(ws.RootDir, "buildy.yaml")
 }
 
 // loadChildModulesWithCycleDetection recursively loads child modules with circular dependency detection
-func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, config map[string]any, platform string, loadingStack map[string]bool) error {
-	workspaceSection, ok := config["workspace"].(map[string]any)
+func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent *ModuleInfo, ctx BuildContext, loadingStack map[string]bool) error {
+	workspaceSection, ok := parent.Config["workspace"].(map[string]any)
 	if !ok {
 		return nil // No workspace section, this is a leaf module
 	}
 
-	// Collect child modules - supports both array format (with filters) and legacy map format
-	childModules := []ModuleEntry{}
-
-	// New format: modules as array with optional filter maps
-	if modulesArray, ok := workspaceSection["modules"].([]any); ok {
-		for _, item := range modulesArray {
-			switch entry := item.(type) {
-			case string:
-				// Plain string - always included
-				childModules = append(childModules, ModuleEntry{Path: entry, Config: "buildy.yaml"})
-			case map[string]any:
-				// Check if it has a "path" key (object format)
-				if path, hasPath := entry["path"].(string); hasPath {
-					configName := "buildy.yaml"
-					if c, ok := entry["config"].(string); ok {
-						configName = c
-					}
-					childModules = append(childModules, ModuleEntry{Path: path, Config: configName})
-				} else {
-					// Filter map - key is platform/arch/config, value is list of modules
-					for filterKey, filterValue := range entry {
-						// Only include if filter matches platform
-						if filterKey == platform {
-							childModules = append(childModules, parseModuleList(filterValue)...)
-						}
-					}
-				}
-			}
-		}
-	} else if modulesSection, ok := workspaceSection["modules"].(map[string]any); ok {
-		// Legacy format: modules as map with platform keys
-		for sectionName, moduleList := range modulesSection {
-			// Only process "common" or matching platform
-			if sectionName != "common" && sectionName != platform {
-				continue
-			}
-			childModules = append(childModules, parseModuleList(moduleList)...)
-		}
-	} else {
-		return nil // No modules section
+	// Child modules are selected exactly like the root's
+	childModules, err := resolveModuleEntries(workspaceSection["modules"], ctx)
+	if err != nil {
+		return fmt.Errorf("workspace.modules in %s: %w", parent.Path, err)
 	}
 
 	// Load each child module
@@ -528,7 +461,7 @@ func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, config
 
 		// Check if config file exists
 		if _, err := os.Stat(configFile); os.IsNotExist(err) {
-			return fmt.Errorf("child module config not found: %s (referenced in %s/buildy.yaml)", configFile, parentDir)
+			return fmt.Errorf("child module config not found: %s (referenced in %s)", configFile, parent.Path)
 		}
 
 		// Skip if already loaded (but not currently loading - that would be a cycle)
@@ -548,7 +481,7 @@ func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, config
 		util.LogDebug("Loaded child module: %s (%d targets)", moduleDir, len(moduleInfo.Targets))
 
 		// Recursively load grandchild modules
-		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo.Config, platform, loadingStack); err != nil {
+		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, loadingStack); err != nil {
 			return err
 		}
 
@@ -715,41 +648,6 @@ func (ws *Workspace) countTotalTargets() int {
 	return total
 }
 
-// GetModule gets a module by relative path
-func (ws *Workspace) GetModule(relativePath string) *ModuleInfo {
-	if !ws.discovered {
-		ws.DiscoverModules(false)
-	}
-	return ws.Modules[relativePath]
-}
-
-// ListModules gets list of all module paths
-func (ws *Workspace) ListModules() []string {
-	if !ws.discovered {
-		ws.DiscoverModules(false)
-	}
-
-	paths := make([]string, 0, len(ws.Modules))
-	for path := range ws.Modules {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-// ListAllTargets gets all targets organized by module
-func (ws *Workspace) ListAllTargets() map[string][]string {
-	if !ws.discovered {
-		ws.DiscoverModules(false)
-	}
-
-	result := make(map[string][]string)
-	for modulePath, module := range ws.Modules {
-		result[modulePath] = module.Targets
-	}
-	return result
-}
-
 // IsWorkspaceRoot checks if directory is a workspace root
 func IsWorkspaceRoot(directory string) bool {
 	configFile := filepath.Join(directory, "buildy.yaml")
@@ -764,195 +662,4 @@ func DiscoverWorkspace(startDir string) (*Workspace, error) {
 		return nil, err
 	}
 	return NewWorkspace(root)
-}
-
-// CalculateConfigFilesHash calculates a combined hash of all buildy.yaml files and package files
-func (ws *Workspace) CalculateConfigFilesHash() (string, error) {
-	var filesToHash []string
-
-	// Add root buildy.yaml
-	rootConfig := filepath.Join(ws.RootDir, "buildy.yaml")
-	if _, err := os.Stat(rootConfig); err == nil {
-		filesToHash = append(filesToHash, rootConfig)
-	}
-
-	// Add all module buildy.yaml files
-	for _, module := range ws.Modules {
-		if _, err := os.Stat(module.Path); err == nil {
-			filesToHash = append(filesToHash, module.Path)
-		}
-	}
-
-	// Add dependencies file if referenced
-	depsFile := filepath.Join(ws.RootDir, "buildy", "dependencies.yaml")
-	if _, err := os.Stat(depsFile); err == nil {
-		filesToHash = append(filesToHash, depsFile)
-	}
-
-	// Add all dependency files from dependencies/ directory
-	depsDir := filepath.Join(ws.RootDir, "buildy_config", "dependencies")
-	if info, err := os.Stat(depsDir); err == nil && info.IsDir() {
-		entries, err := os.ReadDir(depsDir)
-		if err == nil {
-			for _, entry := range entries {
-				if !entry.IsDir() && (filepath.Ext(entry.Name()) == ".yaml" || filepath.Ext(entry.Name()) == ".yml") {
-					filesToHash = append(filesToHash, filepath.Join(depsDir, entry.Name()))
-				}
-			}
-		}
-	}
-
-	// Sort for deterministic ordering
-	sort.Strings(filesToHash)
-
-	// Calculate combined hash
-	h := sha256.New()
-	for _, file := range filesToHash {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return "", fmt.Errorf("failed to read %s: %w", file, err)
-		}
-		// Include filename in hash to detect renames
-		h.Write([]byte(file))
-		h.Write(data)
-	}
-
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-// SaveDiscoveryCache saves workspace discovery results to cache
-func (ws *Workspace) SaveDiscoveryCache(cacheDir string) error {
-	cacheFile := filepath.Join(cacheDir, "workspace.json")
-
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	// Calculate hash of all config files
-	configHash, err := ws.CalculateConfigFilesHash()
-	if err != nil {
-		util.LogWarning("Failed to calculate config hash: %v", err)
-		configHash = ""
-	}
-
-	// Serialize workspace info
-	cacheData := map[string]any{
-		"root":        ws.RootDir,
-		"config_hash": configHash,
-		"config": map[string]any{
-			"discover_patterns": ws.Config.DiscoverPatterns,
-			"exclude_patterns":  ws.Config.ExcludePatterns,
-			"variables":         ws.Config.Variables,
-		},
-		"modules": map[string]any{},
-	}
-
-	modules := make(map[string]any)
-	for relPath, module := range ws.Modules {
-		modules[relPath] = map[string]any{
-			"path":          module.Path,
-			"relative_path": module.RelativePath,
-			"targets":       module.Targets,
-		}
-	}
-	cacheData["modules"] = modules
-
-	data, err := json.MarshalIndent(cacheData, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to serialize cache data: %w", err)
-	}
-
-	if err := os.WriteFile(cacheFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write cache file: %w", err)
-	}
-
-	util.LogDebug("Saved workspace discovery cache to %s", cacheFile)
-	return nil
-}
-
-// LoadDiscoveryCache loads workspace discovery results from cache
-func LoadDiscoveryCache(cacheDir string) (*Workspace, error) {
-	cacheFile := filepath.Join(cacheDir, "workspace.json")
-
-	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
-		return nil, nil // Cache doesn't exist
-	}
-
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read cache file: %w", err)
-	}
-
-	var cacheData map[string]any
-	if err := json.Unmarshal(data, &cacheData); err != nil {
-		return nil, fmt.Errorf("failed to parse cache file: %w", err)
-	}
-
-	rootDir, ok := cacheData["root"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid cache: missing root")
-	}
-
-	// Validate that workspace root still exists
-	if !IsWorkspaceRoot(rootDir) {
-		util.LogDebug("Cached workspace root no longer valid")
-		return nil, nil
-	}
-
-	// Create workspace instance
-	workspace, err := NewWorkspace(rootDir)
-	if err != nil {
-		return nil, err
-	}
-
-	// Validate config files hash to detect changes in buildy.yaml or package files
-	cachedHash, _ := cacheData["config_hash"].(string)
-	if cachedHash != "" {
-		currentHash, err := workspace.CalculateConfigFilesHash()
-		if err != nil {
-			util.LogDebug("Failed to calculate config hash, invalidating cache: %v", err)
-			return nil, nil
-		}
-		if currentHash != cachedHash {
-			util.LogDebug("Config files changed, invalidating workspace cache")
-			return nil, nil
-		}
-	}
-
-	// Restore modules
-	modulesData, ok := cacheData["modules"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("invalid cache: missing modules")
-	}
-
-	for relPath, moduleDataRaw := range modulesData {
-		moduleData, ok := moduleDataRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		modulePath, ok := moduleData["path"].(string)
-		if !ok {
-			continue
-		}
-
-		// Validate module file still exists
-		if _, err := os.Stat(modulePath); os.IsNotExist(err) {
-			util.LogDebug("Cached module no longer exists: %s", modulePath)
-			return nil, nil
-		}
-
-		// Reload module config
-		moduleInfo, err := workspace.loadModule(modulePath, relPath)
-		if err != nil {
-			util.LogDebug("Failed to reload module config: %v", err)
-			return nil, nil
-		}
-
-		workspace.Modules[relPath] = moduleInfo
-	}
-
-	workspace.discovered = true
-	util.LogDebug("Loaded workspace from cache: %d modules", len(workspace.Modules))
-	return workspace, nil
 }

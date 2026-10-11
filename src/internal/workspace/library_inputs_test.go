@@ -75,7 +75,7 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ws.DiscoverModules(false); err != nil {
+	if _, err := ws.DiscoverModules(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}); err != nil {
 		t.Fatal(err)
 	}
 	deps := resource.NewDependencyResolver("linux", "x86_64", "", "debug", filepath.Join(root, ".buildy_cache"), root, util.NewVariableEnvironment(nil))
@@ -93,7 +93,7 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser("linux", "x86_64", "debug", nil, toolchains, "", templates, ws, deps, nil).GenerateWorkspaceTasks(nil)
+	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps, nil).GenerateWorkspaceTasks(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

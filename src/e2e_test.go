@@ -368,3 +368,24 @@ func TestE2EDockerExecution(t *testing.T) {
 		t.Errorf("after an edit app = %q", data)
 	}
 }
+
+// Finding 7: a module listed under linux: is built for linux and not generated for windows.
+func TestE2EPlatformModule(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping: the fixture builds for linux")
+	}
+	needCpp(t)
+	dir := fixture(t, "platform_module")
+	out := mustBuildy(t, dir, "--platform", "linux")
+	if !strings.Contains(out, "from 1 modules") {
+		t.Errorf("linux build didn't load platform-linux:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(outDir(dir, "debug"), "bin", "linuxonly")); err != nil {
+		t.Errorf("linuxonly was not built: %v", err)
+	}
+
+	out = mustBuildy(t, dir, "--platform", "windows", "--dry-run")
+	if strings.Contains(out, "linuxonly") || !strings.Contains(out, "from 0 modules") {
+		t.Errorf("windows build generated the linux module:\n%s", out)
+	}
+}

@@ -36,7 +36,8 @@ func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*Bui
 	if err != nil {
 		return nil, err
 	}
-	if _, err := ws.DiscoverModules(false); err != nil {
+	ctx := BuildContext{Platform: platform, Architecture: arch, Configuration: config}
+	if _, err := ws.DiscoverModules(ctx); err != nil {
 		return nil, err
 	}
 	toolchains, err := resource.NewToolchainManagerMulti(nil)
@@ -47,7 +48,7 @@ func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*Bui
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp := NewConfigParser(platform, arch, config, nil, toolchains, "", templates, ws, nil, nil)
+	cp := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil, nil)
 	return cp.GenerateWorkspaceTasks(nil)
 }
 

@@ -68,17 +68,6 @@ func (b *Builder) BuildWorkspace(
 	util.LogProgress("Phase 1: Task Generation")
 	taskGenStart := time.Now()
 
-	// Discover modules (with caching)
-	if _, err := ws.DiscoverModules(false); err != nil {
-		result.Finish(false)
-		return result, fmt.Errorf("failed to discover modules: %w", err)
-	}
-
-	// Save discovery cache
-	if err := ws.SaveDiscoveryCache(b.CacheDir); err != nil {
-		util.LogInfo("WARNING: Failed to save discovery cache: %v", err)
-	}
-
 	// Generate tasks for all modules
 	allTasks, err := configParser.GenerateWorkspaceTasks(targetFilter)
 	if err != nil {
@@ -202,8 +191,8 @@ func (b *Builder) saveTaskGraph(allTasks []*workspace.BuildTask, graph *workspac
 		"execution_plan":     executionPlan,
 	}
 
-	// Always save to cache directory, per-configuration so debug/release coexist
-	tasksFileName := fmt.Sprintf("tasks_%s.json", configParser.Configuration)
+	// Always save to cache directory, per build context so platforms and configurations coexist
+	tasksFileName := fmt.Sprintf("tasks_%s-%s-%s.json", configParser.Platform, configParser.Architecture, configParser.Configuration)
 	outputPath := filepath.Join(b.CacheDir, tasksFileName)
 
 	data, err := json.MarshalIndent(outputData, "", "  ")

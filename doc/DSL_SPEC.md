@@ -228,7 +228,14 @@ workspace:
         - tools/xcode_integration
 ```
 
-This uses the same filtered list syntax as other arrays (sources, libs, etc.). Plain strings are always included; map entries with platform/architecture/configuration keys are filtered.
+This uses the same filtered list syntax as other arrays (sources, libs, etc.). Plain strings are always included; map entries with platform/architecture/configuration keys are filtered against the build's `--platform`, `--architecture` and `--config`. The older map form also works, at every level, with `common:` always included:
+
+```yaml
+workspace:
+  modules:
+    common: [core, renderer]
+    linux: [tools/linux_profiler]
+```
 
 ### Intermediate Module (with children)
 
@@ -285,7 +292,7 @@ workspace:
 1. **Default filename:** `buildy.yaml`
 2. **Paths are relative** to the current buildy.yaml's directory
 3. **Each listed path must contain the config file** (error if missing)
-4. **Platform filtering at each level** - only descend into modules matching current platform
+4. **Filtering at each level** - root and child modules are selected the same way, by platform, architecture and configuration
 5. **No `workspace.modules`** = leaf module
 6. **Targets can reference parent/sibling targets** via dependency names
 
@@ -2475,7 +2482,7 @@ By Type:
 
 ### JSON Report
 
-A detailed JSON report is saved to `.buildy_cache/build_report.json`:
+A detailed JSON report is saved to `.buildy_cache/build_report_<platform>-<arch>-<config>.json`, and the generated task graph to `.buildy_cache/tasks_<platform>-<arch>-<config>.json`, so builds for different platforms and configurations don't overwrite each other's:
 
 ```json
 {

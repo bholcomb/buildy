@@ -279,19 +279,15 @@ func main() {
 		// No config files specified - discover workspace from current directory
 		util.LogVerbose("No config file specified, attempting workspace discovery...")
 
-		// Try loading from cache first
-		ws, err = workspace.LoadDiscoveryCache(*cacheDir)
-		if err == nil && ws != nil {
-			util.LogVerbose("Loaded workspace from cache: %s", ws.RootDir)
-		} else {
-			// Cache miss or invalid, do full discovery
-			cwd, _ := os.Getwd()
-			ws, err = workspace.DiscoverWorkspace(cwd)
-			if err != nil {
-				util.LogFatal("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
-			}
-			util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
+		cwd, err := os.Getwd()
+		if err != nil {
+			util.LogFatal("Failed to get current directory: %v", err)
 		}
+		ws, err = workspace.DiscoverWorkspace(cwd)
+		if err != nil {
+			util.LogFatal("No workspace found. Run from a directory with buildy.yaml or specify a path\nError: %v", err)
+		}
+		util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
 	} else {
 		if len(configFiles) > 1 {
 			util.LogFatal("Only one path may be given, got %d: %v", len(configFiles), configFiles)
@@ -323,8 +319,15 @@ func main() {
 		}
 	}
 
-	// Discover modules (will always find at least the root module)
-	if _, err := ws.DiscoverModules(false); err != nil {
+	// What is being built: every phase (module selection, dependencies, generation) uses it
+	buildContext := workspace.BuildContext{
+		Platform:      *platform,
+		Architecture:  *architecture,
+		Configuration: *configuration,
+	}
+
+	// Load the modules this build context selects
+	if _, err := ws.DiscoverModules(buildContext); err != nil {
 		util.LogFatal("Failed to discover modules: %v", err)
 	}
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
@@ -410,9 +413,7 @@ func main() {
 
 	// Create workspace-aware config parser
 	configParser := workspace.NewConfigParser(
-		*platform,
-		*architecture,
-		*configuration,
+		buildContext,
 		cliDefines,
 		toolchainManager,
 		selectedToolchain,
@@ -456,7 +457,7 @@ func main() {
 
 	// Generate and save build report
 	if result != nil {
-		reportPath := filepath.Join(workspaceCacheDir, fmt.Sprintf("build_report_%s.json", *configuration))
+		reportPath := filepath.Join(workspaceCacheDir, fmt.Sprintf("build_report_%s-%s-%s.json", *platform, *architecture, *configuration))
 		if err := result.SaveReport(reportPath); err != nil {
 			util.LogWarning("Failed to save build report: %v", err)
 		}

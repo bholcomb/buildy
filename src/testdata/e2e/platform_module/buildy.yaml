@@ -1,0 +1,10 @@
+project:
+  name: platform_module
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+workspace:
+  modules:
+    - linux: [platform-linux]

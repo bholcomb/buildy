@@ -1,0 +1,8 @@
+project:
+  name: platform_linux
+
+targets:
+  executables:
+    - name: linuxonly
+      language: cpp
+      sources: ["main.cpp"]

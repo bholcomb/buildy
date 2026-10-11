@@ -748,6 +748,9 @@ workspace:
         - platform/windows
 ```
 
+Filter keys are matched against the build's platform, architecture and configuration
+(`--platform`, `--architecture`, `--config`), the same way in child modules' `workspace.modules`.
+
 ### Module Dependencies
 
 Modules can depend on targets from other modules:
@@ -1203,7 +1206,7 @@ buildy --dry-run                 # Show what would build
 
 ## Build Reports
 
-After each build, buildy prints a summary and saves a detailed JSON report to `.buildy_cache/build_report.json`.
+After each build, buildy prints a summary and saves a detailed JSON report to `.buildy_cache/build_report_<platform>-<arch>-<config>.json` (the task graph goes to `tasks_<platform>-<arch>-<config>.json`).
 
 ```
 ================================================================================

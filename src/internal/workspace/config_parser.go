@@ -48,7 +48,7 @@ type ConfigParser struct {
 
 // NewConfigParser creates a new ConfigParser
 func NewConfigParser(
-	platform, architecture, configuration string,
+	ctx BuildContext,
 	cliDefines map[string]string,
 	toolchainManager *resource.ToolchainManager,
 	defaultToolchain string,
@@ -60,9 +60,9 @@ func NewConfigParser(
 	varEnv := util.NewVariableEnvironment(parentVarEnv)
 
 	return &ConfigParser{
-		Platform:           platform,
-		Architecture:       architecture,
-		Configuration:      configuration,
+		Platform:           ctx.Platform,
+		Architecture:       ctx.Architecture,
+		Configuration:      ctx.Configuration,
 		CLIDefines:         cliDefines,
 		VarEnv:             varEnv,
 		YAMLParser:         NewYAMLParser(),
@@ -73,6 +73,11 @@ func NewConfigParser(
 		DependencyResolver: dependencyResolver,
 		TaskIDGen:          NewTaskIDGenerator("workspace"),
 	}
+}
+
+// buildContext is the platform, architecture and configuration being built.
+func (cp *ConfigParser) buildContext() BuildContext {
+	return BuildContext{Platform: cp.Platform, Architecture: cp.Architecture, Configuration: cp.Configuration}
 }
 
 // ParseConfigFile parses YAML build configuration file
@@ -261,9 +266,7 @@ func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo,
 
 	// Create module-specific parser with chained variable environment
 	moduleParser := NewConfigParser(
-		cp.Platform,
-		cp.Architecture,
-		cp.Configuration,
+		cp.buildContext(),
 		cp.CLIDefines,
 		cp.ToolchainManager,
 		cp.DefaultToolchain,
