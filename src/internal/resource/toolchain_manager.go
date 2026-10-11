@@ -141,11 +141,13 @@ func (tm *ToolchainManager) AutoDetect(platform, architecture string) *Toolchain
 
 	// Define platform-specific preferred toolchains
 	// GCC is preferred over Clang on Linux since it's more commonly installed
+	// Matches are already filtered by architecture, so a platform lists the
+	// toolchains of every architecture
 	preferredToolchains := map[string][]string{
 		"linux":   {"gcc-cpp-linux", "gcc-c-linux", "clang-cpp-linux", "clang-c-linux"},
 		"windows": {"msvc-cpp-windows", "msvc-c-windows", "gcc-cpp-mingw", "gcc-c-mingw"},
-		"macos":   {"clang-cpp-macos", "clang-c-macos"},
-		"darwin":  {"clang-cpp-macos", "clang-c-macos"}, // darwin is macOS
+		"macos":   {"clang-cpp-macos", "clang-c-macos", "clang-cpp-macos-arm64", "clang-c-macos-arm64"},
+		"darwin":  {"clang-cpp-macos", "clang-c-macos", "clang-cpp-macos-arm64", "clang-c-macos-arm64"}, // darwin is macOS
 	}
 
 	// Try to find preferred toolchain for this platform
@@ -204,14 +206,14 @@ func (tm *ToolchainManager) FindByLanguage(language, platform, architecture stri
 		"c": {
 			"linux":   {"gcc-c-linux", "clang-c-linux"},
 			"windows": {"msvc-c-windows", "gcc-c-mingw"},
-			"macos":   {"clang-c-macos"},
-			"darwin":  {"clang-c-macos"},
+			"macos":   {"clang-c-macos", "clang-c-macos-arm64"},
+			"darwin":  {"clang-c-macos", "clang-c-macos-arm64"},
 		},
 		"cpp": {
 			"linux":   {"gcc-cpp-linux", "clang-cpp-linux"},
 			"windows": {"msvc-cpp-windows", "gcc-cpp-mingw"},
-			"macos":   {"clang-cpp-macos"},
-			"darwin":  {"clang-cpp-macos"},
+			"macos":   {"clang-cpp-macos", "clang-cpp-macos-arm64"},
+			"darwin":  {"clang-cpp-macos", "clang-cpp-macos-arm64"},
 		},
 	}
 

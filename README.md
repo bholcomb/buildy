@@ -233,6 +233,8 @@ Buildy includes toolchains for common compilers:
 | `clang-cpp-linux` | Linux | C++ | Clang C++ compiler |
 | `clang-c-macos` | macOS | C | Apple Clang C |
 | `clang-cpp-macos` | macOS | C++ | Apple Clang C++ |
+| `clang-c-macos-arm64` | macOS ARM | C | Apple Clang C for Apple Silicon |
+| `clang-cpp-macos-arm64` | macOS ARM | C++ | Apple Clang C++ for Apple Silicon |
 | `msvc-c-windows` | Windows | C | MSVC C compiler |
 | `msvc-cpp-windows` | Windows | C++ | MSVC C++ compiler |
 | `gcc-c-mingw` | Linux→Windows | C | MinGW cross-compiler |

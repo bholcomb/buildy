@@ -1006,6 +1006,7 @@ buildy --package-dir /opt/company/packages
 - `gcc-c-linux`, `gcc-cpp-linux` - GCC on Linux
 - `clang-c-linux`, `clang-cpp-linux` - Clang on Linux
 - `clang-c-macos`, `clang-cpp-macos` - Apple Clang
+- `clang-c-macos-arm64`, `clang-cpp-macos-arm64` - Apple Clang on Apple Silicon
 - `msvc-c-windows`, `msvc-cpp-windows` - MSVC
 - `gcc-c-mingw`, `gcc-cpp-mingw` - MinGW cross-compiler
 - `docker-c-linux`, `docker-cpp-linux` - Docker-based GCC

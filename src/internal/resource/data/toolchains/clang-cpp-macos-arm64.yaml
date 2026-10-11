@@ -1,0 +1,130 @@
+# Apple Clang for macOS ARM64 (Apple Silicon). The same as clang-cpp-macos
+# (x86_64): clang compiles for the host architecture.
+
+toolchain:
+  name: "clang-cpp-macos-arm64"
+  description: "Apple Clang C++ for macOS ARM64 (Apple Silicon)"
+  language: cpp
+  
+  target:
+    platform: macos
+    architecture: arm64
+  
+  host:
+    platform: macos
+    architecture: arm64
+  
+  execution:
+    type: native
+  
+  flag_mappings:
+    optimization:
+      none: ["-O0"]
+      size: ["-Os"]
+      speed: ["-O2"]
+      full: ["-O3"]
+    warnings:
+      off: []
+      default: ["-Wall"]
+      extra: ["-Wall", "-Wextra"]
+      everything: ["-Wall", "-Wextra", "-Wpedantic"]
+    symbols:
+      "true": ["-g"]
+      "false": []
+    runtime:
+      debug: []
+      release: []
+
+  output_prefix: "lib"
+
+  tools:
+    # C compilation
+    c_compile:
+      action: compile
+      command: "clang ${dep_flags} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
+      input_extensions: [".c"]
+      output_extension: ".o"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        defines: true
+        define_flag: "-D"
+        includes: true
+        include_flag: "-I"
+        pic: true
+        pic_flag: "-fPIC"
+        dependencies: "-MMD -MP -MF ${dep_file}"
+    
+    # C++ compilation
+    cpp_compile:
+      action: compile
+      command: "clang++ ${dep_flags} -std=${std} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
+      input_extensions: [".cpp", ".cc", ".cxx", ".C", ".mm"]
+      output_extension: ".o"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        defines: true
+        define_flag: "-D"
+        includes: true
+        include_flag: "-I"
+        pic: true
+        pic_flag: "-fPIC"
+        dependencies: "-MMD -MP -MF ${dep_file}"
+        std: true
+    
+    # Shared library linking (dylib on macOS)
+    link_shared_library:
+      action: link
+      command: "clang++ -dynamiclib ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      input_extensions: [".o"]
+      output_extension: ".dylib"
+      output_pattern: "${output_prefix}${name}.dylib"
+      flags:
+        common: ["-Wl,-rpath,@loader_path"]
+        debug: []
+        release: ["-Wl,-S"]
+      supports:
+        output_type: "shared_library"
+        lib_dirs: true
+        lib_dir_flag: "-L"
+        libs: true
+        lib_flag: "-l"
+    
+    # Static library archiving
+    link_static_library:
+      action: link
+      command: "ar rcs ${output} ${objects}"
+      input_extensions: [".o"]
+      output_extension: ".a"
+      output_pattern: "${output_prefix}${name}.a"
+      flags:
+        common: []
+        debug: []
+        release: []
+      supports:
+        output_type: "static_library"
+        lib_dirs: false
+        libs: false
+    
+    # Executable linking
+    link_executable:
+      action: link
+      command: "clang++ ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      input_extensions: [".o"]
+      output_extension: ""
+      output_pattern: "${name}"
+      flags:
+        common: ["-Wl,-rpath,@executable_path"]
+        debug: []
+        release: ["-Wl,-S"]
+      supports:
+        output_type: "executable"
+        lib_dirs: true
+        lib_dir_flag: "-L"
+        libs: true
+        lib_flag: "-l"
