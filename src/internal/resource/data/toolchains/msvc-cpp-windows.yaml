@@ -39,6 +39,7 @@ toolchain:
     c_compile:
       action: compile
       command: "cl.exe ${dep_flags} ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
+      response_file: msvc
       input_extensions: [".c"]
       output_extension: ".obj"
       flags:
@@ -57,6 +58,7 @@ toolchain:
     cpp_compile:
       action: compile
       command: "cl.exe ${dep_flags} /std:${std} ${flags} ${defines} ${includes} /c ${input} /Fo${output}"
+      response_file: msvc
       input_extensions: [".cpp", ".cc", ".cxx", ".C"]
       output_extension: ".obj"
       flags:
@@ -76,6 +78,7 @@ toolchain:
     link_shared_library:
       action: link
       command: "link.exe /DLL ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output} /IMPLIB:${implib}"
+      response_file: msvc
       input_extensions: [".obj"]
       output_extension: ".dll"
       output_pattern: "${name}.dll"
@@ -96,6 +99,7 @@ toolchain:
     link_static_library:
       action: link
       command: "lib.exe ${flags} ${objects} /OUT:${output}"
+      response_file: msvc
       input_extensions: [".obj"]
       output_extension: ".lib"
       output_pattern: "${name}.lib"
@@ -112,6 +116,7 @@ toolchain:
     link_executable:
       action: link
       command: "link.exe ${flags} ${objects} ${lib_dirs} ${libs} /OUT:${output}"
+      response_file: msvc
       input_extensions: [".obj"]
       output_extension: ".exe"
       output_pattern: "${name}.exe"

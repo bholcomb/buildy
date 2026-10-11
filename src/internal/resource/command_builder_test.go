@@ -156,3 +156,24 @@ func TestCommandParamsGiveArguments(t *testing.T) {
 		t.Errorf("an unset parameter gave %q", params["buildmode"])
 	}
 }
+
+// A tool declares how it reads a response file; the declaration reaches its commands.
+func TestToolResponseFile(t *testing.T) {
+	gcc := builtinToolchain(t, "gcc-c-linux")
+	for _, tool := range gcc.ToolsWithAction("compile", "link") {
+		if tool.ResponseFile != "gnu" {
+			t.Errorf("gcc-c-linux tool %s: response_file %q, want gnu", tool.Name, tool.ResponseFile)
+		}
+	}
+	tool, _ := gcc.ToolFor("a.c", "compile")
+	cmd, _, _, err := NewCommandBuilder(gcc, nil, "linux", "debug").BuildCommand(tool, "/a.c", "/a.o", nil, nil, nil, map[string]any{"std": "c11"})
+	if err != nil || cmd.ResponseFile != "gnu" {
+		t.Errorf("command %+v, %v: no response file syntax", cmd, err)
+	}
+	for _, bad := range []string{"response_file: rsp", "response_file: gnu\n      shell: true"} {
+		_, err := config.LoadToolchain([]byte("toolchain:\n  name: x\n  tools:\n    c:\n      action: compile\n      command: \"cc ${input}\"\n      "+bad+"\n"), "x.yaml")
+		if err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}

@@ -43,6 +43,7 @@ toolchain:
     c_compile:
       action: compile
       command: "gcc ${dep_flags} -std=${std} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
+      response_file: gnu
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -63,6 +64,7 @@ toolchain:
     link_shared_library:
       action: link
       command: "gcc -shared ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ".so"
       output_pattern: "${output_prefix}${name}.so"
@@ -81,6 +83,7 @@ toolchain:
     link_static_library:
       action: link
       command: "ar rcs ${output} ${objects}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ".a"
       output_pattern: "${output_prefix}${name}.a"
@@ -97,6 +100,7 @@ toolchain:
     link_executable:
       action: link
       command: "gcc ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "${name}"

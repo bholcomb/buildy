@@ -50,10 +50,17 @@ func (s ExecSpec) Validate() error {
 // Command is what a task runs: a program and its arguments, run directly without a shell, or,
 // for a tool that asks for one (shell: true), a shell script.
 type Command struct {
-	Args   []string `json:"args,omitempty"`   // the program, then its arguments
-	Script string   `json:"script,omitempty"` // instead of Args: run by sh -c, or cmd.exe /c on a Windows host
-	Dir    string   `json:"dir,omitempty"`    // the working directory; the workspace root if empty
+	Args         []string `json:"args,omitempty"`          // the program, then its arguments
+	Script       string   `json:"script,omitempty"`        // instead of Args: run by sh -c, or cmd.exe /c on a Windows host
+	Dir          string   `json:"dir,omitempty"`           // the working directory; the workspace root if empty
+	ResponseFile string   `json:"response_file,omitempty"` // how the program reads arguments from an @file, if it can
 }
+
+// Response file syntaxes: how a program reads the arguments in an @file.
+const (
+	ResponseFileGNU  = "gnu"  // GCC, Clang, GNU ar and ld: whitespace separates, backslash escapes
+	ResponseFileMSVC = "msvc" // cl, link, lib: the Windows command line's quoting
+)
 
 // IsZero reports whether there is nothing to run.
 func (c Command) IsZero() bool {
@@ -111,7 +118,7 @@ func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, tim
 		}
 		cmd.Dir = command.Dir
 		if len(spec.Env) > 0 {
-			cmd.Env = append(os.Environ(), envList(spec.Env)...)
+			cmd.Env = append(os.Environ(), EnvList(spec.Env)...)
 		}
 	}
 
@@ -162,7 +169,7 @@ func DockerRunArgs(spec ExecSpec, command Command, mounts []string) ([]string, e
 	if user != "" {
 		args = append(args, "-u", user)
 	}
-	for _, e := range envList(spec.Env) {
+	for _, e := range EnvList(spec.Env) {
 		args = append(args, "-e", e)
 	}
 	args = append(args, spec.Image)
@@ -176,8 +183,8 @@ func expandIDs(s string) string {
 	return strings.ReplaceAll(s, "${GID}", fmt.Sprintf("%d", os.Getgid()))
 }
 
-// envList returns KEY=VALUE entries in a stable order.
-func envList(env map[string]string) []string {
+// EnvList returns KEY=VALUE entries in a stable order.
+func EnvList(env map[string]string) []string {
 	list := make([]string, 0, len(env))
 	for k, v := range env {
 		list = append(list, k+"="+v)

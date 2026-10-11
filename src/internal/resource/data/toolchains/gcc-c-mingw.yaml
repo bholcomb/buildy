@@ -39,6 +39,7 @@ toolchain:
     c_compile:
       action: compile
       command: "x86_64-w64-mingw32-gcc ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
+      response_file: gnu
       input_extensions: [".c"]
       output_extension: ".o"
       flags:
@@ -58,6 +59,7 @@ toolchain:
     link_shared_library:
       action: link
       command: "x86_64-w64-mingw32-gcc -shared ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ".dll"
       output_pattern: "${name}.dll"
@@ -76,6 +78,7 @@ toolchain:
     link_static_library:
       action: link
       command: "x86_64-w64-mingw32-ar rcs ${output} ${objects}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ".a"
       output_pattern: "${output_prefix}${name}.a"
@@ -92,6 +95,7 @@ toolchain:
     link_executable:
       action: link
       command: "x86_64-w64-mingw32-gcc ${flags} ${objects} ${lib_dirs} ${libs} -o ${output}"
+      response_file: gnu
       input_extensions: [".o"]
       output_extension: ".exe"
       output_pattern: "${name}.exe"

@@ -1,0 +1,20 @@
+# 1500 objects (finding 2.2): the archive of `many` is over the command line limit the test
+# sets (buildy runs with a 1 MiB stack, which allows 256 KiB of arguments and environment), so
+# ar gets its arguments in a response file. The test writes the sources, src/<long>/f_NNNN.c.
+project:
+  name: many_objects
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  static_libraries:
+    - name: many
+      language: c
+      sources: ["src/*/*.c"]
+  executables:
+    - name: app
+      language: c
+      sources: ["main.c"]
+      libs: [many]

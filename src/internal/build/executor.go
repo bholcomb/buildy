@@ -383,8 +383,17 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 		return runNative(task)
 	}
 
+	// Arguments over the host's limits go in a response file, in the cache directory (which a
+	// Docker task mounts)
+	env := append(os.Environ(), util.EnvList(task.Exec.Env)...)
+	command, remove, err := withResponseFile(task.Command, env, te.responseFilePath(task))
+	if err != nil {
+		return err
+	}
+	defer remove()
+
 	// Natively or in Docker, as the task's toolchain says; in its directory, else the workspace root
-	result, err := te.runCommand(task.Exec, task.Command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
+	result, err := te.runCommand(task.Exec, command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
 	if err != nil {
 		return err
 	}
@@ -398,6 +407,21 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 		return fmt.Errorf("exit code %d", result.ReturnCode)
 	}
 	return nil
+}
+
+// responseFilePath is where a task's response file goes, if it needs one.
+func (te *TaskExecutor) responseFilePath(task *workspace.BuildTask) string {
+	name := strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			return r
+		}
+		return '_'
+	}, task.TaskID)
+	dir, err := filepath.Abs(filepath.Join(te.Cache.CacheDir(), "response_files"))
+	if err != nil {
+		dir = filepath.Join(te.Cache.CacheDir(), "response_files")
+	}
+	return filepath.Join(dir, name+".rsp")
 }
 
 // runNative carries out a task's native operation on its input and output.

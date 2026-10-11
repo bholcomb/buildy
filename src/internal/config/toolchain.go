@@ -41,7 +41,8 @@ type Tool struct {
 	Name            string                 `yaml:"-" json:"name"`
 	Action          string                 `yaml:"action,required" json:"action"`
 	Command         Command                `yaml:"command,required" json:"command"`
-	Shell           bool                   `yaml:"shell" json:"shell,omitempty"` // run the command with a shell (sh, cmd.exe on Windows hosts)
+	Shell           bool                   `yaml:"shell" json:"shell,omitempty"`                 // run the command with a shell (sh, cmd.exe on Windows hosts)
+	ResponseFile    string                 `yaml:"response_file" json:"response_file,omitempty"` // how the tool reads arguments from an @file: gnu or msvc
 	InputExtensions StringList             `yaml:"input_extensions" json:"input_extensions"`
 	OutputExtension string                 `yaml:"output_extension" json:"output_extension"`
 	OutputPattern   string                 `yaml:"output_pattern" json:"output_pattern"`
@@ -52,6 +53,9 @@ type Tool struct {
 
 // Tool actions.
 var toolActions = []string{"compile", "link", "transform", "convert", "generate", "build"}
+
+// Response file syntaxes (util.ResponseFileGNU, util.ResponseFileMSVC).
+var responseFiles = []string{util.ResponseFileGNU, util.ResponseFileMSVC}
 
 // Link output types.
 var outputTypes = []string{"executable", "shared_library", "static_library"}
@@ -128,7 +132,7 @@ func (t *Tool) Expand(platform string, exec util.ExecSpec, values Values) (util.
 	if err != nil {
 		return util.Command{}, fmt.Errorf("the command of tool %s: %w", t.Name, err)
 	}
-	return util.Command{Args: args}, nil
+	return util.Command{Args: args, ResponseFile: t.ResponseFile}, nil
 }
 
 // Supports is what a tool supports and how it spells it.
@@ -282,6 +286,12 @@ func (tc *Toolchain) validate(d *decoder) {
 			if name != "dep_file" {
 				d.errorAt(tool.Pos, "'%s.supports.dependencies' has ${%s}: it has only ${dep_file}", where, name)
 			}
+		}
+		if tool.ResponseFile != "" && !contains(responseFiles, tool.ResponseFile) {
+			d.errorAt(tool.Pos, "%s.response_file '%s' is not one of: %s", where, tool.ResponseFile, strings.Join(responseFiles, ", "))
+		}
+		if tool.Shell && tool.ResponseFile != "" {
+			d.errorAt(tool.Pos, "%s runs with a shell (shell: true): it can't take a response file", where)
 		}
 		if tool.Shell {
 			for _, cmd := range tool.Command.all() {
