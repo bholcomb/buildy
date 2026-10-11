@@ -1,12 +1,14 @@
 package resource
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"buildy/internal/config"
 	"buildy/pkg/util"
@@ -122,27 +124,18 @@ func (bsm *BuildSystemManager) GetBuildSystem(name string) *BuildSystemConfig {
 	return bsm.systems[name]
 }
 
-// Execute executes specified phases of a build system
-func (bsm *BuildSystemManager) Execute(
-	config *BuildSystemConfig,
-	sourceDir, buildDir, installDir string,
-	execSpec util.ExecSpec,
-	mounts []string,
-	phases []string,
-	extraArgs []string,
-) error {
-	return bsm.ExecuteWithContext(config, sourceDir, buildDir, installDir, execSpec, mounts, phases, extraArgs, nil)
-}
-
-// ExecuteWithContext executes specified phases with additional context variables
+// ExecuteWithContext runs phases of a build system, with additional variables. ctx stops it (an
+// interrupt), and each phase may run for timeout (0: no limit).
 func (bsm *BuildSystemManager) ExecuteWithContext(
+	ctx context.Context,
 	bsConfig *BuildSystemConfig,
 	sourceDir, buildDir, installDir string,
 	execSpec util.ExecSpec,
 	mounts []string,
 	phases []string,
 	extraArgs []string,
-	context map[string]string,
+	variables map[string]string,
+	timeout time.Duration,
 ) error {
 	// Get number of parallel jobs
 	jobs := runtime.NumCPU()
@@ -171,7 +164,7 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 		// Determine working directory
 		workDir := sourceDir
 		if phase.WorkingDir != "" {
-			workDir = bsm.substituteVariablesWithContext(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil, context)
+			workDir = bsm.substituteVariablesWithContext(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil, variables)
 		}
 
 		values := map[string][]string{
@@ -181,7 +174,7 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 			"jobs":        {fmt.Sprint(jobs)},
 			"args":        append(append([]string{}, phase.DefaultArgs...), extraArgs...),
 		}
-		for key, value := range context {
+		for key, value := range variables {
 			values[key] = []string{value}
 		}
 		args, err := phase.Command.Expand(config.MapValues(values))
@@ -193,7 +186,7 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
 
 		// Execute the command
-		result, err := util.Run(execSpec, cmd, workDir, mounts, 600) // 10 minute timeout
+		result, err := util.Run(ctx, execSpec, cmd, workDir, mounts, timeout)
 		if err != nil {
 			return fmt.Errorf("phase '%s' failed: %w", phaseName, err)
 		}

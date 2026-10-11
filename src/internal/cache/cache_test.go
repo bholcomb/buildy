@@ -269,9 +269,13 @@ func TestCacheKeyIncludesToolAndEnvironment(t *testing.T) {
 	}
 	// A Docker container sees none of the host's environment
 	t.Setenv("CPATH", "/one")
-	d1 := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}} })
+	d1 := key(func(task *workspace.BuildTask) {
+		task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}}
+	})
 	t.Setenv("CPATH", "/two")
-	if d2 := key(func(task *workspace.BuildTask) { task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}} }); d1 != d2 {
+	if d2 := key(func(task *workspace.BuildTask) {
+		task.Exec = util.ExecSpec{Type: "docker", Image: "x", ReadsEnv: []string{"CPATH"}}
+	}); d1 != d2 {
 		t.Error("the host's CPATH changed a Docker task's key")
 	}
 }

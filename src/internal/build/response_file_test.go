@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"buildy/pkg/util"
 )
@@ -116,7 +118,7 @@ func TestExecutorUsesResponseFiles(t *testing.T) {
 	var mu sync.Mutex
 	var ran util.Command
 	var rspContent string
-	te.runCommand = func(spec util.ExecSpec, command util.Command, workDir string, m []string, timeout int) (*util.ExecutionResult, error) {
+	te.runCommand = func(ctx context.Context, spec util.ExecSpec, command util.Command, workDir string, m []string, timeout time.Duration) (*util.ExecutionResult, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		ran = command
@@ -124,7 +126,7 @@ func TestExecutorUsesResponseFiles(t *testing.T) {
 			data, _ := os.ReadFile(command.Args[1][1:])
 			rspContent = string(data)
 		}
-		return util.Run(spec, helperCommand(t, "write", out, "archive"), workDir, nil, timeout)
+		return util.Run(ctx, spec, helperCommand(t, "write", out, "archive"), workDir, nil, timeout)
 	}
 	huge := strings.Repeat("o", 2<<20)
 	task := newTask("link_big", nil, []string{out}, util.Command{Args: []string{"ar", "rcs", out, huge}, ResponseFile: util.ResponseFileGNU})

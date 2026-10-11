@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"buildy/internal/config"
 	"buildy/pkg/util"
@@ -61,6 +63,9 @@ type DependencyResolver struct {
 	resolved           map[string]*ResolvedDependency
 	configs            map[string]*DependencyConfig
 	plan               bool // Dry run: report fetches and builds instead of doing them
+
+	// Timeout is how long a dependency build phase may run (0: no limit)
+	Timeout time.Duration
 }
 
 // NewDependencyResolver creates a new DependencyResolver
@@ -165,7 +170,8 @@ func fileExists(path string) bool {
 
 // ResolveAll resolves all loaded dependencies: fetches and builds them. With plan (--dry-run), it
 // fetches and builds nothing, reports what it would do, and resolves what is already on disk.
-func (dr *DependencyResolver) ResolveAll(plan bool) error {
+// ctx stops the fetches and builds (an interrupt).
+func (dr *DependencyResolver) ResolveAll(ctx context.Context, plan bool) error {
 	dr.plan = plan
 	names := make([]string, 0, len(dr.configs))
 	for name := range dr.configs {
@@ -173,7 +179,7 @@ func (dr *DependencyResolver) ResolveAll(plan bool) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := dr.resolveDependency(name, dr.configs[name]); err != nil {
+		if err := dr.resolveDependency(ctx, name, dr.configs[name]); err != nil {
 			return err
 		}
 	}
@@ -181,7 +187,7 @@ func (dr *DependencyResolver) ResolveAll(plan bool) error {
 }
 
 // resolveDependency resolves a single dependency
-func (dr *DependencyResolver) resolveDependency(name string, dep *DependencyConfig) error {
+func (dr *DependencyResolver) resolveDependency(ctx context.Context, name string, dep *DependencyConfig) error {
 	// Merge the sections: the direct fields, common, platform, platform-arch
 	merged := dep.For(dr.platform, dr.architecture)
 
@@ -209,11 +215,11 @@ func (dr *DependencyResolver) resolveDependency(name string, dep *DependencyConf
 
 	switch depType {
 	case DepTypeFetch:
-		if err := dr.resolveFetchDependency(name, dep, merged, depVarEnv, resolved); err != nil {
+		if err := dr.resolveFetchDependency(ctx, name, dep, merged, depVarEnv, resolved); err != nil {
 			return err
 		}
 	case DepTypeSystem:
-		if err := dr.resolveSystemDependency(name, merged, depVarEnv, resolved); err != nil {
+		if err := dr.resolveSystemDependency(ctx, name, merged, depVarEnv, resolved); err != nil {
 			return err
 		}
 	}
@@ -242,7 +248,7 @@ func (dr *DependencyResolver) inferDependencyType(section DependencySection) (De
 }
 
 // resolveSystemDependency resolves a system dependency
-func (dr *DependencyResolver) resolveSystemDependency(name string, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
+func (dr *DependencyResolver) resolveSystemDependency(ctx context.Context, name string, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
 	// If pkg_config is specified, use it
 	if section.PkgConfig != "" {
 		// Check if pkg-config is available
@@ -250,7 +256,7 @@ func (dr *DependencyResolver) resolveSystemDependency(name string, section Depen
 			return fmt.Errorf("pkg_config specified for '%s' but pkg-config is not available", name)
 		}
 
-		if err := dr.resolvePkgConfig(section.PkgConfig, resolved); err != nil {
+		if err := dr.resolvePkgConfig(ctx, section.PkgConfig, resolved); err != nil {
 			return fmt.Errorf("pkg-config failed for '%s': %w", name, err)
 		}
 
@@ -299,7 +305,7 @@ func (dr *DependencyResolver) resolveProvided(name string, section DependencySec
 }
 
 // resolveFetchDependency resolves a fetch dependency
-func (dr *DependencyResolver) resolveFetchDependency(name string, dep *DependencyConfig, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
+func (dr *DependencyResolver) resolveFetchDependency(ctx context.Context, name string, dep *DependencyConfig, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
 	// Determine destination
 	dest := filepath.Join(dr.cacheDir, "deps", name)
 
@@ -319,9 +325,9 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, dep *Dependenc
 			util.LogProgress("Dry run: would fetch %s from %s into %s (not on disk yet: its include and lib dirs are missing from this plan)", name, source, dest)
 		}
 	} else if section.Git != "" {
-		err = dr.fetchManager.FetchGit(section.Git, section.Ref, dest)
+		err = dr.fetchManager.FetchGit(ctx, section.Git, section.Ref, dest)
 	} else if section.URL != "" {
-		err = dr.fetchManager.FetchURL(section.URL, section.Checksum, dest)
+		err = dr.fetchManager.FetchURL(ctx, section.URL, section.Checksum, dest)
 	}
 	resolved.SourceGit = section.Git
 	resolved.SourceRef = section.Ref
@@ -339,7 +345,7 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, dep *Dependenc
 	// Handle build configuration
 	if section.Build != nil && section.Build.System != "" && section.Build.System != "none" {
 		// Build using the specified build system (cmake, make, meson, buildy, etc.)
-		if err := dr.buildFetchedDep(name, section, dest, resolved); err != nil {
+		if err := dr.buildFetchedDep(ctx, name, section, dest, resolved); err != nil {
 			return fmt.Errorf("failed to build '%s': %w", name, err)
 		}
 	}
@@ -349,7 +355,7 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, dep *Dependenc
 
 // buildFetchedDep builds a fetched dependency using its build system
 // Builds both debug and release configurations so users can link against either
-func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySection, dest string, resolved *ResolvedDependency) error {
+func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, section DependencySection, dest string, resolved *ResolvedDependency) error {
 	if dr.buildSystemManager == nil {
 		return fmt.Errorf("BuildSystemManager not initialized")
 	}
@@ -404,8 +410,8 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		os.MkdirAll(buildDir, 0755)
 		os.MkdirAll(installDir, 0755)
 
-		// Build context with additional variables
-		context := map[string]string{
+		// The build's additional variables
+		variables := map[string]string{
 			"config":   config,
 			"platform": dr.platform,
 			"arch":     dr.architecture,
@@ -417,16 +423,16 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 			if err != nil {
 				return fmt.Errorf("failed to find buildy executable: %w", err)
 			}
-			context["buildy_exe"] = buildyExe
+			variables["buildy_exe"] = buildyExe
 
 			// If override config is specified, pass it as the config file argument
 			// The source_dir remains the fetched dependency directory
 			if section.Build.Override != "" {
 				overrideConfig := filepath.Join(dr.workspaceRoot, "buildy_config", "dependencies", section.Build.Override)
-				context["config_file"] = overrideConfig
+				variables["config_file"] = overrideConfig
 			} else {
 				// No override - use the default buildy.yaml in the source directory
-				context["config_file"] = ""
+				variables["config_file"] = ""
 			}
 		}
 
@@ -446,7 +452,7 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 		}
 
 		util.LogInfo("Building %s (%s) with %s", name, config, bsConfig.Name)
-		if err := dr.buildSystemManager.ExecuteWithContext(bsConfig, dest, buildDir, installDir, execSpec, mounts, phases, extraArgs, context); err != nil {
+		if err := dr.buildSystemManager.ExecuteWithContext(ctx, bsConfig, dest, buildDir, installDir, execSpec, mounts, phases, extraArgs, variables, dr.Timeout); err != nil {
 			return fmt.Errorf("build failed for %s (%s): %w", name, config, err)
 		}
 
@@ -466,9 +472,9 @@ func (dr *DependencyResolver) buildFetchedDep(name string, section DependencySec
 }
 
 // resolvePkgConfig uses pkg-config to get include dirs, lib dirs, and libs
-func (dr *DependencyResolver) resolvePkgConfig(pkgName string, dep *ResolvedDependency) error {
+func (dr *DependencyResolver) resolvePkgConfig(ctx context.Context, pkgName string, dep *ResolvedDependency) error {
 	// Get cflags
-	cflagsCmd := exec.Command("pkg-config", "--cflags", pkgName)
+	cflagsCmd := exec.CommandContext(ctx, "pkg-config", "--cflags", pkgName)
 	cflagsOut, err := cflagsCmd.Output()
 	if err != nil {
 		return fmt.Errorf("pkg-config --cflags failed: %w", err)
@@ -485,7 +491,7 @@ func (dr *DependencyResolver) resolvePkgConfig(pkgName string, dep *ResolvedDepe
 	}
 
 	// Get libs
-	libsCmd := exec.Command("pkg-config", "--libs", pkgName)
+	libsCmd := exec.CommandContext(ctx, "pkg-config", "--libs", pkgName)
 	libsOut, err := libsCmd.Output()
 	if err != nil {
 		return fmt.Errorf("pkg-config --libs failed: %w", err)

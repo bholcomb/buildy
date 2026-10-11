@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,14 +42,27 @@ func NewFetchManager(cacheDir string) *FetchManager {
 	}
 }
 
+// git runs git with args in dir. Like a task's command it runs in its own process group, killed
+// when ctx is done (an interrupt).
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	result, err := util.Run(ctx, util.ExecSpec{}, util.Command{Args: append([]string{"git"}, args...), Dir: dir}, dir, nil, 0)
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", args[0], err)
+	}
+	if result.ReturnCode != 0 {
+		return result.Output, fmt.Errorf("git %s failed: %s", args[0], result.Output)
+	}
+	return result.Output, nil
+}
+
 // FetchGit clones or updates a git repository
-func (fm *FetchManager) FetchGit(url, ref, dest string) error {
+func (fm *FetchManager) FetchGit(ctx context.Context, url, ref, dest string) error {
 	util.LogProgress("Fetching git: %s @ %s -> %s", url, ref, dest)
 
 	// Check if destination already exists
 	if _, err := os.Stat(dest); err == nil {
 		// Directory exists, try to update
-		return fm.updateGitRepo(dest, ref)
+		return fm.updateGitRepo(ctx, dest, ref)
 	}
 
 	// Clone the repository
@@ -62,26 +76,20 @@ func (fm *FetchManager) FetchGit(url, ref, dest string) error {
 		cloneArgs = append(cloneArgs, "--branch", ref)
 	}
 	cloneArgs = append(cloneArgs, url, dest)
-
-	cmd := exec.Command("git", cloneArgs...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone failed: %s", output)
+	if _, err := git(ctx, filepath.Dir(dest), cloneArgs...); err != nil {
+		return err
 	}
 
 	// If ref is a tag or commit, checkout that ref
 	if ref != "" {
-		checkoutCmd := exec.Command("git", "checkout", ref)
-		checkoutCmd.Dir = dest
-		if _, err := checkoutCmd.CombinedOutput(); err != nil {
+		if _, err := git(ctx, dest, "checkout", ref); err != nil {
+			if ctx.Err() != nil {
+				return err
+			}
 			// Try fetching if checkout fails (might be a tag not in shallow clone)
-			fetchCmd := exec.Command("git", "fetch", "--tags", "--depth", "1", "origin", ref)
-			fetchCmd.Dir = dest
-			fetchCmd.Run()
-
-			checkoutCmd = exec.Command("git", "checkout", ref)
-			checkoutCmd.Dir = dest
-			if output, err := checkoutCmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("git checkout failed: %s", output)
+			git(ctx, dest, "fetch", "--tags", "--depth", "1", "origin", ref)
+			if _, err := git(ctx, dest, "checkout", ref); err != nil {
+				return err
 			}
 		}
 	}
@@ -91,25 +99,16 @@ func (fm *FetchManager) FetchGit(url, ref, dest string) error {
 }
 
 // updateGitRepo updates an existing git repository
-func (fm *FetchManager) updateGitRepo(dest, ref string) error {
+func (fm *FetchManager) updateGitRepo(ctx context.Context, dest, ref string) error {
 	util.LogProgress("Updating git repo: %s", dest)
-
-	// Fetch latest
-	fetchCmd := exec.Command("git", "fetch", "--tags", "origin")
-	fetchCmd.Dir = dest
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch failed: %s", output)
+	if _, err := git(ctx, dest, "fetch", "--tags", "origin"); err != nil {
+		return err
 	}
-
-	// Checkout the ref if specified
 	if ref != "" {
-		checkoutCmd := exec.Command("git", "checkout", ref)
-		checkoutCmd.Dir = dest
-		if output, err := checkoutCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git checkout failed: %s", output)
+		if _, err := git(ctx, dest, "checkout", ref); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
@@ -130,7 +129,7 @@ func (fm *FetchManager) GetGitCommit(dest string) (string, error) {
 // readability), so two URLs with the same file name never share a download. The extraction is
 // recorded in dest's marker file against the URL and the archive's SHA-256; dest is reused only
 // when the marker matches, so a partial or stale extraction is never accepted.
-func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
+func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string) error {
 	util.LogProgress("Fetching URL: %s -> %s", url, dest)
 
 	// Warn about missing checksum - checksums are strongly encouraged for reproducible builds
@@ -182,7 +181,7 @@ func (fm *FetchManager) FetchURL(url, checksum, dest string) error {
 		// Download to a temp file first, only move to cache on success
 		tempPath := downloadPath + ".tmp"
 
-		if err := fm.downloadFile(url, tempPath); err != nil {
+		if err := fm.downloadFile(ctx, url, tempPath); err != nil {
 			os.Remove(tempPath)
 			return fmt.Errorf("download failed: %w", err)
 		}
@@ -499,9 +498,14 @@ func (fm *FetchManager) GetDownloadMetadata(url string) (*DownloadMetadata, erro
 	return fm.loadDownloadMetadata(fm.downloadPath(url) + ".meta.json")
 }
 
-// downloadFile downloads a file from a URL with progress reporting
-func (fm *FetchManager) downloadFile(url, dest string) error {
-	resp, err := http.Get(url)
+// downloadFile downloads a file from a URL with progress reporting. ctx stops it (an interrupt).
+// TODO: a timeout for a server that stops answering (review phase 4).
+func (fm *FetchManager) downloadFile(ctx context.Context, url, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

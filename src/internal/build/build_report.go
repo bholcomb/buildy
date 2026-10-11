@@ -17,6 +17,7 @@ type BuildOptions struct {
 	DryRun          bool
 	Force           bool
 	CompileCommands bool
+	Timeout         time.Duration // How long a task may run (0: no limit)
 }
 
 // BuildResult contains the results of a build

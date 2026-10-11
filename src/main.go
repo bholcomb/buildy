@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,6 +101,7 @@ func main() {
 	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
+	timeout := flag.Duration("timeout", 0, "Kill a task, or a dependency build step, that runs longer than this (e.g. 30m; 0: no limit)")
 
 	// Custom flag for multiple defines
 	var defines []string
@@ -385,7 +387,8 @@ func main() {
 
 		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
 		// builds nothing, and uses what is already on disk.
-		if err := depResolver.ResolveAll(*dryRun); err != nil {
+		depResolver.Timeout = *timeout
+		if err := depResolver.ResolveAll(context.Background(), *dryRun); err != nil {
 			util.LogFatal("Failed to resolve dependencies: %v", err)
 		}
 	}
@@ -414,6 +417,7 @@ func main() {
 		DryRun:          *dryRun,
 		Force:           *force,
 		CompileCommands: *compileCommands,
+		Timeout:         *timeout,
 	}
 
 	// Generate, validate, select (--target) and execute (or, with --dry-run, print the plan).

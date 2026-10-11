@@ -132,6 +132,7 @@ func (b *Builder) BuildWorkspace(
 	// workspace root; every path in them is absolute.
 	executor := NewTaskExecutor(b.Cache, b.MaxWorkers, ws.RootDir, options.Force)
 	executor.BuildResult = result // Pass result for tracking
+	executor.Timeout = options.Timeout
 	success := executor.ExecuteTaskGraph(graph, options.DryRun)
 
 	// Compact the cache: what the finished tasks recorded goes into its index

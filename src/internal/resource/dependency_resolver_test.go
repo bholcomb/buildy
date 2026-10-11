@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,7 +119,7 @@ ok:
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := dr.ResolveAll(false); err != nil {
+	if err := dr.ResolveAll(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"/x/linux-x86_64-release", "/y/ok-1.2", root + "/z", "/root-var"}
@@ -133,7 +134,7 @@ ok:
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := dr.ResolveAll(false); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
+	if err := dr.ResolveAll(context.Background(), false); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
 		t.Errorf("err = %v", err)
 	}
 }

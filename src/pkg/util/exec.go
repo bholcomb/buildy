@@ -3,6 +3,7 @@ package util
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -108,10 +110,22 @@ func ShellQuoter(spec ExecSpec) func(string) (string, error) {
 	return func(s string) (string, error) { return QuotePOSIX(s), nil }
 }
 
+// waitDelay is how long a command's output pipes may stay open after it exits, or after it is
+// killed: a process it started that keeps them open (outside its process group) can't hang
+// buildy.
+var waitDelay = 5 * time.Second
+
+// dockerNames numbers the containers buildy runs, for their names.
+var dockerNames atomic.Int64
+
 // Run runs command natively or in Docker, in its directory (relative to defaultDir). A
 // Docker container gets mounts (the workspace root, and the cache directory when it lies
 // elsewhere) at their host paths, so the absolute host paths in commands are valid inside it.
-func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, timeoutSeconds int) (*ExecutionResult, error) {
+//
+// The command runs in a process group of its own. When ctx is done (an interrupt) or timeout
+// passes (if not 0), the whole group is killed, not only the program buildy started, and a Docker
+// container is killed with docker kill (it runs with --init and a name).
+func Run(ctx context.Context, spec ExecSpec, command Command, defaultDir string, mounts []string, timeout time.Duration) (*ExecutionResult, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
@@ -122,28 +136,44 @@ func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, tim
 		command.Dir = filepath.Join(defaultDir, command.Dir)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	runCtx, cancel := ctx, context.CancelFunc(func() {})
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 
 	var cmd *exec.Cmd
+	container := ""
 	if spec.IsDocker() {
-		args, err := DockerRunArgs(spec, command, mounts)
+		container = fmt.Sprintf("buildy-%d-%d", os.Getpid(), dockerNames.Add(1))
+		args, err := DockerRunArgs(spec, command, mounts, container)
 		if err != nil {
 			return nil, err
 		}
 		LogDebug("Docker command: %s", JoinArgs(append([]string{"docker"}, args...), runtime.GOOS))
-		cmd = exec.CommandContext(ctx, "docker", args...)
+		cmd = exec.CommandContext(runCtx, "docker", args...)
 	} else {
 		if command.Script != "" {
-			cmd = shellCommand(ctx, command.Script)
+			cmd = shellCommand(runCtx, command.Script)
 		} else {
-			cmd = exec.CommandContext(ctx, command.Args[0], command.Args[1:]...)
+			cmd = exec.CommandContext(runCtx, command.Args[0], command.Args[1:]...)
 		}
 		cmd.Dir = command.Dir
 		if len(spec.Env) > 0 {
 			cmd.Env = append(os.Environ(), EnvList(spec.Env)...)
 		}
 	}
+	newProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		if container != "" {
+			// Killing the docker client leaves the container running
+			killCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
+			defer done()
+			exec.CommandContext(killCtx, "docker", "kill", container).Run()
+		}
+		return killProcessGroup(cmd.Process)
+	}
+	cmd.WaitDelay = waitDelay
 
 	// One buffer for both streams: os/exec then writes them from one goroutine, in order
 	var output bytes.Buffer
@@ -152,28 +182,35 @@ func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, tim
 
 	err := cmd.Run()
 	result := &ExecutionResult{Output: output.String()}
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
+	switch {
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("interrupted: %w", ctx.Err())
+	case runCtx.Err() != nil:
+		return nil, fmt.Errorf("timed out after %s; its processes were killed", timeout)
+	case errors.Is(err, exec.ErrWaitDelay):
+		return nil, fmt.Errorf("exited, but a process it started kept its output open for %s; buildy stopped waiting for it", waitDelay)
+	case err != nil:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			result.ReturnCode = exitErr.ExitCode()
 			return result, nil
-		}
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("timed out after %d seconds", timeoutSeconds)
 		}
 		return nil, err
 	}
 	return result, nil
 }
 
-// DockerRunArgs returns the arguments of the `docker run` that runs command for spec: the mounts
-// at their host paths, then the spec's extra volumes, the working directory, the user (the
-// invoking user unless the spec names one), the environment, the image, and the command's
-// arguments as arguments of their own (a script runs as `sh -c script`).
-func DockerRunArgs(spec ExecSpec, command Command, mounts []string) ([]string, error) {
+// DockerRunArgs returns the arguments of the `docker run` that runs command for spec, in a
+// container with the name given: removed when it exits, with an init process that forwards
+// signals and reaps zombies; the mounts at their host paths, then the spec's extra volumes, the
+// working directory, the user (the invoking user unless the spec names one), the environment,
+// the image, and the command's arguments as arguments of their own (a script runs as
+// `sh -c script`).
+func DockerRunArgs(spec ExecSpec, command Command, mounts []string, name string) ([]string, error) {
 	if spec.Image == "" {
 		return nil, fmt.Errorf("docker execution needs an image")
 	}
-	args := []string{"run", "--rm"}
+	args := []string{"run", "--rm", "--init", "--name", name}
 	for _, m := range mounts {
 		args = append(args, "-v", m+":"+m)
 	}

@@ -27,8 +27,10 @@ import (
 type TaskExecutor struct {
 	Cache           *cache.BuildCache
 	MaxWorkers      int
-	WorkDir         string   // The workspace root: commands run here; relative dependency-file paths are relative to it
-	DockerMounts    []string // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
+	Timeout         time.Duration   // How long a task may run (0: no limit)
+	Context         context.Context // Done when the build is interrupted: running tasks are killed
+	WorkDir         string          // The workspace root: commands run here; relative dependency-file paths are relative to it
+	DockerMounts    []string        // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
 	DisableCache    bool
 	ExecutionStats  ExecutionStats
 	BuildResult     *BuildResult     // Optional: for tracking execution in build report
@@ -40,7 +42,7 @@ type TaskExecutor struct {
 	tools           *toolIdentities     // What each program is, for cache keys
 
 	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
-	runCommand func(spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeoutSeconds int) (*util.ExecutionResult, error)
+	runCommand func(ctx context.Context, spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeout time.Duration) (*util.ExecutionResult, error)
 }
 
 // ExecutionStats tracks execution statistics
@@ -64,6 +66,7 @@ func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers int, workDir strin
 		pendingOutputs:  make(map[string][]string),
 		producers:       make(map[string]string),
 		runCommand:      util.Run,
+		Context:         context.Background(),
 	}
 	te.tools = newToolIdentities(buildCache.HashFile)
 
@@ -196,7 +199,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	}
 	// What the command runs is part of the key: the program's path and content, or the image
 	if task.Native == nil {
-		tool, err := te.tools.of(context.TODO(), task.Exec, task.Command, te.WorkDir)
+		tool, err := te.tools.of(te.Context, task.Exec, task.Command, te.WorkDir)
 		if err != nil {
 			return te.fail(task, 0, err)
 		}
@@ -361,7 +364,7 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) (string, error) {
 	defer remove()
 
 	// Natively or in Docker, as the task's toolchain says; in its directory, else the workspace root
-	result, err := te.runCommand(task.Exec, command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
+	result, err := te.runCommand(te.Context, task.Exec, command, te.WorkDir, te.DockerMounts, te.Timeout)
 	if err != nil {
 		return "", err
 	}

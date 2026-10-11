@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -85,7 +86,7 @@ foo:
 	if err := deps.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := deps.ResolveAll(false); err != nil {
+	if err := deps.ResolveAll(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	toolchains, err := resource.NewToolchainManagerMulti(nil)

@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -245,7 +246,7 @@ func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 	var mu sync.Mutex // the stage's tasks run in parallel
 	var specs []util.ExecSpec
 	var mounts [][]string
-	te.runCommand = func(spec util.ExecSpec, command util.Command, workDir string, m []string, timeout int) (*util.ExecutionResult, error) {
+	te.runCommand = func(ctx context.Context, spec util.ExecSpec, command util.Command, workDir string, m []string, timeout time.Duration) (*util.ExecutionResult, error) {
 		mu.Lock()
 		specs = append(specs, spec)
 		mounts = append(mounts, m)
@@ -253,7 +254,7 @@ func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 		if workDir != dir {
 			t.Errorf("command ran in %s, want the workspace root %s", workDir, dir)
 		}
-		return util.Run(util.ExecSpec{}, command, workDir, nil, timeout)
+		return util.Run(ctx, util.ExecSpec{}, command, workDir, nil, timeout)
 	}
 
 	dockerTask := newTask("compile_in_docker", nil, []string{filepath.Join(dir, "a.o")}, helperCommand(t, "write", filepath.Join(dir, "a.o"), "a"))
@@ -371,5 +372,24 @@ func TestExecutorStopsStartingTasksAfterAFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(laterOut); err == nil {
 		t.Error("a task started after the failure")
+	}
+}
+
+// Finding 3.2: --timeout fails a task that runs too long, and removes its partial output.
+func TestExecutorTimesOutATask(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	task := newTask("hangs", nil, []string{out}, helperCommand(t, "write", out, "partial", "&&", "sleep", "10000"))
+	te := newExecutor(t, dir, false)
+	te.Timeout = 500 * time.Millisecond
+	start := time.Now()
+	if runTasks(te, task) {
+		t.Fatal("the task succeeded")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("the timeout took %s", elapsed)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("the partial output was left")
 	}
 }
