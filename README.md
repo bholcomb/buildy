@@ -136,6 +136,11 @@ targets:
 
 Go/Rust library targets (`shared_libraries`, `static_libraries`) are for C/C++ interop only.
 
+Buildy runs `go build` and `cargo build` on every build and lets their own caches decide what to
+rebuild; they show as executed, never as cache hits. Cargo builds into
+`build/<platform>-<arch>-<config>/cargo/`, so a Rust executable is
+`cargo/<debug|release>/<name>`.
+
 ## Workspaces
 
 Multi-module projects use the `workspace` section:

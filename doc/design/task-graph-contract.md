@@ -1,7 +1,9 @@
 # Task Graph Contract
 
-Status: **approved.** The open questions are decided ([section 11](#11-decisions)); the steps in
-[section 10](#10-implementation-order) land one commit at a time.
+Status: **implemented** on the `review-fixes` branch, one commit per step of
+[section 10](#10-implementation-order), with the decisions of [section 11](#11-decisions).
+[Section 12](#12-implementation-notes) records where the implementation differs from or adds to
+this design.
 
 This document answers the external design review of buildy (reviewed at `3fd9618`; the code is
 the same as `main` at `b6316c5` apart from `bootstrap.sh`). It records how each finding was
@@ -405,6 +407,40 @@ The open questions, as decided:
    is dropped.
 5. **Validation** stays map-based with a corrected schema.
 6. **Dependency builds** stay a phase before generation; dry-run plans them.
+
+## 12. Implementation notes
+
+Where the implementation differs from the design above, or had to add to it:
+
+- **`go 1.25.0`, not `go 1.25`.** A Go 1.22 with `GOTOOLCHAIN=auto` reads `go 1.25` as a request for
+  a toolchain named `go1.25`, which doesn't exist, and fails; `go 1.25.0` downloads it. CI's
+  `setup-go` already reads `go-version-file: src/go.mod`.
+- **No object store.** With a hit requiring every declared output in place with its recorded hash,
+  copying outputs into `.buildy_cache/objects/` and restoring them was dead weight: the cache records
+  what each task produced and stores no copies.
+- **A directory argument is a workspace.** `buildy dir/` loaded `dir/buildy.yaml` in standalone mode
+  (no modules, no dependencies), unlike the documentation and unlike running buildy in `dir`. Only a
+  file argument is standalone now.
+- **Generation runs in two passes, in module order.** Every module's targets are generated before
+  any module's copies, staging and install, which may name targets of other modules; modules were
+  visited in map order, so with the new errors a cross-module reference failed at random.
+- **Artifacts are registered workspace-wide.** Workspace-level staging could not name a module's
+  artifact (the game_engine example's shaders were skipped with a warning). Artifact names, like
+  target names, are unique across the workspace.
+- **Validation found two pre-existing duplicates**: the root config's staging and install were
+  generated twice when the root is also a module (discovery mode), and an install archived
+  `<output>/staging` whatever its staging area's destination. Both are fixed.
+- **Rust layout is data.** The Cargo profile comes from a command parameter with a new `default`
+  (`release` when the configuration passes `--release`, else `debug`); each Rust toolchain declares
+  its layout (`cargo_triple_dir`, `exe_ext`, `staticlib_name`, `cdylib_name`) as toolchain
+  variables, which templates can now read.
+- **Dependency files.** A file named as a dependency's `build.override` (a buildy config kept in
+  `buildy_config/dependencies/`) is skipped when loading definitions, and `dependencies.file` in
+  `buildy.yaml`, read but never used, now names the definitions file.
+- **Modules outside the workspace root** (`modules: [../lib]`) put their objects at `obj/../lib`;
+  a `..` in the module part of an object path is now `_up`, as in the source part.
+- **Docker** is tested end to end with a stand-in compiler in `busybox` (commands that only work
+  inside a container, on host paths), not `gcc:13`, so the test needs no large image.
 
 Out of scope, deliberately: compiler versions in cache keys, system headers (`-MMD` convention),
 Docker image digests, and a remote cache.
