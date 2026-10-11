@@ -92,3 +92,41 @@ glfw:
 		t.Error("a missing dependencies.file was accepted")
 	}
 }
+
+// A dependency sees the documented variables (${arch}, ${config}, ...) and the workspace's; the
+// undocumented ${architecture} and ${configuration} are gone, and an unknown variable is an error
+// naming the dependency, not an exit from inside the resolver.
+func TestDependencyVariables(t *testing.T) {
+	root := t.TempDir()
+	writeDepFiles(t, root, map[string]string{
+		"buildy_config/dependencies.yaml": `
+ok:
+  version: "1.2"
+  include_dirs: ["/x/${platform}-${arch}-${config}", "/y/${name}-${version}", "${workspace_root}/z", "${FROM_ROOT}"]
+`,
+	})
+	env := util.NewVariableEnvironment(nil)
+	env.SetVariable("FROM_ROOT", "/root-var", "test")
+	dr := NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env)
+	if err := dr.LoadDependencies(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := dr.ResolveAll(false); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/x/linux-x86_64-release", "/y/ok-1.2", root + "/z", "/root-var"}
+	if got := dr.GetDependency("ok").IncludeDirs; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("include dirs = %v, want %v", got, want)
+	}
+
+	writeDepFiles(t, root, map[string]string{
+		"buildy_config/dependencies.yaml": "bad:\n  lib_dirs: [\"/x/${architecture}\"]\n",
+	})
+	dr = NewDependencyResolver("linux", "x86_64", "", "release", filepath.Join(root, ".buildy_cache"), root, env)
+	if err := dr.LoadDependencies(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := dr.ResolveAll(false); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
+		t.Errorf("err = %v", err)
+	}
+}

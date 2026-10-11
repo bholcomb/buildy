@@ -9,9 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
-
-	"gopkg.in/yaml.v3"
 )
 
 // DependencyType represents the type of dependency (inferred from fields)
@@ -39,49 +38,14 @@ type ResolvedDependency struct {
 	SourceRef   string // For git fetch deps: the ref (tag/branch)
 }
 
-// BuildConfig represents the build section for fetch dependencies
-type BuildConfig struct {
-	System   string   `yaml:"system"`   // cmake, meson, make, autoconf, buildy, none
-	Override string   `yaml:"override"` // Custom build file to use instead of default
-	Args     []string `yaml:"args"`     // Arguments passed to the build system
-}
+// BuildConfig is a fetched dependency's build section.
+type BuildConfig = config.DependencyBuild
 
-// DependencyConfig represents a single dependency's configuration (parsed from YAML)
-// This is the new unified format with platform sections
-type DependencyConfig struct {
-	Name        string
-	Description string
-	Version     string
+// DependencyConfig is a dependency definition.
+type DependencyConfig = config.Dependency
 
-	// Platform-specific sections (common, linux, windows, macos, etc.)
-	// Each section can contain any of the fields below
-	Sections map[string]DependencySection
-}
-
-// DependencySection represents one platform section of a dependency
-type DependencySection struct {
-	// Source fields (determine type)
-	Git       string `yaml:"git"`        // Git repository URL -> fetch type
-	URL       string `yaml:"url"`        // Archive URL -> fetch type
-	PkgConfig string `yaml:"pkg_config"` // pkg-config name -> system type
-	Root      string `yaml:"root"`       // Base path for library -> system type
-
-	// Fetch-specific fields
-	Ref      string       `yaml:"ref"`      // Git ref (tag/branch/commit)
-	Checksum string       `yaml:"checksum"` // SHA256 for archives
-	Extract  bool         `yaml:"extract"`  // Whether to extract archive
-	Build    *BuildConfig `yaml:"build"`    // Build configuration
-
-	// Path fields
-	IncludeDirs []string `yaml:"include_dirs"`
-	LibDirs     []string `yaml:"lib_dirs"`
-	Libs        []string `yaml:"libs"`
-	Frameworks  []string `yaml:"frameworks"`
-	Defines     []string `yaml:"defines"`
-
-	// Execution environment (native or docker) for the dependency's build
-	Execution *util.ExecSpec `yaml:"execution"`
-}
+// DependencySection is the fields of one section of a dependency, or of its sections merged.
+type DependencySection = config.DependencySection
 
 // DependencyResolver resolves all dependency types
 type DependencyResolver struct {
@@ -152,24 +116,24 @@ func (dr *DependencyResolver) LoadDependencies(workspaceRoot, file string) error
 		}
 	}
 
-	parsed := make(map[string]map[string]any, len(files))
+	// A file some dependency names as its build.override is a buildy config for building it, not
+	// definitions; override configs are named relative to buildy_config/dependencies/
+	loaded := make(map[string][]*config.Dependency, len(files))
+	failed := make(map[string]error, len(files))
+	overrides := map[string]bool{}
 	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read dependencies file %s: %w", path, err)
 		}
-		var raw map[string]any
-		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("failed to parse dependencies file %s: %w", path, err)
+		deps, err := config.LoadDependencies(data, path)
+		if err != nil {
+			failed[path] = err
+			continue
 		}
-		parsed[path] = raw
-	}
-
-	// Override configs are named relative to buildy_config/dependencies/
-	overrides := map[string]bool{}
-	for _, raw := range parsed {
-		for _, depData := range raw {
-			for _, override := range buildOverrides(depData) {
+		loaded[path] = deps
+		for _, dep := range deps {
+			for _, override := range dep.Overrides() {
 				overrides[filepath.Join(depsDir, override)] = true
 			}
 		}
@@ -180,325 +144,23 @@ func (dr *DependencyResolver) LoadDependencies(workspaceRoot, file string) error
 		if overrides[path] {
 			continue
 		}
-		if err := dr.loadDependenciesFile(path, parsed[path], definedIn); err != nil {
+		if err := failed[path]; err != nil {
 			return err
 		}
+		for _, dep := range loaded[path] {
+			if other, ok := definedIn[dep.Name]; ok {
+				return fmt.Errorf("dependency '%s' is defined in both %s and %s", dep.Name, other, path)
+			}
+			definedIn[dep.Name] = path
+			dr.configs[dep.Name] = dep
+		}
 	}
-
 	return nil
 }
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-// buildOverrides returns the build.override files a dependency definition names, in any section.
-func buildOverrides(depData any) []string {
-	dep, ok := depData.(map[string]any)
-	if !ok {
-		return nil
-	}
-	var overrides []string
-	sections := []map[string]any{dep}
-	for _, value := range dep {
-		if section, ok := value.(map[string]any); ok {
-			sections = append(sections, section)
-		}
-	}
-	for _, section := range sections {
-		if build, ok := section["build"].(map[string]any); ok {
-			if override, ok := build["override"].(string); ok && override != "" {
-				overrides = append(overrides, override)
-			}
-		}
-	}
-	return overrides
-}
-
-// loadDependenciesFile validates and registers the dependencies defined in one file
-func (dr *DependencyResolver) loadDependenciesFile(filePath string, rawConfig map[string]any, definedIn map[string]string) error {
-	names := make([]string, 0, len(rawConfig))
-	for name := range rawConfig {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	// Each top-level key is a dependency name
-	for _, depName := range names {
-		depMap, ok := rawConfig[depName].(map[string]any)
-		if !ok {
-			return fmt.Errorf("%s: dependency '%s' must be a mapping", filePath, depName)
-		}
-		if problems := validateDependency(depMap); len(problems) > 0 {
-			return fmt.Errorf("%s: dependency '%s' is not valid:\n  - %s", filePath, depName, strings.Join(problems, "\n  - "))
-		}
-		if other, ok := definedIn[depName]; ok {
-			return fmt.Errorf("dependency '%s' is defined in both %s and %s", depName, other, filePath)
-		}
-		definedIn[depName] = filePath
-
-		config, err := dr.parseDependencyConfig(depName, depMap)
-		if err != nil {
-			return fmt.Errorf("%s: dependency '%s': %w", filePath, depName, err)
-		}
-
-		dr.configs[depName] = config
-	}
-
-	return nil
-}
-
-// The keys a dependency definition may have: metadata, platform sections, and the fields a
-// section holds (directly, when there are no sections).
-var (
-	dependencyMetadataKeys = map[string]bool{"description": true, "version": true}
-	dependencyFieldKeys    = map[string]bool{
-		"git": true, "url": true, "ref": true, "checksum": true, "extract": true,
-		"pkg_config": true, "root": true,
-		"include_dirs": true, "lib_dirs": true, "libs": true, "frameworks": true, "defines": true,
-		"build": true, "execution": true,
-	}
-	dependencyBuildKeys = map[string]bool{"system": true, "override": true, "args": true}
-)
-
-// isDependencySection reports whether key names a platform section: common, a platform, or
-// platform-architecture.
-func isDependencySection(key string) bool {
-	platforms := []string{"common", "linux", "windows", "macos", "darwin", "android", "ios"}
-	archs := []string{"x86_64", "arm64", "x86", "arm", "aarch64"}
-	for _, p := range platforms {
-		if key == p {
-			return true
-		}
-		for _, a := range archs {
-			if key == p+"-"+a {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// validateDependency checks one dependency definition against the schema.
-func validateDependency(dep map[string]any) []string {
-	var problems []string
-	checkFields := func(section map[string]any, where string) {
-		for _, key := range sortedMapKeys(section) {
-			if !dependencyFieldKeys[key] {
-				problems = append(problems, fmt.Sprintf("unknown key '%s%s'", where, key))
-			}
-		}
-		if build, ok := section["build"]; ok {
-			buildMap, ok := build.(map[string]any)
-			if !ok {
-				problems = append(problems, fmt.Sprintf("'%sbuild' must be a mapping", where))
-			}
-			for _, key := range sortedMapKeys(buildMap) {
-				if !dependencyBuildKeys[key] {
-					problems = append(problems, fmt.Sprintf("unknown key '%sbuild.%s' (expected system, override, args)", where, key))
-				}
-			}
-		}
-		if execution, ok := section["execution"]; ok {
-			execMap, ok := execution.(map[string]any)
-			if !ok {
-				problems = append(problems, fmt.Sprintf("'%sexecution' must be a mapping", where))
-			} else if _, err := execSpecFromMap(execMap); err != nil {
-				problems = append(problems, fmt.Sprintf("%s%v", where, err))
-			}
-		}
-	}
-
-	direct := map[string]any{}
-	for _, key := range sortedMapKeys(dep) {
-		value := dep[key]
-		switch {
-		case dependencyMetadataKeys[key]:
-		case isDependencySection(key):
-			section, ok := value.(map[string]any)
-			if !ok {
-				problems = append(problems, fmt.Sprintf("section '%s' must be a mapping", key))
-				continue
-			}
-			checkFields(section, key+".")
-		default:
-			direct[key] = value
-		}
-	}
-	checkFields(direct, "")
-	return problems
-}
-
-func sortedMapKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// parseDependencyConfig parses a single dependency configuration
-func (dr *DependencyResolver) parseDependencyConfig(name string, data map[string]any) (*DependencyConfig, error) {
-	config := &DependencyConfig{
-		Name:     name,
-		Sections: make(map[string]DependencySection),
-	}
-
-	// Extract top-level metadata
-	if desc, ok := data["description"].(string); ok {
-		config.Description = desc
-	}
-	if version, ok := data["version"].(string); ok {
-		config.Version = version
-	}
-
-	// Known platform section names
-	platformSections := []string{"common", "linux", "windows", "macos", "darwin", "android", "ios"}
-	archSections := []string{"x86_64", "arm64", "x86", "arm", "aarch64"}
-
-	// Build list of all possible section names (including platform-arch combos)
-	allSectionNames := make(map[string]bool)
-	for _, p := range platformSections {
-		allSectionNames[p] = true
-		for _, a := range archSections {
-			allSectionNames[p+"-"+a] = true
-		}
-	}
-
-	// Check if we have any platform sections
-	hasPlatformSections := false
-	for key := range data {
-		if allSectionNames[key] {
-			hasPlatformSections = true
-			break
-		}
-	}
-
-	// If we have platform sections, extract non-platform fields into a "common" section
-	// This allows top-level fields like "defines" to be shared across platforms
-	if hasPlatformSections {
-		topLevelData := make(map[string]any)
-		hasTopLevelFields := false
-		for key, value := range data {
-			// Skip metadata
-			if key == "description" || key == "version" {
-				continue
-			}
-			// Skip platform sections (they have map values and are in allSectionNames)
-			if allSectionNames[key] {
-				continue
-			}
-			// Everything else is a top-level dependency field
-			topLevelData[key] = value
-			hasTopLevelFields = true
-		}
-		if hasTopLevelFields {
-			section, err := dr.parseDependencySection(topLevelData)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse top-level fields: %w", err)
-			}
-			config.Sections["common"] = section
-		}
-	}
-
-	// Parse each platform section
-	for key, value := range data {
-		// Skip metadata fields
-		if key == "description" || key == "version" {
-			continue
-		}
-
-		// Check if this is a platform section
-		if !allSectionNames[key] {
-			// If no platform sections, treat entire data as a "common" section
-			if !hasPlatformSections && len(config.Sections) == 0 {
-				section, err := dr.parseDependencySection(data)
-				if err != nil {
-					return nil, err
-				}
-				config.Sections["common"] = section
-				return config, nil
-			}
-			continue
-		}
-
-		sectionData, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		section, err := dr.parseDependencySection(sectionData)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse section '%s': %w", key, err)
-		}
-
-		config.Sections[key] = section
-	}
-
-	return config, nil
-}
-
-// parseDependencySection parses a single platform section
-func (dr *DependencyResolver) parseDependencySection(data map[string]any) (DependencySection, error) {
-	section := DependencySection{}
-
-	// Source fields
-	if git, ok := data["git"].(string); ok {
-		section.Git = git
-	}
-	if url, ok := data["url"].(string); ok {
-		section.URL = url
-	}
-	if pkgConfig, ok := data["pkg_config"].(string); ok {
-		section.PkgConfig = pkgConfig
-	}
-	if root, ok := data["root"].(string); ok {
-		section.Root = root
-	}
-
-	// Fetch fields
-	if ref, ok := data["ref"].(string); ok {
-		section.Ref = ref
-	}
-	if checksum, ok := data["checksum"].(string); ok {
-		section.Checksum = checksum
-	}
-	if extract, ok := data["extract"].(bool); ok {
-		section.Extract = extract
-	}
-
-	// Build section
-	if buildData, ok := data["build"].(map[string]any); ok {
-		build := &BuildConfig{}
-		if system, ok := buildData["system"].(string); ok {
-			build.System = system
-		}
-		if override, ok := buildData["override"].(string); ok {
-			build.Override = override
-		}
-		build.Args = util.ExtractStringSlice(buildData["args"])
-		section.Build = build
-	}
-
-	// Path fields
-	section.IncludeDirs = util.ExtractStringSlice(data["include_dirs"])
-	section.LibDirs = util.ExtractStringSlice(data["lib_dirs"])
-	section.Libs = util.ExtractStringSlice(data["libs"])
-	section.Frameworks = util.ExtractStringSlice(data["frameworks"])
-	section.Defines = util.ExtractStringSlice(data["defines"])
-
-	// Execution config
-	if execData, ok := data["execution"].(map[string]any); ok {
-		spec, err := execSpecFromMap(execData)
-		if err != nil {
-			return section, err
-		}
-		section.Execution = &spec
-	}
-
-	return section, nil
 }
 
 // ResolveAll resolves all loaded dependencies: fetches and builds them. With plan (--dry-run), it
@@ -511,8 +173,7 @@ func (dr *DependencyResolver) ResolveAll(plan bool) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		config := dr.configs[name]
-		if err := dr.resolveDependency(name, config); err != nil {
+		if err := dr.resolveDependency(name, dr.configs[name]); err != nil {
 			return err
 		}
 	}
@@ -520,14 +181,14 @@ func (dr *DependencyResolver) ResolveAll(plan bool) error {
 }
 
 // resolveDependency resolves a single dependency
-func (dr *DependencyResolver) resolveDependency(name string, config *DependencyConfig) error {
-	// Merge platform sections: common -> platform -> platform-arch
-	merged := dr.mergePlatformSections(config)
+func (dr *DependencyResolver) resolveDependency(name string, dep *DependencyConfig) error {
+	// Merge the sections: the direct fields, common, platform, platform-arch
+	merged := dep.For(dr.platform, dr.architecture)
 
 	// Create variable environment for this dependency
 	depVarEnv := dr.varEnv.CreateChild()
 	depVarEnv.SetVariable("name", name, "dependency")
-	depVarEnv.SetVariable("version", config.Version, "dependency")
+	depVarEnv.SetVariable("version", dep.Version, "dependency")
 	depVarEnv.SetVariable("platform", dr.platform, "dependency")
 	depVarEnv.SetVariable("arch", dr.architecture, "dependency")
 	depVarEnv.SetVariable("toolchain", dr.toolchain, "dependency")
@@ -548,7 +209,7 @@ func (dr *DependencyResolver) resolveDependency(name string, config *DependencyC
 
 	switch depType {
 	case DepTypeFetch:
-		if err := dr.resolveFetchDependency(name, config, merged, depVarEnv, resolved); err != nil {
+		if err := dr.resolveFetchDependency(name, dep, merged, depVarEnv, resolved); err != nil {
 			return err
 		}
 	case DepTypeSystem:
@@ -560,78 +221,6 @@ func (dr *DependencyResolver) resolveDependency(name string, config *DependencyC
 	resolved.Resolved = true
 	dr.resolved[name] = resolved
 	return nil
-}
-
-// mergePlatformSections merges common, platform, and platform-arch sections
-func (dr *DependencyResolver) mergePlatformSections(config *DependencyConfig) DependencySection {
-	merged := DependencySection{}
-
-	// Helper to merge a section into merged
-	mergeSection := func(section DependencySection) {
-		if section.Git != "" {
-			merged.Git = section.Git
-		}
-		if section.URL != "" {
-			merged.URL = section.URL
-		}
-		if section.PkgConfig != "" {
-			merged.PkgConfig = section.PkgConfig
-		}
-		if section.Root != "" {
-			merged.Root = section.Root
-		}
-		if section.Ref != "" {
-			merged.Ref = section.Ref
-		}
-		if section.Checksum != "" {
-			merged.Checksum = section.Checksum
-		}
-		if section.Extract {
-			merged.Extract = section.Extract
-		}
-		if section.Build != nil {
-			merged.Build = section.Build
-		}
-		if section.Execution != nil {
-			merged.Execution = section.Execution
-		}
-
-		// Append list fields
-		merged.IncludeDirs = append(merged.IncludeDirs, section.IncludeDirs...)
-		merged.LibDirs = append(merged.LibDirs, section.LibDirs...)
-		merged.Libs = append(merged.Libs, section.Libs...)
-		merged.Frameworks = append(merged.Frameworks, section.Frameworks...)
-		merged.Defines = append(merged.Defines, section.Defines...)
-	}
-
-	// Apply in order: common -> platform -> platform-arch
-	if common, ok := config.Sections["common"]; ok {
-		mergeSection(common)
-	}
-
-	// Normalize platform name (darwin -> macos)
-	platform := dr.platform
-	if platform == "darwin" {
-		platform = "macos"
-	}
-
-	if platformSection, ok := config.Sections[platform]; ok {
-		mergeSection(platformSection)
-	}
-	// Also check darwin if we're on macos
-	if platform == "macos" {
-		if darwinSection, ok := config.Sections["darwin"]; ok {
-			mergeSection(darwinSection)
-		}
-	}
-
-	// Platform-arch combination
-	platformArch := platform + "-" + dr.architecture
-	if platformArchSection, ok := config.Sections[platformArch]; ok {
-		mergeSection(platformArchSection)
-	}
-
-	return merged
 }
 
 // inferDependencyType determines the dependency type from its fields
@@ -666,17 +255,15 @@ func (dr *DependencyResolver) resolveSystemDependency(name string, section Depen
 		}
 
 		// Still apply any additional defines from config
-		for _, def := range section.Defines {
-			resolvedDef := dr.resolveVariables(def, varEnv)
-			resolved.Defines = append(resolved.Defines, resolvedDef)
-		}
-
-		return nil
+		return dr.resolveAll(&resolved.Defines, section.Defines, varEnv, name, "defines")
 	}
 
 	// Resolve root if specified
 	if section.Root != "" {
-		resolvedRoot := dr.resolveVariables(section.Root, varEnv)
+		resolvedRoot, err := dr.resolveVariables(section.Root, varEnv, name, "root")
+		if err != nil {
+			return err
+		}
 
 		// Check if root path exists
 		if _, err := os.Stat(resolvedRoot); os.IsNotExist(err) {
@@ -687,35 +274,32 @@ func (dr *DependencyResolver) resolveSystemDependency(name string, section Depen
 		varEnv.SetVariable("root", resolvedRoot, "dependency")
 	}
 
-	// Resolve include dirs
-	for _, incDir := range section.IncludeDirs {
-		resolvedInc := dr.resolveVariables(incDir, varEnv)
-		resolved.IncludeDirs = append(resolved.IncludeDirs, resolvedInc)
+	return dr.resolveProvided(name, section, varEnv, resolved)
+}
+
+// resolveProvided resolves what a dependency provides: include and lib dirs, libs, frameworks
+// and defines.
+func (dr *DependencyResolver) resolveProvided(name string, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
+	for _, l := range []struct {
+		dst    *[]string
+		values []string
+		field  string
+	}{
+		{&resolved.IncludeDirs, section.IncludeDirs, "include_dirs"},
+		{&resolved.LibDirs, section.LibDirs, "lib_dirs"},
+		{&resolved.Libs, section.Libs, "libs"},
+		{&resolved.Frameworks, section.Frameworks, "frameworks"},
+		{&resolved.Defines, section.Defines, "defines"},
+	} {
+		if err := dr.resolveAll(l.dst, l.values, varEnv, name, l.field); err != nil {
+			return err
+		}
 	}
-
-	// Resolve lib dirs
-	for _, libDir := range section.LibDirs {
-		resolvedLib := dr.resolveVariables(libDir, varEnv)
-		resolved.LibDirs = append(resolved.LibDirs, resolvedLib)
-	}
-
-	// Set libs (no path resolution needed)
-	resolved.Libs = append(resolved.Libs, section.Libs...)
-
-	// Set frameworks (macOS)
-	resolved.Frameworks = append(resolved.Frameworks, section.Frameworks...)
-
-	// Resolve defines
-	for _, def := range section.Defines {
-		resolvedDef := dr.resolveVariables(def, varEnv)
-		resolved.Defines = append(resolved.Defines, resolvedDef)
-	}
-
 	return nil
 }
 
 // resolveFetchDependency resolves a fetch dependency
-func (dr *DependencyResolver) resolveFetchDependency(name string, config *DependencyConfig, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
+func (dr *DependencyResolver) resolveFetchDependency(name string, dep *DependencyConfig, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
 	// Determine destination
 	dest := filepath.Join(dr.cacheDir, "deps", name)
 
@@ -760,28 +344,7 @@ func (dr *DependencyResolver) resolveFetchDependency(name string, config *Depend
 		}
 	}
 
-	// Resolve include dirs
-	for _, incDir := range section.IncludeDirs {
-		resolvedInc := dr.resolveVariables(incDir, varEnv)
-		resolved.IncludeDirs = append(resolved.IncludeDirs, resolvedInc)
-	}
-
-	// Resolve lib dirs
-	for _, libDir := range section.LibDirs {
-		resolvedLib := dr.resolveVariables(libDir, varEnv)
-		resolved.LibDirs = append(resolved.LibDirs, resolvedLib)
-	}
-
-	// Set libs
-	resolved.Libs = append(resolved.Libs, section.Libs...)
-
-	// Resolve defines
-	for _, def := range section.Defines {
-		resolvedDef := dr.resolveVariables(def, varEnv)
-		resolved.Defines = append(resolved.Defines, resolvedDef)
-	}
-
-	return nil
+	return dr.resolveProvided(name, section, varEnv, resolved)
 }
 
 // buildFetchedDep builds a fetched dependency using its build system
@@ -941,17 +504,27 @@ func (dr *DependencyResolver) resolvePkgConfig(pkgName string, dep *ResolvedDepe
 	return nil
 }
 
-// resolveVariables resolves variables in a string
-func (dr *DependencyResolver) resolveVariables(text string, varEnv *util.VariableEnvironment) string {
-	errors := []string{}
+// resolveVariables resolves the variables in a dependency's field, or fails naming them.
+func (dr *DependencyResolver) resolveVariables(text string, varEnv *util.VariableEnvironment, name, field string) (string, error) {
+	var errors []string
 	resolved := varEnv.ResolveString(text, &errors, 10)
-
 	if len(errors) > 0 {
-		// Error on unresolved variables
-		util.LogFatal("Variable resolution failed: %v in '%s'", errors, text)
+		return "", fmt.Errorf("dependency '%s': %s of %q (a dependency sees ${name}, ${version}, ${platform}, ${arch}, ${config}, ${toolchain}, ${root}, ${dep_dir}, ${workspace_root} and the workspace's variables)",
+			name, strings.Join(errors, "; "), field)
 	}
+	return resolved, nil
+}
 
-	return resolved
+// resolveAll appends values to dst with their variables resolved.
+func (dr *DependencyResolver) resolveAll(dst *[]string, values []string, varEnv *util.VariableEnvironment, name, field string) error {
+	for _, v := range values {
+		resolved, err := dr.resolveVariables(v, varEnv, name, field)
+		if err != nil {
+			return err
+		}
+		*dst = append(*dst, resolved)
+	}
+	return nil
 }
 
 // dockerMounts returns the directories a Docker build mounts at their host paths: the workspace
@@ -1047,38 +620,4 @@ func getSystemDependencyDirs() []string {
 	default:
 		return []string{}
 	}
-}
-
-// execSpecFromMap reads an execution section: type, image, volumes, user, env.
-func execSpecFromMap(config map[string]any) (util.ExecSpec, error) {
-	spec := util.ExecSpec{}
-	for key, value := range config {
-		switch key {
-		case "type":
-			spec.Type, _ = value.(string)
-		case "image":
-			spec.Image, _ = value.(string)
-		case "user":
-			spec.User, _ = value.(string)
-		case "volumes":
-			spec.Volumes = util.ExtractStringList(value)
-		case "env":
-			env, ok := value.(map[string]any)
-			if !ok {
-				return spec, fmt.Errorf("execution.env must be a map")
-			}
-			spec.Env = map[string]string{}
-			for k, v := range env {
-				spec.Env[k] = fmt.Sprint(v)
-			}
-		case "working_dir":
-			return spec, fmt.Errorf("execution.working_dir is not supported: commands run in the workspace root, which Docker mounts at its host path")
-		default:
-			return spec, fmt.Errorf("unknown execution key %q (expected type, image, volumes, user, env)", key)
-		}
-	}
-	if err := spec.Validate(); err != nil {
-		return spec, fmt.Errorf("execution: %w", err)
-	}
-	return spec, nil
 }

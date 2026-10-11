@@ -613,11 +613,16 @@ build:
 
 **Platform Sections:**
 
-Dependencies support platform-specific configuration via sections. Sections are merged in order: `common` → `platform` → `platform-arch`
+Dependencies support platform-specific configuration via sections. Sections are merged in order: fields written at the top level (next to the sections) → `common` → `platform` → `platform-arch`. A later section's single values (and `build` and `execution`, whole) replace earlier ones; lists append.
 
 - `common` - All platforms
 - `linux`, `windows`, `macos` - Platform-specific
 - `linux-x86_64`, `linux-arm64`, etc. - Platform-architecture combinations
+
+Section names use the [platform and architecture names](#platform-and-architecture-names), aliases
+included (`darwin`, `linux-aarch64`). Any other key that isn't a field is an error. There is no
+`file:` key: every file in `buildy_config/dependencies/` is loaded, so an index of them is
+neither needed nor accepted.
 
 **Built-in Variables for Dependencies:**
 
