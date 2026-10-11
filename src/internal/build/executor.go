@@ -22,23 +22,22 @@ import (
 // exists afterwards came from this run; after it exits 0, every declared output exists and a
 // declared dependency file parses, or the task fails. Only then is a cache entry written.
 type TaskExecutor struct {
-	Cache               *cache.BuildCache
-	MaxWorkers          int
-	MaxMemoryMB         int
-	WorkDir             string   // The workspace root: commands run here; relative dependency-file paths are relative to it
-	DockerMounts        []string // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
-	DisableCache        bool
-	ExecutionStats      ExecutionStats
-	BuildResult         *BuildResult         // Optional: for tracking execution in build report
-	ShutdownManager     *ShutdownManager     // For graceful shutdown handling
-	ResponseFileManager *ResponseFileManager // For handling long command lines on Windows
-	mu                  sync.Mutex
-	pendingOutputs      map[string][]string // Track outputs of in-progress tasks for cleanup
-	totalTaskCount      int                 // Total number of tasks for logging
-	producers           map[string]string   // Normalized output path -> task ID that produces it
+	Cache           *cache.BuildCache
+	MaxWorkers      int
+	MaxMemoryMB     int
+	WorkDir         string   // The workspace root: commands run here; relative dependency-file paths are relative to it
+	DockerMounts    []string // What a Docker task mounts at its host path: the workspace root, and the cache dir if elsewhere
+	DisableCache    bool
+	ExecutionStats  ExecutionStats
+	BuildResult     *BuildResult     // Optional: for tracking execution in build report
+	ShutdownManager *ShutdownManager // For graceful shutdown handling
+	mu              sync.Mutex
+	pendingOutputs  map[string][]string // Track outputs of in-progress tasks for cleanup
+	totalTaskCount  int                 // Total number of tasks for logging
+	producers       map[string]string   // Normalized output path -> task ID that produces it
 
 	// runCommand runs a task's command where its Exec says (util.Run; replaced in tests)
-	runCommand func(spec util.ExecSpec, command, workDir string, mounts []string, timeoutSeconds int) (*util.ExecutionResult, error)
+	runCommand func(spec util.ExecSpec, command util.Command, workDir string, mounts []string, timeoutSeconds int) (*util.ExecutionResult, error)
 }
 
 // ExecutionStats tracks execution statistics
@@ -52,31 +51,22 @@ type ExecutionStats struct {
 
 // NewTaskExecutor creates a new TaskExecutor
 func NewTaskExecutor(buildCache *cache.BuildCache, maxWorkers, maxMemoryMB int, workDir string, disableCache bool) *TaskExecutor {
-	rfmConfig := DefaultResponseFileConfig(buildCache.CacheDir())
-	rfm := NewResponseFileManager(rfmConfig)
-
 	te := &TaskExecutor{
-		Cache:               buildCache,
-		MaxWorkers:          maxWorkers,
-		MaxMemoryMB:         maxMemoryMB,
-		WorkDir:             workDir,
-		DockerMounts:        resource.DockerMounts(workDir, buildCache.CacheDir()),
-		DisableCache:        disableCache,
-		ShutdownManager:     GetShutdownManager(),
-		ResponseFileManager: rfm,
-		pendingOutputs:      make(map[string][]string),
-		producers:           make(map[string]string),
-		runCommand:          util.Run,
+		Cache:           buildCache,
+		MaxWorkers:      maxWorkers,
+		MaxMemoryMB:     maxMemoryMB,
+		WorkDir:         workDir,
+		DockerMounts:    resource.DockerMounts(workDir, buildCache.CacheDir()),
+		DisableCache:    disableCache,
+		ShutdownManager: GetShutdownManager(),
+		pendingOutputs:  make(map[string][]string),
+		producers:       make(map[string]string),
+		runCommand:      util.Run,
 	}
 
-	// Register cleanup for pending outputs and response files on shutdown
+	// Register cleanup for pending outputs on shutdown
 	if te.ShutdownManager != nil {
-		te.ShutdownManager.RegisterCleanup(func() {
-			te.cleanupPendingOutputs()
-			if te.ResponseFileManager != nil {
-				te.ResponseFileManager.Cleanup()
-			}
-		})
+		te.ShutdownManager.RegisterCleanup(te.cleanupPendingOutputs)
 	}
 
 	return te
@@ -393,14 +383,8 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 		return runNative(task)
 	}
 
-	// Process command through response file manager for long commands (Windows)
-	command, err := te.ResponseFileManager.ProcessCommand(task.Command, task.TaskID)
-	if err != nil {
-		return fmt.Errorf("failed to create a response file: %w", err)
-	}
-
-	// Natively or in Docker, as the task's toolchain says; either way in the workspace root
-	result, err := te.runCommand(task.Exec, command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
+	// Natively or in Docker, as the task's toolchain says; in its directory, else the workspace root
+	result, err := te.runCommand(task.Exec, task.Command, te.WorkDir, te.DockerMounts, util.DefaultTaskTimeoutSeconds)
 	if err != nil {
 		return err
 	}

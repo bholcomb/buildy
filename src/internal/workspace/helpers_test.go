@@ -3,9 +3,11 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"buildy/internal/resource"
+	"buildy/pkg/util"
 )
 
 // writeFiles writes files (path relative to root -> content) under root.
@@ -77,3 +79,8 @@ environment:
   compile:
     cpp_standard: "c++17"
 `
+
+// commandLine is a command written as one line, split on spaces.
+func commandLine(line string) util.Command {
+	return util.Command{Args: strings.Fields(line)}
+}

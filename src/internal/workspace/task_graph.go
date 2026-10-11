@@ -77,7 +77,10 @@ func (tg *TaskGraph) Validate() error {
 				problems = append(problems, fmt.Sprintf("%s: unresolved variable %s in %s: %s", task.Describe(), m[2], what, text))
 			}
 		}
-		check("command", task.Command)
+		for _, arg := range task.Command.Args {
+			check("command", arg)
+		}
+		check("command", task.Command.Script)
 		for _, input := range task.Inputs {
 			check("input", input.Path)
 		}

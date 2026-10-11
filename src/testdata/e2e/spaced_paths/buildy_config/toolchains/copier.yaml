@@ -1,0 +1,14 @@
+# A transform tool whose command reads a toolchain variable.
+toolchain:
+  name: copier
+  description: "Copies files (end-to-end test of transforms under spaced paths)"
+  target: {platform: any, architecture: any}
+  host: {platform: any, architecture: any}
+  variables:
+    MODE: "-p"
+  tools:
+    copy_text:
+      action: transform
+      command: "cp ${MODE} ${input} ${output}"
+      input_extensions: [".txt"]
+      output_extension: ".out"

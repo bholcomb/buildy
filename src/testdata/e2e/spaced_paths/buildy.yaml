@@ -1,0 +1,68 @@
+# Every kind of task under paths with spaces and quotes (finding 2.1): the test copies this
+# workspace into a directory named `it's a "spaced" dir`. Compile, static and shared library,
+# executable, copy, transform, template generate, staging (symlink and copy) and tar.gz and zip installs.
+project:
+  name: spaced
+  version: "1.0"
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  static_libraries:
+    - name: calc
+      language: c
+      sources: ["lib dir/add.c"]
+  shared_libraries:
+    - name: greet
+      language: c
+      sources: ["lib dir/greet.c"]
+      # A define whose value holds a space and quotes arrives as written
+      defines: ['MSG="hello world"']
+  executables:
+    - name: app
+      language: c
+      sources: ["src dir/main.c"]
+      include_dirs: ["inc dir"]
+      libs: [calc, greet]
+
+artifacts:
+  copy:
+    - source: "data dir/notes.txt"
+      dest: "${out_dir}/copied dir/"
+  transform:
+    - name: notes_out
+      tool: copier
+      inputs: "data dir/*.txt"
+      outputs: "${out_dir}/transformed dir/${basename}.out"
+  generate:
+    - name: version_header
+      template: "src dir/version.h.in"
+      output: "${gen_dir}/version.h"
+      variables:
+        VERSION: '1.0 "beta" & co/x'
+
+staging:
+  name: pkg
+  destination: "${out_dir}/stage dir"
+  use_symlinks: true
+  contents:
+    - folder: bin
+      targets: [app, greet]
+    - folder: "data dir"
+      files:
+        - source: "data dir/notes.txt"
+          use_symlink: false
+
+install:
+  - name: pkg_tgz
+    staging: pkg
+    format: tar.gz
+    destination: "${out_dir}/dist dir"
+    filename: "spaced pkg"
+  - name: pkg_zip
+    staging: pkg
+    format: zip
+    destination: "${out_dir}/dist dir"
+    filename: "spaced pkg"

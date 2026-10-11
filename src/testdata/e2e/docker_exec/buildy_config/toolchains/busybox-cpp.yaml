@@ -1,6 +1,6 @@
 # A stand-in compiler that only works inside a container: each command fails unless
 # /.dockerenv exists. Commands use absolute host paths, so they only find their files if the
-# workspace is mounted at its host path.
+# workspace is mounted at its host path. The tools need && and >: they run with a shell.
 toolchain:
   name: "busybox-cpp"
   description: "Copies sources through a busybox container (end-to-end test of Docker execution)"
@@ -24,6 +24,7 @@ toolchain:
     cpp_compile:
       action: compile
       command: "test -f /.dockerenv && cp ${input} ${output}"
+      shell: true
       input_extensions: [".cpp"]
       output_extension: ".o"
       supports: {}
@@ -31,6 +32,7 @@ toolchain:
     link_executable:
       action: link
       command: "test -f /.dockerenv && cat ${objects} > ${output}"
+      shell: true
       input_extensions: [".o"]
       output_extension: ""
       output_pattern: "${name}"

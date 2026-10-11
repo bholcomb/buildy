@@ -84,8 +84,8 @@ type BuildTask struct {
 	LinkLibs             []string             `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
 	Module               string               `json:"module"`              // Module that defined the task ("" for the workspace root config)
 	Target               string               `json:"target,omitempty"`    // Target or artifact the task belongs to
-	Command              string               `json:"command,omitempty"`
-	Native               *NativeOp            `json:"native,omitempty"` // Set instead of Command for work buildy does itself
+	Command              util.Command         `json:"command,omitzero"`    // What the task runs, and where
+	Native               *NativeOp            `json:"native,omitempty"`    // Set instead of Command for work buildy does itself
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
@@ -112,13 +112,13 @@ func (t *BuildTask) Describe() string {
 
 // NewNativeTask creates a task that buildy carries out itself.
 func NewNativeTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, op NativeOp) BuildTask {
-	task := NewBuildTask(taskID, taskType, inputs, outputs, dependencies, "")
+	task := NewBuildTask(taskID, taskType, inputs, outputs, dependencies, util.Command{})
 	task.Native = &op
 	return task
 }
 
 // NewBuildTask creates a BuildTask with default values
-func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, command string) BuildTask {
+func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, command util.Command) BuildTask {
 	return BuildTask{
 		TaskID:               taskID,
 		TaskType:             taskType,

@@ -21,27 +21,27 @@ type BuildOptions struct {
 
 // BuildResult contains the results of a build
 type BuildResult struct {
-	Success          bool                   `json:"success"`
-	StartTime        time.Time              `json:"start_time"`
-	EndTime          time.Time              `json:"end_time"`
-	TotalDuration    float64                `json:"total_duration_seconds"`
-	TaskGenDuration  float64                `json:"task_generation_seconds"`
-	ExecDuration     float64                `json:"execution_seconds"`
-	Platform         string                 `json:"platform"`
-	Architecture     string                 `json:"architecture"`
-	Configuration    string                 `json:"configuration"`
-	Toolchain        string                 `json:"toolchain"`
-	TotalTasks       int                    `json:"total_tasks"`
-	ExecutedTasks    int                    `json:"executed_tasks"`
-	CacheHits        int                    `json:"cache_hits"`
-	CacheMisses      int                    `json:"cache_misses"`
-	FailedTasks      int                    `json:"failed_tasks"`
-	SkippedTasks     int                    `json:"skipped_tasks"`
-	CacheHitRate     float64                `json:"cache_hit_rate_percent"`
-	TasksByType      map[string]int         `json:"tasks_by_type"`
-	TaskTimings      map[string]float64     `json:"task_timings"`
-	FailedTaskIDs    []string               `json:"failed_task_ids,omitempty"`
-	CompileTasks     []*CompileCommandEntry `json:"-"` // For compile_commands.json generation
+	Success         bool                   `json:"success"`
+	StartTime       time.Time              `json:"start_time"`
+	EndTime         time.Time              `json:"end_time"`
+	TotalDuration   float64                `json:"total_duration_seconds"`
+	TaskGenDuration float64                `json:"task_generation_seconds"`
+	ExecDuration    float64                `json:"execution_seconds"`
+	Platform        string                 `json:"platform"`
+	Architecture    string                 `json:"architecture"`
+	Configuration   string                 `json:"configuration"`
+	Toolchain       string                 `json:"toolchain"`
+	TotalTasks      int                    `json:"total_tasks"`
+	ExecutedTasks   int                    `json:"executed_tasks"`
+	CacheHits       int                    `json:"cache_hits"`
+	CacheMisses     int                    `json:"cache_misses"`
+	FailedTasks     int                    `json:"failed_tasks"`
+	SkippedTasks    int                    `json:"skipped_tasks"`
+	CacheHitRate    float64                `json:"cache_hit_rate_percent"`
+	TasksByType     map[string]int         `json:"tasks_by_type"`
+	TaskTimings     map[string]float64     `json:"task_timings"`
+	FailedTaskIDs   []string               `json:"failed_task_ids,omitempty"`
+	CompileTasks    []*CompileCommandEntry `json:"-"` // For compile_commands.json generation
 }
 
 // CompileCommandEntry represents a single entry in compile_commands.json
@@ -69,7 +69,7 @@ func (br *BuildResult) Finish(success bool) {
 	br.EndTime = time.Now()
 	br.TotalDuration = br.EndTime.Sub(br.StartTime).Seconds()
 	br.Success = success
-	
+
 	// Calculate cache hit rate
 	total := br.CacheHits + br.CacheMisses
 	if total > 0 {
@@ -82,29 +82,32 @@ func (br *BuildResult) RecordTaskExecution(taskID, taskType string, duration flo
 	// TasksByType is populated during graph building (total tasks count)
 	// Here we only track execution details
 	br.TaskTimings[taskID] = duration
-	
+
 	if cacheHit {
 		br.CacheHits++
 	} else {
 		br.CacheMisses++
 	}
-	
+
 	if !success {
 		br.FailedTasks++
 		br.FailedTaskIDs = append(br.FailedTaskIDs, taskID)
 	}
-	
+
 	br.ExecutedTasks++
 }
 
-// AddCompileCommand adds a compile command entry for compile_commands.json
-func (br *BuildResult) AddCompileCommand(directory, command, file, output string) {
-	br.CompileTasks = append(br.CompileTasks, &CompileCommandEntry{
-		Directory: directory,
-		Command:   command,
-		File:      file,
-		Output:    output,
-	})
+// AddCompileCommand adds a compile command entry for compile_commands.json: its arguments, or
+// the script of a tool that runs with a shell. The directory is the command's, else defaultDir.
+func (br *BuildResult) AddCompileCommand(defaultDir string, command util.Command, file, output string) {
+	entry := &CompileCommandEntry{Directory: command.Dir, Arguments: command.Args, File: file, Output: output}
+	if entry.Directory == "" {
+		entry.Directory = defaultDir
+	}
+	if command.Script != "" {
+		entry.Command = command.Script
+	}
+	br.CompileTasks = append(br.CompileTasks, entry)
 }
 
 // SaveReport saves the build report to a JSON file

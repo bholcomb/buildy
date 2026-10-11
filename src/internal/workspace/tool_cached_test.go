@@ -73,7 +73,7 @@ func TestGoAndRustTasksAreToolCached(t *testing.T) {
 			if len(task.Inputs) != 0 {
 				t.Errorf("%s-%s %s: declares inputs %v", tc.platform, tc.config, target, task.Inputs)
 			}
-			if task.TaskType == "cargo_build" && !strings.Contains(task.Command, "--target-dir "+filepath.Join(outDir, "cargo")) {
+			if task.TaskType == "cargo_build" && !strings.Contains(strings.Join(task.Command.Args, "\x00"), "--target-dir\x00"+filepath.Join(outDir, "cargo")) {
 				t.Errorf("%s-%s %s: command %q doesn't put Cargo's target dir at %s", tc.platform, tc.config, target, task.Command, filepath.Join(outDir, "cargo"))
 			}
 			if got := task.Outputs[0]; got != filepath.Join(outDir, filepath.FromSlash(want)) {

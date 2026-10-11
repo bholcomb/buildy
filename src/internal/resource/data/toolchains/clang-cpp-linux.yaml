@@ -82,7 +82,7 @@ toolchain:
       output_extension: ".so"
       output_pattern: "${output_prefix}${name}.so"
       flags:
-        common: ["-Wl,-rpath,'$ORIGIN'"]
+        common: ["-Wl,-rpath,$ORIGIN"]
         debug: []
         release: []
       supports:
@@ -116,7 +116,7 @@ toolchain:
       output_extension: ""
       output_pattern: "${name}"
       flags:
-        common: ["-Wl,-rpath,'$ORIGIN'"]
+        common: ["-Wl,-rpath,$ORIGIN"]
         debug: []
         release: []
       supports:

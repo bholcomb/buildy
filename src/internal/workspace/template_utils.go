@@ -45,7 +45,7 @@ func lookupContextPath(context map[string]any, path string) (any, bool) {
 	if len(parts) < 2 {
 		return nil, false
 	}
-	
+
 	obj := any(context)
 	for _, part := range parts {
 		if m, ok := obj.(map[string]any); ok {
@@ -77,6 +77,34 @@ func resolveStrict(env *util.VariableEnvironment, text, what string) (string, er
 		return "", fmt.Errorf("unresolved variable %s in %s %q", strings.Join(names, ", "), what, text)
 	}
 	return resolved, nil
+}
+
+// resolveAll resolves the variables of every string in env, failing on one it can't resolve.
+func resolveAll(env *util.VariableEnvironment, values []string, what string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		resolved, err := resolveStrict(env, v, what)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, resolved)
+	}
+	return result, nil
+}
+
+// envValues gives a command's placeholders their values: those given, else the variable of env
+// with the placeholder's name, as one argument. A variable whose value names an unknown variable
+// is left as written, and fails the task graph's validation.
+func envValues(values map[string][]string, env *util.VariableEnvironment) config.Values {
+	return func(name string) ([]string, bool) {
+		if v, ok := values[name]; ok {
+			return v, true
+		}
+		if _, ok := env.GetVariable(name); !ok {
+			return nil, false
+		}
+		return []string{env.ResolveString("${"+name+"}", nil, 10)}, true
+	}
 }
 
 // resolveToolParams resolves tool parameters using VarEnv for variable resolution

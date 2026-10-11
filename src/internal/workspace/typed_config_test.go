@@ -14,7 +14,7 @@ import (
 func commandsOf(tasks []*BuildTask) []string {
 	var result []string
 	for _, task := range tasks {
-		result = append(result, task.TaskID+": "+task.Command)
+		result = append(result, task.TaskID+": "+task.Command.String())
 	}
 	return result
 }

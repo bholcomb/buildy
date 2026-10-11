@@ -22,10 +22,10 @@ type Detection struct {
 
 // Phase is one phase of a build system (configure, build, test, install, clean).
 type Phase struct {
-	Command     string   `yaml:"command,required"`
-	DefaultArgs []string `yaml:"default_args"`
-	Required    bool     `yaml:"required"`
-	WorkingDir  string   `yaml:"working_dir"` // default: the source directory
+	Command     CommandTemplate `yaml:"command,required"`
+	DefaultArgs []string        `yaml:"default_args"`
+	Required    bool            `yaml:"required"`
+	WorkingDir  string          `yaml:"working_dir"` // default: the source directory
 }
 
 // BuildOutput says where a built dependency's headers and libraries are.

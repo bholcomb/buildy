@@ -41,6 +41,7 @@ type Tool struct {
 	Name            string                 `yaml:"-" json:"name"`
 	Action          string                 `yaml:"action,required" json:"action"`
 	Command         Command                `yaml:"command,required" json:"command"`
+	Shell           bool                   `yaml:"shell" json:"shell,omitempty"` // run the command with a shell (sh, cmd.exe on Windows hosts)
 	InputExtensions StringList             `yaml:"input_extensions" json:"input_extensions"`
 	OutputExtension string                 `yaml:"output_extension" json:"output_extension"`
 	OutputPattern   string                 `yaml:"output_pattern" json:"output_pattern"`
@@ -57,25 +58,27 @@ var outputTypes = []string{"executable", "shared_library", "static_library"}
 
 // Command is a tool's command: one for every platform, or one per platform.
 type Command struct {
-	Default    string            `json:"default,omitempty"`
-	ByPlatform map[string]string `json:"by_platform,omitempty"`
+	Default    CommandTemplate            `json:"default,omitempty"`
+	ByPlatform map[string]CommandTemplate `json:"by_platform,omitempty"`
 }
 
 func (c *Command) decodeNode(d *decoder, n *yaml.Node, path string) {
 	switch {
 	case isNull(n):
 	case n.Kind == yaml.ScalarNode:
-		c.Default, _ = d.scalarString(n, path)
+		c.Default.decodeNode(d, n, path)
 	case n.Kind == yaml.MappingNode:
-		c.ByPlatform = map[string]string{}
+		c.ByPlatform = map[string]CommandTemplate{}
 		for _, e := range d.entries(n, path) {
 			platform, err := CheckPlatform(e.key.Value)
 			if err != nil {
 				d.errorf(e.key, "'%s': %v", join(path, e.key.Value), err)
 				continue
 			}
-			if s, ok := d.scalarString(resolveAlias(e.value), join(path, e.key.Value)); ok {
-				c.ByPlatform[platform] = s
+			var t CommandTemplate
+			t.decodeNode(d, resolveAlias(e.value), join(path, e.key.Value))
+			if !t.IsZero() {
+				c.ByPlatform[platform] = t
 			}
 		}
 	default:
@@ -84,35 +87,69 @@ func (c *Command) decodeNode(d *decoder, n *yaml.Node, path string) {
 }
 
 // For returns the command for a platform.
-func (c Command) For(platform string) (string, error) {
+func (c Command) For(platform string) (CommandTemplate, error) {
 	if cmd, ok := c.ByPlatform[platform]; ok {
 		return cmd, nil
 	}
-	if c.Default != "" {
+	if !c.Default.IsZero() {
 		return c.Default, nil
 	}
-	return "", fmt.Errorf("has no command for platform %s (it has: %s)", platform, strings.Join(sortedNames(c.ByPlatform), ", "))
+	return CommandTemplate{}, fmt.Errorf("has no command for platform %s (it has: %s)", platform, strings.Join(sortedNames(c.ByPlatform), ", "))
+}
+
+// all returns every command, the default first, then by platform name.
+func (c Command) all() []CommandTemplate {
+	var all []CommandTemplate
+	if !c.Default.IsZero() {
+		all = append(all, c.Default)
+	}
+	for _, name := range sortedNames(c.ByPlatform) {
+		all = append(all, c.ByPlatform[name])
+	}
+	return all
+}
+
+// Expand returns the tool's command for platform with its placeholders filled in by values: an
+// argument list, or for a shell tool a script whose values are quoted for the shell that runs
+// it where exec says.
+func (t *Tool) Expand(platform string, exec util.ExecSpec, values Values) (util.Command, error) {
+	tmpl, err := t.Command.For(platform)
+	if err != nil {
+		return util.Command{}, fmt.Errorf("tool %s %w", t.Name, err)
+	}
+	if t.Shell {
+		script, err := tmpl.ExpandShell(values, util.ShellQuoter(exec))
+		if err != nil {
+			return util.Command{}, fmt.Errorf("the command of tool %s: %w", t.Name, err)
+		}
+		return util.Command{Script: script}, nil
+	}
+	args, err := tmpl.Expand(values)
+	if err != nil {
+		return util.Command{}, fmt.Errorf("the command of tool %s: %w", t.Name, err)
+	}
+	return util.Command{Args: args}, nil
 }
 
 // Supports is what a tool supports and how it spells it.
 type Supports struct {
-	Defines       bool   `yaml:"defines" json:"defines"`
-	DefineFlag    string `yaml:"define_flag" json:"define_flag"`
-	Includes      bool   `yaml:"includes" json:"includes"`
-	IncludeFlag   string `yaml:"include_flag" json:"include_flag"`
-	PIC           bool   `yaml:"pic" json:"pic"`
-	PICFlag       string `yaml:"pic_flag" json:"pic_flag"`
-	Std           bool   `yaml:"std" json:"std"`
-	Dependencies  string `yaml:"dependencies" json:"dependencies"` // dependency file flags, with ${dep_file}
-	OutputType    string `yaml:"output_type" json:"output_type"`   // link tools: what they produce
-	LibDirs       bool   `yaml:"lib_dirs" json:"lib_dirs"`
-	LibDirFlag    string `yaml:"lib_dir_flag" json:"lib_dir_flag"`
-	Libs          bool   `yaml:"libs" json:"libs"`
-	LibFlag       string `yaml:"lib_flag" json:"lib_flag"`
-	LibSuffix     string `yaml:"lib_suffix" json:"lib_suffix"`
-	Frameworks    bool   `yaml:"frameworks" json:"frameworks"`
-	FrameworkFlag string `yaml:"framework_flag" json:"framework_flag"`
-	Implib        bool   `yaml:"implib" json:"implib"`
+	Defines       bool            `yaml:"defines" json:"defines"`
+	DefineFlag    string          `yaml:"define_flag" json:"define_flag"`
+	Includes      bool            `yaml:"includes" json:"includes"`
+	IncludeFlag   string          `yaml:"include_flag" json:"include_flag"`
+	PIC           bool            `yaml:"pic" json:"pic"`
+	PICFlag       string          `yaml:"pic_flag" json:"pic_flag"`
+	Std           bool            `yaml:"std" json:"std"`
+	Dependencies  CommandTemplate `yaml:"dependencies" json:"dependencies"` // dependency file arguments, with ${dep_file}
+	OutputType    string          `yaml:"output_type" json:"output_type"`   // link tools: what they produce
+	LibDirs       bool            `yaml:"lib_dirs" json:"lib_dirs"`
+	LibDirFlag    string          `yaml:"lib_dir_flag" json:"lib_dir_flag"`
+	Libs          bool            `yaml:"libs" json:"libs"`
+	LibFlag       string          `yaml:"lib_flag" json:"lib_flag"`
+	LibSuffix     string          `yaml:"lib_suffix" json:"lib_suffix"`
+	Frameworks    bool            `yaml:"frameworks" json:"frameworks"`
+	FrameworkFlag string          `yaml:"framework_flag" json:"framework_flag"`
+	Implib        bool            `yaml:"implib" json:"implib"`
 
 	// Documented for Go and Rust build tools. Their command_params do the work; buildy doesn't
 	// read these.
@@ -131,12 +168,11 @@ type CommandParam struct {
 	// Sources are the places to look for the value, in order: "tool_params.X", "item.X",
 	// "tool.flags.${config}"
 	Sources []string `yaml:"sources,required" json:"sources"`
-	// Format is the result, with ${value} for the value
-	Format string `yaml:"format" json:"format"`
-	// Join separates a list's values (default " ")
+	// Format is the arguments the parameter gives, a command template with ${value} for the
+	// value: "-tags ${value}" is two arguments. Without a format the value is one argument.
+	Format CommandTemplate `yaml:"format" json:"format"`
+	// Join separates a list's values (default " "): the joined value is one argument
 	Join string `yaml:"join" json:"join"`
-	// QuoteIfSpaces quotes a value that contains a space
-	QuoteIfSpaces bool `yaml:"quote_if_spaces" json:"quote_if_spaces"`
 	// ResolveVariables resolves ${...} in the value
 	ResolveVariables bool `yaml:"resolve_variables" json:"resolve_variables"`
 	// Match keeps only list values equal to it (e.g. "--release" from the flags)
@@ -231,8 +267,27 @@ func (tc *Toolchain) validate(d *decoder) {
 			}
 		}
 		for _, p := range tool.CommandParams.Keys {
-			if tool.CommandParams.Values[p] == nil {
+			param := tool.CommandParams.Values[p]
+			if param == nil {
 				d.errorAt(tool.Pos, "'%s.command_params.%s' is empty", where, p)
+				continue
+			}
+			for _, name := range param.Format.Placeholders() {
+				if name != "value" {
+					d.errorAt(tool.Pos, "'%s.command_params.%s.format' has ${%s}: a format has only ${value}", where, p, name)
+				}
+			}
+		}
+		for _, name := range tool.Supports.Dependencies.Placeholders() {
+			if name != "dep_file" {
+				d.errorAt(tool.Pos, "'%s.supports.dependencies' has ${%s}: it has only ${dep_file}", where, name)
+			}
+		}
+		if tool.Shell {
+			for _, cmd := range tool.Command.all() {
+				if cmd.HasQuotedPlaceholder() {
+					d.errorAt(tool.Pos, "%s runs its command with a shell (shell: true): write placeholders outside quotes, buildy quotes their values: %s", where, cmd.Text)
+				}
 			}
 		}
 	}

@@ -5,8 +5,12 @@ package main
 // docker) is missing. C++ cases run on Linux and macOS.
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -67,8 +71,14 @@ func needCpp(t *testing.T) {
 // fixture copies testdata/e2e/<name> to a temporary directory and returns the copy.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
+	return fixtureUnder(t, name, "")
+}
+
+// fixtureUnder copies testdata/e2e/<name> to a directory parent in a temporary directory.
+func fixtureUnder(t *testing.T, name, parent string) string {
+	t.Helper()
 	src := filepath.Join("testdata", "e2e", name)
-	dst := filepath.Join(t.TempDir(), name)
+	dst := filepath.Join(t.TempDir(), parent, name)
 	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -521,7 +531,9 @@ func TestE2EFilterOrderIsStable(t *testing.T) {
 		var graph struct {
 			Tasks []struct {
 				TaskType string `json:"task_type"`
-				Command  string `json:"command"`
+				Command  struct {
+					Args []string `json:"args"`
+				} `json:"command"`
 			} `json:"tasks"`
 		}
 		if err := json.Unmarshal(data, &graph); err != nil {
@@ -530,9 +542,9 @@ func TestE2EFilterOrderIsStable(t *testing.T) {
 		for _, task := range graph.Tasks {
 			switch task.TaskType {
 			case "compile":
-				compile = task.Command
+				compile = strings.Join(task.Command.Args, " ")
 			case "link":
-				link = task.Command
+				link = strings.Join(task.Command.Args, " ")
 			}
 		}
 		return compile, link
@@ -605,4 +617,114 @@ func TestE2EConfigTypos(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Finding 2.1: under a path with spaces and quotes, every kind of task works, a define whose
+// value holds a space and quotes arrives intact, and $ORIGIN reaches the linker as written.
+func TestE2ESpacedPaths(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc", "ar")
+	dir := fixtureUnder(t, "spaced_paths", `it's a "spaced" dir`)
+	out := outDir(dir, "debug")
+	mustBuildy(t, dir, "--compile-commands")
+
+	app := filepath.Join(out, "bin", "app")
+	if got := run(t, app); got != "hello world 5" {
+		t.Errorf("app printed %q, want %q", got, "hello world 5")
+	}
+	if runtime.GOOS == "linux" {
+		needTools(t, "readelf")
+		if dyn := run(t, "readelf", "-d", app); !strings.Contains(dyn, "[$ORIGIN]") {
+			t.Errorf("app's dynamic section has no $ORIGIN run path:\n%s", dyn)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(out, "gen", "version.h")); string(got) != "#define VERSION \"1.0 \"beta\" & co/x\"\n#define ALSO \"1.0 \"beta\" & co/x\"\n" {
+		t.Errorf("version.h = %q", got)
+	}
+	for _, file := range []string{filepath.Join("copied dir", "notes.txt"), filepath.Join("transformed dir", "notes.out")} {
+		if _, err := os.Stat(filepath.Join(out, file)); err != nil {
+			t.Errorf("%s is missing: %v", file, err)
+		}
+	}
+	stage := filepath.Join(out, "stage dir")
+	if target, err := os.Readlink(filepath.Join(stage, "bin", "app")); err != nil || target != app {
+		t.Errorf("staged bin/app -> %q (%v), want a symlink to %s", target, err, app)
+	}
+	if info, err := os.Lstat(filepath.Join(stage, "data dir", "notes.txt")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("staged notes.txt is not a copy: %v", err)
+	}
+
+	// The archives hold the files the links point to, under the staging area's paths.
+	want := "bin/ bin/app bin/libgreet.so data dir/ data dir/notes.txt"
+	if got := strings.Join(tarNames(t, filepath.Join(out, "dist dir", "spaced pkg.tar.gz")), " "); got != want {
+		t.Errorf("tar.gz entries %q, want %q", got, want)
+	}
+	if got := strings.Join(zipNames(t, filepath.Join(out, "dist dir", "spaced pkg.zip")), " "); got != want {
+		t.Errorf("zip entries %q, want %q", got, want)
+	}
+
+	// compile_commands.json has each compile's arguments, the define as one of them.
+	data, err := os.ReadFile(filepath.Join(dir, "buildy_config", "compile_commands.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		Arguments []string `json:"arguments"`
+		File      string   `json:"file"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		for _, arg := range e.Arguments {
+			found = found || arg == `-DMSG="hello world"`
+		}
+	}
+	if len(entries) != 3 || !found {
+		t.Errorf("compile_commands.json has %d entries, the define as one argument: %v\n%s", len(entries), found, data)
+	}
+
+	if out := mustBuildy(t, dir); !strings.Contains(out, "0 executed") {
+		t.Errorf("a no-op build executed tasks:\n%s", out)
+	}
+}
+
+func tarNames(t *testing.T, path string) []string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, h.Name)
+	}
+}
+
+func zipNames(t *testing.T, path string) []string {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	return names
 }

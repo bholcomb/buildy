@@ -3,6 +3,8 @@ package workspace
 import (
 	"strings"
 	"testing"
+
+	"buildy/pkg/util"
 )
 
 // TestTaskGraphCircularDependencyDetection ensures the task graph detects
@@ -285,14 +287,14 @@ func TestValidateAddsProducerEdges(t *testing.T) {
 }
 
 func TestValidateRejectsUnresolvedVariables(t *testing.T) {
-	task := &BuildTask{TaskID: "compile_main", Command: "g++ -std=${std} -c main.cpp", Outputs: []string{"/b/main.o"}}
+	task := &BuildTask{TaskID: "compile_main", Command: commandLine("g++ -std=${std} -c main.cpp"), Outputs: []string{"/b/main.o"}}
 	err := graphOf(t, task).Validate()
 	if err == nil || !strings.Contains(err.Error(), "${std}") {
 		t.Fatalf("got %v", err)
 	}
 
-	// An escaped \${...} is not a variable (sed patterns in generate tasks).
-	sed := &BuildTask{TaskID: "generate_config", Command: `sed 's/\${VERSION}/1.0/g' in > out`, Outputs: []string{"/b/out"}}
+	// An escaped \${...} is not a variable (a sed pattern in a shell tool's script).
+	sed := &BuildTask{TaskID: "generate_config", Command: util.Command{Script: `sed 's/\${VERSION}/1.0/g' in > out`}, Outputs: []string{"/b/out"}}
 	if err := graphOf(t, sed).Validate(); err != nil {
 		t.Fatal(err)
 	}

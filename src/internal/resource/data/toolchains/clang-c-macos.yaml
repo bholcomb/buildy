@@ -73,7 +73,7 @@ toolchain:
         libs: true
         lib_flag: "-l"
         frameworks: true
-        framework_flag: "-framework"
+        framework_flag: "-framework "  # the trailing space: -framework and the name are two arguments
     
     # Static library archiving
     link_static_library:
@@ -109,4 +109,4 @@ toolchain:
         libs: true
         lib_flag: "-l"
         frameworks: true
-        framework_flag: "-framework"
+        framework_flag: "-framework "  # the trailing space: -framework and the name are two arguments

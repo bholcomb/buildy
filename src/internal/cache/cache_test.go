@@ -27,7 +27,7 @@ func compileTask(t *testing.T, dir string) *workspace.BuildTask {
 	task := workspace.NewBuildTask("compile_main_001", "compile",
 		[]workspace.TaskInput{workspace.NewTaskInput(filepath.Join(dir, "main.cpp"))},
 		[]string{filepath.Join(dir, "main.o"), filepath.Join(dir, "main.d")},
-		nil, "g++ -c main.cpp -o main.o")
+		nil, util.Command{Args: []string{"g++", "-c", "main.cpp", "-o", "main.o"}})
 	task.DepFile = &workspace.DepFile{Path: filepath.Join(dir, "main.d"), Format: resource.DepFormatMake}
 	return &task
 }

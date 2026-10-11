@@ -47,13 +47,49 @@ func (s ExecSpec) Validate() error {
 	return fmt.Errorf("unknown execution type %q (expected native or docker)", s.Type)
 }
 
-// Run runs command through the platform shell, natively or in Docker, with workDir as its
-// working directory. A Docker container gets mounts (the workspace root, and the cache directory
-// when it lies elsewhere) at their host paths, so the absolute host paths in commands are valid
-// inside it.
-func Run(spec ExecSpec, command, workDir string, mounts []string, timeoutSeconds int) (*ExecutionResult, error) {
+// Command is what a task runs: a program and its arguments, run directly without a shell, or,
+// for a tool that asks for one (shell: true), a shell script.
+type Command struct {
+	Args   []string `json:"args,omitempty"`   // the program, then its arguments
+	Script string   `json:"script,omitempty"` // instead of Args: run by sh -c, or cmd.exe /c on a Windows host
+	Dir    string   `json:"dir,omitempty"`    // the working directory; the workspace root if empty
+}
+
+// IsZero reports whether there is nothing to run.
+func (c Command) IsZero() bool {
+	return len(c.Args) == 0 && c.Script == ""
+}
+
+// String is the command as one line, its arguments quoted for the host's shell: for logs and
+// compile_commands.json, never to run.
+func (c Command) String() string {
+	if c.Script != "" {
+		return c.Script
+	}
+	return JoinArgs(c.Args, runtime.GOOS)
+}
+
+// ShellQuoter returns how a shell script for spec quotes a value: for sh, in Docker and on Linux
+// and macOS hosts; for cmd.exe, on a Windows host.
+func ShellQuoter(spec ExecSpec) func(string) (string, error) {
+	if !spec.IsDocker() && runtime.GOOS == "windows" {
+		return QuoteCmd
+	}
+	return func(s string) (string, error) { return QuotePOSIX(s), nil }
+}
+
+// Run runs command natively or in Docker, in its directory (defaultDir if it names none). A
+// Docker container gets mounts (the workspace root, and the cache directory when it lies
+// elsewhere) at their host paths, so the absolute host paths in commands are valid inside it.
+func Run(spec ExecSpec, command Command, defaultDir string, mounts []string, timeoutSeconds int) (*ExecutionResult, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
+	}
+	if command.IsZero() {
+		return nil, fmt.Errorf("no command to run")
+	}
+	if command.Dir == "" {
+		command.Dir = defaultDir
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
@@ -61,20 +97,19 @@ func Run(spec ExecSpec, command, workDir string, mounts []string, timeoutSeconds
 
 	var cmd *exec.Cmd
 	if spec.IsDocker() {
-		args, err := DockerRunArgs(spec, command, workDir, mounts)
+		args, err := DockerRunArgs(spec, command, mounts)
 		if err != nil {
 			return nil, err
 		}
-		LogDebug("Docker command: docker %s", strings.Join(args, " "))
+		LogDebug("Docker command: %s", JoinArgs(append([]string{"docker"}, args...), runtime.GOOS))
 		cmd = exec.CommandContext(ctx, "docker", args...)
 	} else {
-		if runtime.GOOS == "windows" {
-			// Use /S to strip quotes and parse command string literally
-			cmd = exec.CommandContext(ctx, "cmd.exe", "/S", "/C", command)
+		if command.Script != "" {
+			cmd = shellCommand(ctx, command.Script)
 		} else {
-			cmd = exec.CommandContext(ctx, "sh", "-c", command)
+			cmd = exec.CommandContext(ctx, command.Args[0], command.Args[1:]...)
 		}
-		cmd.Dir = workDir
+		cmd.Dir = command.Dir
 		if len(spec.Env) > 0 {
 			cmd.Env = append(os.Environ(), envList(spec.Env)...)
 		}
@@ -102,8 +137,9 @@ func Run(spec ExecSpec, command, workDir string, mounts []string, timeoutSeconds
 
 // DockerRunArgs returns the arguments of the `docker run` that runs command for spec: the mounts
 // at their host paths, then the spec's extra volumes, the working directory, the user (the
-// invoking user unless the spec names one), the environment, the image, and `sh -c command`.
-func DockerRunArgs(spec ExecSpec, command, workDir string, mounts []string) ([]string, error) {
+// invoking user unless the spec names one), the environment, the image, and the command's
+// arguments as arguments of their own (a script runs as `sh -c script`).
+func DockerRunArgs(spec ExecSpec, command Command, mounts []string) ([]string, error) {
 	if spec.Image == "" {
 		return nil, fmt.Errorf("docker execution needs an image")
 	}
@@ -118,7 +154,7 @@ func DockerRunArgs(spec ExecSpec, command, workDir string, mounts []string) ([]s
 		}
 		args = append(args, "-v", expanded)
 	}
-	args = append(args, "-w", workDir)
+	args = append(args, "-w", command.Dir)
 	user := expandIDs(spec.User)
 	if user == "" && os.Getuid() >= 0 {
 		user = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
@@ -129,9 +165,12 @@ func DockerRunArgs(spec ExecSpec, command, workDir string, mounts []string) ([]s
 	for _, e := range envList(spec.Env) {
 		args = append(args, "-e", e)
 	}
-	return append(args, spec.Image, "sh", "-c", command), nil
+	args = append(args, spec.Image)
+	if command.Script != "" {
+		return append(args, "sh", "-c", command.Script), nil
+	}
+	return append(args, command.Args...), nil
 }
-
 func expandIDs(s string) string {
 	s = strings.ReplaceAll(s, "${UID}", fmt.Sprintf("%d", os.Getuid()))
 	return strings.ReplaceAll(s, "${GID}", fmt.Sprintf("%d", os.Getgid()))

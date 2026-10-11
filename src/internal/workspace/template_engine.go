@@ -250,21 +250,21 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	// Create a child VarEnv for this template expansion with item/config context
 	templateEnv := varEnv.CreateChild()
 	templateEnv.PushScope("template")
-	
+
 	// Add item config variables (accessible as ${item.name}, ${item.sources}, etc.)
 	for key, val := range itemConfig {
 		if strVal, ok := val.(string); ok {
 			templateEnv.SetVariable("item."+key, strVal, "item-config")
 		}
 	}
-	
+
 	// Add merged config variables (accessible as ${config.defines}, ${config.cpp_standard}, etc.)
 	for key, val := range mergedConfig {
 		if strVal, ok := val.(string); ok {
 			templateEnv.SetVariable("config."+key, strVal, "merged-config")
 		}
 	}
-	
+
 	// Module name for unique object paths
 	module := "workspace"
 	if m, ok := itemConfig["module"].(string); ok {
@@ -274,13 +274,13 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	if name, ok := itemConfig["name"].(string); ok {
 		templateEnv.SetVariable("target", name, "template")
 	}
-	
+
 	// Add template metadata variables (accessible as ${template.<field_name>}, etc.)
 	// Uses reflection to auto-register all string fields from TemplateMetadata
 	if metadata := bte.GetTemplateMetadata(templateName); metadata != nil {
 		bte.registerMetadataVariables(templateEnv, metadata)
 	}
-	
+
 	// Keep legacy context map for step reference resolution (compile.outputs, etc.)
 	// This is structural, not variable resolution
 	moduleDir, _ := itemConfig["module_dir"].(string)
@@ -411,7 +411,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 			OutputExt     string
 			OutputPattern string
 		}{tool.OutputExtension, tool.OutputPattern})
-		
+
 		// Add source-specific variables
 		sc.VarEnv.SetVariable("source", source, "for_each")
 		sc.VarEnv.SetVariable("source_rel", sourceRel, "for_each")
@@ -527,7 +527,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		OutputExt     string
 		OutputPattern string
 	}{tool.OutputExtension, resolvedOutputPattern})
-	
+
 	// Add step results to context for reference resolution
 	for k, v := range stepResults {
 		sc.Context[k] = v
@@ -589,7 +589,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		// topological sorting here - the linker handles static lib order,
 		// and the dependency resolution will ensure build order is correct
 		libNames = libsFromConfig
-		
+
 		util.LogDebug("Resolved libs for %s: %v", itemConfig["name"], libsFromConfig)
 	}
 
@@ -739,7 +739,6 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 		OutputPattern string
 	}{tool.OutputExtension, resolvedOutputPattern})
 
-
 	// Get working directory (module path)
 	workingDir := ""
 	if wd := step.WorkingDir; wd != "" {
@@ -761,8 +760,14 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 
 	// Command parameters are variables of the output path too (Cargo's ${profile}, ${bin_name})
-	for paramName, paramValue := range resource.ResolveCommandParams(tool, toolParams, itemConfig, configuration) {
-		sc.VarEnv.SetVariable(paramName, paramValue, "command-param")
+	params, err := resource.ResolveCommandParams(tool, toolParams, itemConfig, configuration, func(value string) (string, error) {
+		return resolveStrict(sc.VarEnv, value, "a command parameter of tool "+tool.Name)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for paramName, paramArgs := range params {
+		sc.VarEnv.SetVariable(paramName, strings.Join(paramArgs, " "), "command-param")
 	}
 
 	// Resolve output path from template using VarEnv
@@ -772,42 +777,24 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 	output = filepath.Clean(output)
 
-	// Create a child VarEnv for command resolution with all needed variables
-	cmdVarEnv := sc.VarEnv.CreateChild()
-
-	// Set command-specific variables
-	cmdVarEnv.SetVariable("output", output, "build-command")
-	cmdVarEnv.SetVariable("input", ".", "build-command")
+	values := map[string][]string{"output": {output}, "input": {"."}}
+	for name, args := range params {
+		values[name] = args
+	}
 	if outDir, ok := mergedConfig["output_dir"].(string); ok {
-		cmdVarEnv.SetVariable("output_dir", outDir, "build-command")
+		values["output_dir"] = []string{outDir}
 	}
-
-	// Set flags from tool's configuration-specific flags
-	var flagsList []string
-	if commonFlags, ok := tool.Flags["common"]; ok {
-		flagsList = append(flagsList, commonFlags...)
+	flags := append(append([]string{}, tool.Flags["common"]...), tool.Flags[configuration]...)
+	if values["flags"], err = resolveAll(sc.VarEnv, flags, "the flags of tool "+tool.Name); err != nil {
+		return nil, err
 	}
-	if configFlags, ok := tool.Flags[configuration]; ok {
-		flagsList = append(flagsList, configFlags...)
-	}
-	cmdVarEnv.SetVariable("flags", strings.Join(flagsList, " "), "build-command")
-
-	// Build and resolve the command using VarEnv
-	toolCommand, err := tool.Command.For(platform)
-	if err != nil {
-		return nil, fmt.Errorf("tool %s %w", tool.Name, err)
-	}
-	command, err := resolveStrict(cmdVarEnv, toolCommand, "the command of tool "+tool.Name)
+	command, err := tool.Expand(platform, toolMatcher.Execution(), envValues(values, sc.VarEnv))
 	if err != nil {
 		return nil, err
 	}
-
-	// Clean up extra spaces from empty optional parameters
-	command = strings.Join(strings.Fields(command), " ")
-
-	// Prepend cd if working directory is specified
-	if workingDir != "" && workingDir != "." {
-		command = fmt.Sprintf("cd %s && %s", workingDir, command)
+	// The tool runs in the target's directory (the module for go build, the crate for cargo)
+	if workingDir != "." {
+		command.Dir = workingDir
 	}
 
 	// The tool tracks its own inputs (imports outside the target directory, go.mod, Cargo.toml,

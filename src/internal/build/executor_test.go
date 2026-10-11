@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +15,13 @@ import (
 )
 
 // TestHelperProcess is not a test: tasks run the test binary as their command (the Go
-// helper-process pattern), so the commands behave the same on Linux, macOS and Windows.
+// helper-process pattern), so the commands behave the same on Linux, macOS and Windows. Its
+// arguments are steps separated by "&&":
 //
 //	write <file> <text>   write text to file
 //	append <file> <text>  append text to file
-//	nothing               exit 0 without writing anything
+//	exit <code>           exit with code
+//	nothing               do nothing
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("BUILDY_HELPER_PROCESS") != "1" {
 		return
@@ -28,35 +31,38 @@ func TestHelperProcess(t *testing.T) {
 		args = args[1:]
 	}
 	args = args[1:]
-	switch args[0] {
-	case "write":
-		os.WriteFile(args[1], []byte(args[2]), 0o644)
-	case "append":
-		f, err := os.OpenFile(args[1], os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			os.Exit(2)
+	for len(args) > 0 {
+		step, rest := args, []string(nil)
+		for i, a := range args {
+			if a == "&&" {
+				step, rest = args[:i], args[i+1:]
+				break
+			}
 		}
-		f.WriteString(args[2])
-		f.Close()
-	case "nothing":
+		args = rest
+		switch step[0] {
+		case "write":
+			os.WriteFile(step[1], []byte(step[2]), 0o644)
+		case "append":
+			f, err := os.OpenFile(step[1], os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err != nil {
+				os.Exit(2)
+			}
+			f.WriteString(step[2])
+			f.Close()
+		case "exit":
+			code, _ := strconv.Atoi(step[1])
+			os.Exit(code)
+		case "nothing":
+		}
 	}
 	os.Exit(0)
 }
 
-// helperCommand returns a shell command running TestHelperProcess with args.
-func helperCommand(t *testing.T, args ...string) string {
+// helperCommand returns a command running TestHelperProcess with args.
+func helperCommand(t *testing.T, args ...string) util.Command {
 	t.Setenv("BUILDY_HELPER_PROCESS", "1")
-	quote := func(s string) string {
-		if runtime.GOOS == "windows" {
-			return `"` + s + `"`
-		}
-		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-	}
-	parts := []string{quote(os.Args[0]), "-test.run=^TestHelperProcess$", "--"}
-	for _, a := range args {
-		parts = append(parts, quote(a))
-	}
-	return strings.Join(parts, " ")
+	return util.Command{Args: append([]string{os.Args[0], "-test.run=^TestHelperProcess$", "--"}, args...)}
 }
 
 func newExecutor(t *testing.T, dir string, force bool) *TaskExecutor {
@@ -76,7 +82,7 @@ func runTasks(te *TaskExecutor, tasks ...*workspace.BuildTask) bool {
 	return te.ExecuteTaskGraph(graph, false)
 }
 
-func newTask(id string, inputs []string, outputs []string, command string) *workspace.BuildTask {
+func newTask(id string, inputs []string, outputs []string, command util.Command) *workspace.BuildTask {
 	var in []workspace.TaskInput
 	for _, i := range inputs {
 		in = append(in, workspace.NewTaskInput(i))
@@ -180,7 +186,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 	log := filepath.Join(dir, "runs.log")
 	mk := func() *workspace.BuildTask {
 		return newTask("compile_main", []string{src}, []string{out},
-			helperCommand(t, "write", out, "object")+" && "+helperCommand(t, "append", log, "x"))
+			helperCommand(t, "write", out, "object", "&&", "append", log, "x"))
 	}
 
 	for i, want := range []string{"x", "x", "xx"} {
@@ -220,11 +226,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 // A failing command fails the task with its exit code.
 func TestExecutorReportsCommandFailure(t *testing.T) {
 	dir := t.TempDir()
-	cmd := "exit 3"
-	if runtime.GOOS == "windows" {
-		cmd = "exit /b 3"
-	}
-	task := newTask("compile_bad", nil, []string{filepath.Join(dir, "x.o")}, cmd)
+	task := newTask("compile_bad", nil, []string{filepath.Join(dir, "x.o")}, helperCommand(t, "exit", "3"))
 	if runTasks(newExecutor(t, dir, false), task) {
 		t.Fatal("a failing command succeeded")
 	}
@@ -238,7 +240,7 @@ func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 	var mu sync.Mutex // the stage's tasks run in parallel
 	var specs []util.ExecSpec
 	var mounts [][]string
-	te.runCommand = func(spec util.ExecSpec, command, workDir string, m []string, timeout int) (*util.ExecutionResult, error) {
+	te.runCommand = func(spec util.ExecSpec, command util.Command, workDir string, m []string, timeout int) (*util.ExecutionResult, error) {
 		mu.Lock()
 		specs = append(specs, spec)
 		mounts = append(mounts, m)

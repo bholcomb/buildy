@@ -36,7 +36,7 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 		[]TaskInput{NewTaskInput(inputFile)},
 		[]string{outputFile},
 		[]string{},
-		"ld -o test.exe test.o",
+		commandLine("ld -o test.exe test.o"),
 	)
 	task.Platform = "linux"
 	task.Architecture = "x86_64"
@@ -118,7 +118,7 @@ func TestCacheKeyChangesWhenDirectoryContentsChange(t *testing.T) {
 		[]TaskInput{{Path: stagingDir, Hash: "directory"}}, // Initial placeholder hash
 		[]string{outputFile},
 		[]string{},
-		"zip -r dist.zip staging",
+		commandLine("zip -r dist.zip staging"),
 	)
 	task.Platform = "linux"
 	task.Architecture = "x86_64"
@@ -192,7 +192,7 @@ func TestSymlinkInputsAreNotRehashed(t *testing.T) {
 		[]TaskInput{{Path: sourceFile, Hash: "symlink:" + sourceFile}},
 		[]string{filepath.Join(tmpDir, "dest.txt")},
 		[]string{},
-		"ln -s source.txt dest.txt",
+		commandLine("ln -s source.txt dest.txt"),
 	)
 	task.Platform = "linux"
 
@@ -248,7 +248,7 @@ func TestMultipleInputsAllRehashed(t *testing.T) {
 		},
 		[]string{filepath.Join(tmpDir, "output.exe")},
 		[]string{},
-		"ld -o output.exe file1.o file2.o file3.o",
+		commandLine("ld -o output.exe file1.o file2.o file3.o"),
 	)
 	task.Platform = "linux"
 	if err := task.HashInputs(); err != nil {
@@ -313,7 +313,7 @@ func TestCacheKeyStableWhenNoChanges(t *testing.T) {
 		[]TaskInput{NewTaskInput(inputFile)},
 		[]string{filepath.Join(tmpDir, "output.exe")},
 		[]string{},
-		"ld -o output.exe stable.o",
+		commandLine("ld -o output.exe stable.o"),
 	)
 	task.Platform = "linux"
 	if err := task.HashInputs(); err != nil {
@@ -362,7 +362,7 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 		[]TaskInput{NewTaskInput(inputFile)},
 		[]string{nativeOutput},
 		[]string{},
-		"link command",
+		commandLine("link command"),
 	)
 	task1.Platform = "test"
 	task1.Architecture = "x86_64"
@@ -378,7 +378,7 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 		[]TaskInput{NewTaskInput(inputFile)},
 		[]string{nativeOutput},
 		[]string{},
-		"link command",
+		commandLine("link command"),
 	)
 	task2.Platform = "test"
 	task2.Architecture = "x86_64"
@@ -414,7 +414,7 @@ func TestCacheKeyDifferentPlatforms(t *testing.T) {
 			[]TaskInput{NewTaskInput(inputFile)},
 			[]string{filepath.Join(tmpDir, "output")},
 			[]string{},
-			"link command",
+			commandLine("link command"),
 		)
 		task.Platform = platform
 		task.Architecture = "x86_64"
@@ -457,7 +457,7 @@ func TestCacheKeyDifferentToolchains(t *testing.T) {
 			[]TaskInput{NewTaskInput(inputFile)},
 			[]string{filepath.Join(tmpDir, "output.o")},
 			[]string{},
-			"compile command",
+			commandLine("compile command"),
 		)
 		task.Platform = "linux"
 		task.Architecture = "x86_64"
@@ -518,7 +518,7 @@ func TestConfigHashInvalidatesCache(t *testing.T) {
 			[]TaskInput{NewTaskInput(inputFile)},
 			[]string{filepath.Join(tmpDir, "output.o")},
 			[]string{},
-			"g++ -c input.cpp -o output.o",
+			commandLine("g++ -c input.cpp -o output.o"),
 		)
 		task.Platform = "linux"
 		task.Architecture = "x86_64"
@@ -564,7 +564,7 @@ func TestConfigHashEmptyDoesNotPanic(t *testing.T) {
 		[]TaskInput{NewTaskInput(inputFile)},
 		[]string{filepath.Join(tmpDir, "output.o")},
 		[]string{},
-		"g++ -c input.cpp -o output.o",
+		commandLine("g++ -c input.cpp -o output.o"),
 	)
 	task.ConfigHash = ""
 	if err := task.HashInputs(); err != nil {

@@ -1,11 +1,12 @@
 package resource
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
 
@@ -33,129 +34,103 @@ const (
 	DepFormatMSVCJSON = "msvc-json" // cl.exe /sourceDependencies
 )
 
-// BuildCommand builds a command using the tool template. If the tool writes a dependency file,
-// it also returns the file's path and format.
+// BuildCommand builds a compile command from the tool's template. If the tool writes a
+// dependency file, it also returns the file's path and format.
 func (cb *CommandBuilder) BuildCommand(
 	tool *Tool,
 	source, output string,
 	defines, includeDirs, extraFlags []string,
 	kwargs map[string]any,
-) (command, depFile, depFormat string, err error) {
-	if defines == nil {
-		defines = []string{}
+) (command util.Command, depFile, depFormat string, err error) {
+	values := map[string][]string{
+		"source":    {source},
+		"input":     {source},
+		"output":    {output},
+		"flags":     cb.flags(tool, extraFlags),
+		"defines":   nil,
+		"includes":  nil,
+		"pic":       nil,
+		"dep_flags": nil,
 	}
-	if includeDirs == nil {
-		includeDirs = []string{}
+	if tool.Supports.Defines {
+		values["defines"] = flagged(orDefault(tool.Supports.DefineFlag, "-D"), defines)
 	}
-	if extraFlags == nil {
-		extraFlags = []string{}
+	if tool.Supports.Includes {
+		values["includes"] = flagged(orDefault(tool.Supports.IncludeFlag, "-I"), includeDirs)
 	}
-	if kwargs == nil {
-		kwargs = make(map[string]any)
-	}
-
-	// Get flags for current configuration
-	commonFlags := tool.Flags["common"]
-	configFlags := tool.Flags[cb.configType]
-	allFlags := append([]string{}, commonFlags...)
-	allFlags = append(allFlags, configFlags...)
-	allFlags = append(allFlags, extraFlags...)
-
-	// Build template variables
-	templateVars := map[string]string{
-		"source": source,
-		"input":  source,
-		"output": output,
-		"flags":  strings.Join(allFlags, " "),
+	if isShared, _ := kwargs["is_shared_library"].(bool); tool.Supports.PIC && isShared {
+		values["pic"] = []string{orDefault(tool.Supports.PICFlag, "-fPIC")}
 	}
 
-	// Add defines if tool supports them
-	if tool.Supports.Defines && len(defines) > 0 {
-		defineFlag := orDefault(tool.Supports.DefineFlag, "-D")
-		defineStrs := []string{}
-		for _, d := range defines {
-			defineStrs = append(defineStrs, defineFlag+d)
-		}
-		templateVars["defines"] = strings.Join(defineStrs, " ")
-	} else {
-		templateVars["defines"] = ""
-	}
-
-	// Add includes if tool supports them
-	if tool.Supports.Includes && len(includeDirs) > 0 {
-		includeFlag := orDefault(tool.Supports.IncludeFlag, "-I")
-		includeStrs := []string{}
-		for _, inc := range includeDirs {
-			includeStrs = append(includeStrs, includeFlag+inc)
-		}
-		templateVars["includes"] = strings.Join(includeStrs, " ")
-	} else {
-		templateVars["includes"] = ""
-	}
-
-	// Add PIC flag if tool supports it and requested
-	if tool.Supports.PIC {
-		if isShared, ok := kwargs["is_shared_library"].(bool); ok && isShared {
-			templateVars["pic"] = orDefault(tool.Supports.PICFlag, "-fPIC")
-		} else {
-			templateVars["pic"] = ""
-		}
-	} else {
-		templateVars["pic"] = ""
-	}
-
-	// Handle dependency generation if tool supports it
-	if depTemplate := tool.Supports.Dependencies; depTemplate != "" {
-		// Use .json extension for MSVC /sourceDependencies, .d for GCC/Clang
-		if strings.Contains(strings.ToLower(depTemplate), "/sourcedependencies") {
+	// The dependency file: .json for MSVC's /sourceDependencies, .d for GCC and Clang
+	if deps := tool.Supports.Dependencies; !deps.IsZero() {
+		if strings.Contains(strings.ToLower(deps.Text), "/sourcedependencies") {
 			depFile = strings.TrimSuffix(output, tool.OutputExtension) + ".json"
 			depFormat = DepFormatMSVCJSON
 		} else {
 			depFile = strings.TrimSuffix(output, tool.OutputExtension) + ".d"
 			depFormat = DepFormatMake
 		}
-
-		templateVars["dep_file"] = depFile
-		templateVars["dep_flags"] = strings.ReplaceAll(depTemplate, "${dep_file}", depFile)
-	} else {
-		templateVars["dep_flags"] = ""
-	}
-
-	// Add any additional kwargs
-	for key, value := range kwargs {
-		if _, exists := templateVars[key]; !exists {
-			templateVars[key] = fmt.Sprintf("%v", value)
+		values["dep_file"] = []string{depFile}
+		if values["dep_flags"], err = deps.Expand(config.MapValues(values)); err != nil {
+			return util.Command{}, "", "", fmt.Errorf("tool %s: supports.dependencies: %w", tool.Name, err)
 		}
 	}
 
-	command, err = cb.fill(tool, templateVars)
-	if err != nil {
-		return "", "", "", fmt.Errorf("compiling %s: %w", source, err)
+	// The template step's other tool parameters (std, ...)
+	for key, value := range kwargs {
+		if _, exists := values[key]; !exists {
+			values[key] = kwargValues(value)
+		}
 	}
 
+	command, err = cb.expand(tool, values)
+	if err != nil {
+		return util.Command{}, "", "", fmt.Errorf("compiling %s: %w", source, err)
+	}
 	return command, depFile, depFormat, nil
 }
 
-// fill returns the tool's command for the build's platform with its placeholders filled, in
-// the order of their names, so the result never depends on map order.
-func (cb *CommandBuilder) fill(tool *Tool, vars map[string]string) (string, error) {
-	command, err := tool.Command.For(cb.platform)
-	if err != nil {
-		return "", fmt.Errorf("tool %s %w", tool.Name, err)
+// flags returns the tool's flags for the configuration, then extra.
+func (cb *CommandBuilder) flags(tool *Tool, extra []string) []string {
+	flags := append([]string{}, tool.Flags["common"]...)
+	flags = append(flags, tool.Flags[cb.configType]...)
+	return append(flags, extra...)
+}
+
+// expand fills the tool's command for the build's platform in.
+func (cb *CommandBuilder) expand(tool *Tool, values map[string][]string) (util.Command, error) {
+	command, err := tool.Expand(cb.platform, cb.toolchain.Execution, config.MapValues(values))
+	var missing *config.MissingPlaceholderError
+	if errors.As(err, &missing) && missing.Name == "std" {
+		err = fmt.Errorf("%w (set cpp_standard or c_standard under environment.compile)", err)
 	}
-	names := make([]string, 0, len(vars))
-	for name := range vars {
-		names = append(names, name)
+	return command, err
+}
+
+// flagged returns flag joined to each value: "-I" and "dir" give "-Idir". A flag that ends in a
+// space ("-framework ") is an argument of its own before each value.
+func flagged(flag string, values []string) []string {
+	var args []string
+	for _, v := range values {
+		if trimmed := strings.TrimRight(flag, " "); trimmed != flag {
+			args = append(args, trimmed, v)
+		} else {
+			args = append(args, flag+v)
+		}
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		command = strings.ReplaceAll(command, "${"+name+"}", vars[name])
+	return args
+}
+
+// kwargValues returns a tool parameter's value as arguments: a list's items, or one argument.
+func kwargValues(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case string:
+		return []string{v}
 	}
-	command = strings.TrimSpace(command)
-	if err := checkPlaceholders(tool, command); err != nil {
-		return "", err
-	}
-	return command, nil
+	return []string{fmt.Sprint(value)}
 }
 
 func orDefault(value, def string) string {
@@ -165,130 +140,57 @@ func orDefault(value, def string) string {
 	return value
 }
 
-// checkPlaceholders fails if a ${...} placeholder of the tool's command was given no value.
-func checkPlaceholders(tool *Tool, command string) error {
-	start := strings.Index(command, "${")
-	if start < 0 {
-		return nil
-	}
-	end := strings.Index(command[start:], "}")
-	name := command[start:]
-	if end >= 0 {
-		name = command[start : start+end+1]
-	}
-	hint := ""
-	if name == "${std}" {
-		hint = " (set cpp_standard or c_standard under environment.compile)"
-	}
-	return fmt.Errorf("the command of tool %s has no value for %s%s: %s", tool.Name, name, hint, command)
-}
-
-// BuildLinkCommand builds a link command using the tool template
-// Returns the command string and an optional import library path (for Windows DLLs)
+// BuildLinkCommand builds a link command from the tool's template. It also returns the import
+// library a Windows DLL's link writes, if any.
 func (cb *CommandBuilder) BuildLinkCommand(
 	tool *Tool,
 	objects []string,
 	output string,
 	libDirs, libs, frameworks, extraFlags []string,
-) (string, string, error) {
-	if libDirs == nil {
-		libDirs = []string{}
+) (util.Command, string, error) {
+	values := map[string][]string{
+		"objects":    objects,
+		"output":     {output},
+		"flags":      cb.flags(tool, extraFlags),
+		"lib_dirs":   nil,
+		"libs":       nil,
+		"frameworks": nil,
 	}
-	if libs == nil {
-		libs = []string{}
+	if tool.Supports.LibDirs {
+		values["lib_dirs"] = flagged(orDefault(tool.Supports.LibDirFlag, "-L"), libDirs)
 	}
-	if frameworks == nil {
-		frameworks = []string{}
-	}
-	if extraFlags == nil {
-		extraFlags = []string{}
-	}
-
-	// Build template variables
-	templateVars := map[string]string{
-		"objects": strings.Join(objects, " "),
-		"output":  output,
-	}
-
-	// Add library directories if tool supports them
-	if tool.Supports.LibDirs && len(libDirs) > 0 {
-		libDirFlag := orDefault(tool.Supports.LibDirFlag, "-L")
-		libDirStrs := []string{}
-		for _, d := range libDirs {
-			libDirStrs = append(libDirStrs, libDirFlag+d)
-		}
-		templateVars["lib_dirs"] = strings.Join(libDirStrs, " ")
-	} else {
-		templateVars["lib_dirs"] = ""
-	}
-
-	// Add libraries if tool supports them
-	if tool.Supports.Libs && len(libs) > 0 {
+	if tool.Supports.Libs {
 		libFlag := orDefault(tool.Supports.LibFlag, "-l")
-		libSuffix := tool.Supports.LibSuffix
-
-		libStrs := []string{}
 		for _, lib := range libs {
-			// Skip adding suffix if library already has an extension
-			if libSuffix != "" && !strings.Contains(lib, ".") {
-				libStrs = append(libStrs, libFlag+lib+libSuffix)
-			} else {
-				libStrs = append(libStrs, libFlag+lib)
+			// A library with an extension is used as named
+			if tool.Supports.LibSuffix != "" && !strings.Contains(lib, ".") {
+				lib += tool.Supports.LibSuffix
 			}
+			values["libs"] = append(values["libs"], flagged(libFlag, []string{lib})...)
 		}
-		templateVars["libs"] = strings.Join(libStrs, " ")
-	} else {
-		templateVars["libs"] = ""
+	}
+	if tool.Supports.Frameworks {
+		values["frameworks"] = flagged(orDefault(tool.Supports.FrameworkFlag, "-framework "), frameworks)
 	}
 
-	// Add frameworks if tool supports them (macOS only)
-	if tool.Supports.Frameworks && len(frameworks) > 0 {
-		frameworkFlag := orDefault(tool.Supports.FrameworkFlag, "-framework ")
-		frameworkStrs := []string{}
-		for _, fw := range frameworks {
-			frameworkStrs = append(frameworkStrs, frameworkFlag+fw)
-		}
-		templateVars["frameworks"] = strings.Join(frameworkStrs, " ")
-	} else {
-		templateVars["frameworks"] = ""
-	}
-
-	// Add import library path for DLLs (MSVC)
-	// The DLL goes in bin/, but the import library should go in lib/
+	// The import library of a DLL (MSVC) goes in lib/ when the DLL goes in bin/
 	implib := ""
 	if tool.Supports.Implib {
 		if strings.HasSuffix(output, ".dll") {
-			// Replace bin with lib in the path, handling both path separators
-			// Use filepath.Dir/Base to properly handle the path components
 			outputDir := filepath.Dir(output)
-			outputBase := filepath.Base(output)
-			parentDir := filepath.Dir(outputDir)
-			dirName := filepath.Base(outputDir)
-
-			if dirName == "bin" {
-				// Replace bin with lib
-				implib = filepath.Join(parentDir, "lib", strings.TrimSuffix(outputBase, ".dll")+".lib")
+			if filepath.Base(outputDir) == "bin" {
+				implib = filepath.Join(filepath.Dir(outputDir), "lib", strings.TrimSuffix(filepath.Base(output), ".dll")+".lib")
 			} else {
-				// Just change extension if not in bin/
 				implib = strings.TrimSuffix(output, ".dll") + ".lib"
 			}
 		}
-		templateVars["implib"] = implib
+		values["implib"] = []string{implib}
 	}
 
-	// Get flags for current configuration
-	commonFlags := tool.Flags["common"]
-	configFlags := tool.Flags[cb.configType]
-	allFlags := append([]string{}, commonFlags...)
-	allFlags = append(allFlags, configFlags...)
-	allFlags = append(allFlags, extraFlags...)
-	templateVars["flags"] = strings.Join(allFlags, " ")
-
-	command, err := cb.fill(tool, templateVars)
+	command, err := cb.expand(tool, values)
 	if err != nil {
-		return "", "", fmt.Errorf("linking %s: %w", output, err)
+		return util.Command{}, "", fmt.Errorf("linking %s: %w", output, err)
 	}
-
 	return command, implib, nil
 }
 

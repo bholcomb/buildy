@@ -66,6 +66,11 @@ func (tm *ToolMatcher) FindLinkTool(outputType string) *Tool {
 	return nil
 }
 
+// Execution returns where the toolchain's commands run.
+func (tm *ToolMatcher) Execution() util.ExecSpec {
+	return tm.toolchain.Execution
+}
+
 // GetOutputPrefix returns the toolchain's default output prefix for library filenames
 func (tm *ToolMatcher) GetOutputPrefix() string {
 	return tm.toolchain.OutputPrefix

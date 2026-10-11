@@ -758,25 +758,22 @@ func (tg *TaskGenerator) generateTransformTasks(transforms []*config.Transform, 
 			if err != nil {
 				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 			}
-			command, err := tool.Command.For(tg.Platform)
-			if err != nil {
-				return nil, fmt.Errorf("%s in module %s: tool %s %w", what, tg.moduleName(), tool.Name, err)
-			}
-
 			env.SetVariable("output", output, "transform")
 			setToolchainVariables(env, toolchain)
 			flags := tool.Flags["common"]
 			if configFlags, ok := tool.Flags[tg.Configuration]; ok {
 				flags = configFlags
 			}
-			env.SetVariable("flags", strings.Join(flags, " "), "transform")
-			env.SetVariable("args", strings.Join(t.Args, " "), "transform")
-			env.SetVariable("defines", "", "transform")
-			env.SetVariable("includes", "", "transform")
-
-			command, err = resolveStrict(env, command, "the command of "+what)
-			if err != nil {
+			values := map[string][]string{"input": {inputFile}, "output": {output}, "defines": nil, "includes": nil}
+			if values["flags"], err = resolveAll(env, flags, "the flags of tool "+tool.Name); err != nil {
 				return nil, err
+			}
+			if values["args"], err = resolveAll(env, t.Args, "the args of "+what); err != nil {
+				return nil, err
+			}
+			command, err := tool.Expand(tg.Platform, execSpec, envValues(values, env))
+			if err != nil {
+				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 			}
 
 			taskID := tg.TaskIDGen.Next("transform", baseName)
@@ -843,11 +840,6 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 			if err != nil {
 				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 			}
-			toolCommand, err := tool.Command.For(tg.Platform)
-			if err != nil {
-				return nil, fmt.Errorf("%s in module %s: tool %s %w", what, tg.moduleName(), tool.Name, err)
-			}
-
 			var resolvedOutputs []string
 			for _, pattern := range g.Outputs {
 				resolved, err := resolveStrict(env, pattern, "the outputs of "+what)
@@ -859,22 +851,20 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 			env.SetVariable("output", resolvedOutputs[0], "generate")
 			env.SetVariable("output_dir", filepath.Dir(resolvedOutputs[0]), "generate")
 
-			args, err := resolveStrict(env, strings.Join(g.Args, " "), "the args of "+what)
+			args, err := resolveAll(env, g.Args, "the args of "+what)
 			if err != nil {
 				return nil, err
 			}
-			env.SetVariable("args", args, "generate")
-			env.SetVariable("flags", "", "generate")
-			env.SetVariable("defines", "", "generate")
-			env.SetVariable("includes", "", "generate")
-
-			command, err := resolveStrict(env, toolCommand, "the command of "+what)
+			values := map[string][]string{"input": {inputFile}, "output": {resolvedOutputs[0]}, "args": args, "flags": nil, "defines": nil, "includes": nil}
+			command, err := tool.Expand(tg.Platform, execSpec, envValues(values, env))
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 			}
 			// A command without ${args} gets them at the end
-			if !strings.Contains(toolCommand, "${args}") && args != "" {
-				command = command + " " + args
+			if tmpl, _ := tool.Command.For(tg.Platform); !hasString(tmpl.Placeholders(), "args") {
+				if command, err = appendArgs(command, args, execSpec); err != nil {
+					return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
+				}
 			}
 
 			taskID := tg.TaskIDGen.Next("generate", baseName)
@@ -897,6 +887,23 @@ func (tg *TaskGenerator) generateGenerateTasks(generates []*config.Generate, out
 		}
 	}
 	return tasks, nil
+}
+
+// appendArgs adds arguments at the end of a command (quoted, for a shell script).
+func appendArgs(command util.Command, args []string, exec util.ExecSpec) (util.Command, error) {
+	if command.Script == "" {
+		command.Args = append(command.Args, args...)
+		return command, nil
+	}
+	quote := util.ShellQuoter(exec)
+	for _, arg := range args {
+		q, err := quote(arg)
+		if err != nil {
+			return util.Command{}, err
+		}
+		command.Script += " " + q
+	}
+	return command, nil
 }
 
 // generateFromTemplate generates the task that fills a template file in: @NAME@ and ${NAME} are

@@ -136,7 +136,7 @@ func (bsm *BuildSystemManager) Execute(
 
 // ExecuteWithContext executes specified phases with additional context variables
 func (bsm *BuildSystemManager) ExecuteWithContext(
-	config *BuildSystemConfig,
+	bsConfig *BuildSystemConfig,
 	sourceDir, buildDir, installDir string,
 	execSpec util.ExecSpec,
 	mounts []string,
@@ -154,28 +154,41 @@ func (bsm *BuildSystemManager) ExecuteWithContext(
 
 	// Execute each phase in order
 	for _, phaseName := range phases {
-		phase := config.Phases[phaseName]
+		phase := bsConfig.Phases[phaseName]
 		if phase == nil {
 			if phaseName == "configure" || phaseName == "build" {
-				return fmt.Errorf("required phase '%s' not defined for build system '%s'", phaseName, config.Name)
+				return fmt.Errorf("required phase '%s' not defined for build system '%s'", phaseName, bsConfig.Name)
 			}
-			util.LogInfo("Skipping undefined phase '%s' for build system '%s'", phaseName, config.Name)
+			util.LogInfo("Skipping undefined phase '%s' for build system '%s'", phaseName, bsConfig.Name)
 			continue
 		}
 
-		// Skip no-op commands
-		if phase.Command == "true" || phase.Command == "" {
+		// "true" is the no-op of a phase a build system doesn't need (make's configure)
+		if phase.Command.Text == "true" {
 			continue
 		}
-
-		// Build the command with variable substitution
-		cmd := bsm.substituteVariablesWithContext(phase.Command, sourceDir, buildDir, installDir, jobs, extraArgs, phase.DefaultArgs, context)
 
 		// Determine working directory
 		workDir := sourceDir
 		if phase.WorkingDir != "" {
 			workDir = bsm.substituteVariablesWithContext(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil, context)
 		}
+
+		values := map[string][]string{
+			"source_dir":  {sourceDir},
+			"build_dir":   {buildDir},
+			"install_dir": {installDir},
+			"jobs":        {fmt.Sprint(jobs)},
+			"args":        append(append([]string{}, phase.DefaultArgs...), extraArgs...),
+		}
+		for key, value := range context {
+			values[key] = []string{value}
+		}
+		args, err := phase.Command.Expand(config.MapValues(values))
+		if err != nil {
+			return fmt.Errorf("the %s phase of build system %s: %w", phaseName, bsConfig.Name, err)
+		}
+		cmd := util.Command{Args: args, Dir: workDir}
 
 		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
 
