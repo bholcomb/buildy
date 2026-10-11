@@ -1,0 +1,23 @@
+# The documented optional-source form is a source (finding 1.6): plugins/*.c is compiled, and
+# missing/*.c may match nothing.
+project:
+  name: optional_sources
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  static_libraries:
+    - name: plugins
+      language: c
+      sources:
+        - {pattern: "plugins/*.c", optional: true}
+
+  executables:
+    - name: app
+      language: c
+      sources:
+        - "main.c"
+        - {pattern: "plugins/*.c", optional: true}
+        - {pattern: "missing/*.c", optional: true}

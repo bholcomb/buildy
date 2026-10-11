@@ -5,6 +5,7 @@ package main
 // docker) is missing. C++ cases run on Linux and macOS.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -478,5 +479,130 @@ func TestE2EDryRunDependency(t *testing.T) {
 	}
 	if got := strings.Count(string(log), "built"); got != 2 {
 		t.Errorf("the dependency was built %d times, want 2 (debug and release)", got)
+	}
+}
+
+// Findings 1.4 and 1.5: a root variable reaches a module, and a module's environment.compile
+// adds to the root's instead of replacing it.
+func TestE2ERootSettingsReachModules(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc")
+	dir := fixture(t, "root_settings")
+	mustBuildy(t, dir)
+	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "42 1" {
+		t.Errorf("app printed %q, want 42 1", got)
+	}
+}
+
+// Finding 1.6: {pattern: ..., optional: true} is compiled, and may match nothing.
+func TestE2EOptionalSources(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc", "ar")
+	dir := fixture(t, "optional_sources")
+	mustBuildy(t, dir)
+	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "7" {
+		t.Errorf("app printed %q, want 7", got)
+	}
+	if members := run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libplugins.a")); members != "p.o" {
+		t.Errorf("libplugins.a holds %q, want p.o", members)
+	}
+}
+
+// Finding 1.2: every run generates the same commands, with a filter map's matching keys in the
+// order written.
+func TestE2EFilterOrderIsStable(t *testing.T) {
+	dir := fixture(t, "filter_order")
+	commands := func() (compile, link string) {
+		mustBuildy(t, dir, "--dry-run", "--platform", "linux", "--architecture", "x86_64")
+		data, err := os.ReadFile(filepath.Join(dir, ".buildy_cache", "tasks_linux-x86_64-debug.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var graph struct {
+			Tasks []struct {
+				TaskType string `json:"task_type"`
+				Command  string `json:"command"`
+			} `json:"tasks"`
+		}
+		if err := json.Unmarshal(data, &graph); err != nil {
+			t.Fatal(err)
+		}
+		for _, task := range graph.Tasks {
+			switch task.TaskType {
+			case "compile":
+				compile = task.Command
+			case "link":
+				link = task.Command
+			}
+		}
+		return compile, link
+	}
+	compile, link := commands()
+	if !strings.Contains(compile, "-DA -DB -DC -DD -DE") {
+		t.Errorf("compile command doesn't define A to E in order: %s", compile)
+	}
+	if !strings.Contains(link, "-lm -ldl -lpthread") {
+		t.Errorf("link command doesn't link m, dl, pthread in order: %s", link)
+	}
+	for i := 0; i < 10; i++ {
+		if c, l := commands(); c != compile || l != link {
+			t.Fatalf("run %d generated other commands:\n%s\n%s", i, c, l)
+		}
+	}
+}
+
+// Finding 5.4: typos outside buildy.yaml's keys are errors too, naming the file, the line and
+// what was meant: a filter key, an abstract keyword, a key of a workspace toolchain.
+func TestE2EConfigTypos(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		wants []string
+	}{
+		{
+			name:  "filter key",
+			files: map[string]string{"buildy.yaml": "project: {name: t}\nenvironment:\n  compile:\n    cpp_standard: c++17\n    defines: [{linxu: [X]}]\ntargets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n"},
+			wants: []string{"buildy.yaml:5: filter key 'linxu'", "did you mean 'linux'"},
+		},
+		{
+			name:  "abstract keyword",
+			files: map[string]string{"buildy.yaml": "project: {name: t}\nenvironment:\n  compile:\n    cpp_standard: c++17\n    optimisation: full\ntargets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n"},
+			wants: []string{"buildy.yaml:5: unknown key 'environment.compile.optimisation'", "did you mean 'optimization'"},
+		},
+		{
+			name: "toolchain key",
+			files: map[string]string{"buildy_config/toolchains/mine.yaml": `toolchain:
+  name: mine
+  tools:
+    compile:
+      action: compile
+      command: "cc -c ${input} -o ${output}"
+      input_extension: [".c"]
+`},
+			wants: []string{filepath.Join("buildy_config", "toolchains", "mine.yaml"), "line 7: unknown key 'toolchain.tools.compile.input_extension'", "did you mean 'input_extensions'"},
+		},
+		{
+			name:  "platform name",
+			files: map[string]string{},
+			wants: []string{"'linxu' is not a platform"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := fixture(t, "config_typos")
+			for path, content := range c.files {
+				writeFile(t, filepath.Join(dir, path), content)
+			}
+			args := []string{"--dry-run"}
+			if c.name == "platform name" {
+				args = append(args, "--platform", "linxu")
+			}
+			out := mustFailBuildy(t, dir, args...)
+			for _, want := range c.wants {
+				if !strings.Contains(out, want) {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+		})
 	}
 }

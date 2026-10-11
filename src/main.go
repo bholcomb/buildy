@@ -9,6 +9,7 @@ import (
 
 	"buildy/internal/build"
 	"buildy/internal/cache"
+	"buildy/internal/config"
 	"buildy/internal/resource"
 	"buildy/internal/workspace"
 	"buildy/pkg/util"
@@ -25,32 +26,14 @@ var (
 )
 
 
-// detectPlatform returns the current platform name normalized for buildy
+// detectPlatform returns the platform buildy runs on
 func detectPlatform() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "macos"
-	case "linux":
-		return "linux"
-	case "windows":
-		return "windows"
-	default:
-		return runtime.GOOS
-	}
+	return config.HostPlatform()
 }
 
-// detectArchitecture returns the current architecture name normalized for buildy
+// detectArchitecture returns the architecture buildy runs on
 func detectArchitecture() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "arm64"
-	case "386":
-		return "x86"
-	default:
-		return runtime.GOARCH
-	}
+	return config.HostArchitecture()
 }
 
 // getAutoBuildyDirs returns automatic buildy_config/ directory search paths
@@ -144,6 +127,15 @@ func main() {
 	// Handle -r/--release shortcut
 	if *release {
 		*configuration = "release"
+	}
+
+	// Platform and architecture names are normalised (darwin is macos, aarch64 is arm64); any
+	// other name is an error
+	if *platform, err = config.CheckPlatform(*platform); err != nil {
+		util.LogFatal("--platform: %v", err)
+	}
+	if *architecture, err = config.CheckArchitecture(*architecture); err != nil {
+		util.LogFatal("--architecture: %v", err)
 	}
 
 	// Initialize logger with notify level
@@ -332,18 +324,11 @@ func main() {
 	}
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
-	// Create variable environment for package resolution
-	rootVarEnv := util.NewVariableEnvironment(nil)
-	rootVarEnv.SetVariable("platform", *platform, "builtin")
-	rootVarEnv.SetVariable("architecture", *architecture, "builtin")
-	rootVarEnv.SetVariable("configuration", *configuration, "builtin")
-
-	// Import environment variables from workspace config BEFORE dependency resolution
-	// This ensures ${VULKAN_SDK} and similar variables are available when resolving dependencies
-	if ws.Config.Variables != nil {
-		if err := rootVarEnv.ImportEnvVars(ws.Config.Variables, "buildy.yaml"); err != nil {
-			util.LogFatal("Failed to import environment variables: %v", err)
-		}
+	// The workspace root's variables, for the dependency definitions: its variables and imported
+	// environment variables, the built-in variables and --define
+	rootVarEnv, err := workspace.Variables(ws.Config.File, buildContext, ws.RootDir, cliDefines)
+	if err != nil {
+		util.LogFatal("Failed to read the workspace's variables: %v", err)
 	}
 
 	// The toolchain directories, lowest priority first: a toolchain in a later directory replaces
@@ -412,8 +397,9 @@ func main() {
 		templateEngine,
 		ws,
 		depResolver,
-		nil, // No parent var env
 	)
+
+	configParser.CacheDir = workspaceCacheDir
 
 	// Create builder (cache directory already set above for dependency resolution)
 	builder, err := build.NewBuilder(workspaceCacheDir, *workers)

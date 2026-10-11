@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"buildy/internal/cache"
-	"buildy/internal/resource"
 	"buildy/internal/workspace"
 	"buildy/pkg/util"
 )
@@ -56,13 +55,12 @@ func (b *Builder) BuildWorkspace(
 
 	// Select the workspace-level toolchain (used by workspace-level staging and install tasks)
 	if configParser != nil && ws != nil && ws.Config != nil {
-		tc, err := configParser.SelectToolchain(ws.Config.RawConfig)
+		tc, err := configParser.SelectToolchain(ws.Config.File)
 		if err != nil {
 			result.Finish(false)
 			return result, err
 		}
 		configParser.CurrentToolchain = tc
-		configParser.ToolchainHash = resource.HashToolchainConfig(tc)
 		result.Toolchain = tc.Name
 	}
 

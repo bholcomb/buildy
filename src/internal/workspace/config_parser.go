@@ -4,47 +4,45 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/internal/resource"
 	"buildy/pkg/util"
 )
 
-func hashConfig(config map[string]any) string {
-	data, err := json.Marshal(config)
+// hashConfig hashes a module's (inherited) config, stamped on its tasks.
+func hashConfig(file *config.File) string {
+	data, err := json.Marshal(file)
 	if err != nil {
-		return ""
+		panic(fmt.Sprintf("hashing %s: %v", file.Path, err))
 	}
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h[:])
 }
 
-// ConfigParser orchestrates configuration parsing and task generation
-// It delegates to specialized components for parsing, path resolution, and task generation
+// ConfigParser generates the tasks of a workspace from its typed configuration
 type ConfigParser struct {
 	Platform           string
 	Architecture       string
 	Configuration      string
 	CLIDefines         map[string]string
-	VarEnv             *util.VariableEnvironment
-	YAMLParser         *YAMLParser
+	VarEnv             *util.VariableEnvironment // the workspace root's variables
 	PathResolver       *PathResolver
-	TaskGenerator      *TaskGenerator
 	ToolchainManager   *resource.ToolchainManager
 	DefaultToolchain   string
 	TemplateEngine     *BuildTemplateEngine
 	CurrentToolchain   *resource.ToolchainConfig
-	ToolchainHash      string
-	ToolMatcher        *resource.ToolMatcher
-	CommandBuilder     *resource.CommandBuilder
 	Workspace          *Workspace
 	TargetRegistry     *TargetRegistry
 	CurrentModule      string
 	DependencyResolver *resource.DependencyResolver
 	TaskIDGen          *TaskIDGenerator
 	ConfigFileDir      string
+	CacheDir           string // ${cache_dir}
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -56,17 +54,12 @@ func NewConfigParser(
 	templateEngine *BuildTemplateEngine,
 	workspace *Workspace,
 	dependencyResolver *resource.DependencyResolver,
-	parentVarEnv *util.VariableEnvironment,
 ) *ConfigParser {
-	varEnv := util.NewVariableEnvironment(parentVarEnv)
-
 	return &ConfigParser{
 		Platform:           ctx.Platform,
 		Architecture:       ctx.Architecture,
 		Configuration:      ctx.Configuration,
 		CLIDefines:         cliDefines,
-		VarEnv:             varEnv,
-		YAMLParser:         NewYAMLParser(),
 		ToolchainManager:   toolchainManager,
 		DefaultToolchain:   defaultToolchain,
 		TemplateEngine:     templateEngine,
@@ -86,84 +79,42 @@ func unknownToolchain(name, where string) error {
 	return fmt.Errorf("toolchain '%s' (from %s) is not a known toolchain; buildy --list-toolchains lists them", name, where)
 }
 
-// selectToolchain selects toolchain based on hierarchical configuration
-func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.ToolchainConfig, error) {
+// SelectToolchain selects a config's toolchain: --toolchain, project.toolchain, toolchain,
+// environment.toolchains.<platform>, environment.toolchains.default, or the platform's default.
+func (cp *ConfigParser) SelectToolchain(file *config.File) (*resource.ToolchainConfig, error) {
 	if cp.ToolchainManager == nil {
-		return nil, fmt.Errorf("ToolchainManager not initialized")
+		return nil, fmt.Errorf("internal error: no toolchain manager")
 	}
-
-	// Check CLI override first
-	if cp.DefaultToolchain != "" {
-		tc := cp.ToolchainManager.GetToolchain(cp.DefaultToolchain)
-		if tc != nil {
-			util.LogInfo("Using CLI-specified toolchain: %s", tc.Name)
-			return tc, nil
+	type choice struct{ name, where string }
+	choices := []choice{{cp.DefaultToolchain, "--toolchain"}}
+	if file.Project != nil {
+		choices = append(choices, choice{file.Project.Toolchain, "project.toolchain"})
+	}
+	choices = append(choices,
+		choice{file.Toolchain, "toolchain"},
+		choice{file.Environment.Toolchains[cp.Platform], "environment.toolchains." + cp.Platform},
+		choice{file.Environment.Toolchains["default"], "environment.toolchains.default"},
+	)
+	for _, c := range choices {
+		if c.name == "" {
+			continue
 		}
-		return nil, unknownToolchain(cp.DefaultToolchain, "--toolchain")
-	}
-
-	// Check project-level toolchain
-	if project, ok := config["project"].(map[string]any); ok {
-		if projectToolchain, ok := project["toolchain"].(string); ok {
-			tc := cp.ToolchainManager.GetToolchain(projectToolchain)
-			if tc != nil {
-				util.LogInfo("Using project-specified toolchain: %s", tc.Name)
-				return tc, nil
-			}
-			return nil, unknownToolchain(projectToolchain, "project.toolchain")
+		tc := cp.ToolchainManager.GetToolchain(c.name)
+		if tc == nil {
+			return nil, unknownToolchain(c.name, c.where)
 		}
-	}
-
-	// Check workspace-level toolchain
-	if workspaceToolchain, ok := config["toolchain"].(string); ok {
-		tc := cp.ToolchainManager.GetToolchain(workspaceToolchain)
-		if tc != nil {
-			util.LogInfo("Using workspace-specified toolchain: %s", tc.Name)
-			return tc, nil
-		}
-		return nil, unknownToolchain(workspaceToolchain, "toolchain")
-	}
-
-	// Check environment.toolchains structure (hierarchical: platform-specific, then default)
-	if env, ok := config["environment"].(map[string]any); ok {
-		if toolchains, ok := env["toolchains"].(map[string]any); ok {
-			// Check platform-specific first
-			if platformToolchain, ok := toolchains[cp.Platform].(string); ok {
-				tc := cp.ToolchainManager.GetToolchain(platformToolchain)
-				if tc != nil {
-					util.LogInfo("Using platform-specified toolchain: %s", tc.Name)
-					return tc, nil
-				}
-				return nil, unknownToolchain(platformToolchain, "environment.toolchains."+cp.Platform)
-			}
-			// Check default
-			if defaultToolchain, ok := toolchains["default"].(string); ok {
-				tc := cp.ToolchainManager.GetToolchain(defaultToolchain)
-				if tc != nil {
-					util.LogInfo("Using default toolchain: %s", tc.Name)
-					return tc, nil
-				}
-				return nil, unknownToolchain(defaultToolchain, "environment.toolchains.default")
-			}
-		}
-	}
-
-	// Auto-detect based on platform/architecture
-	tc := cp.ToolchainManager.AutoDetect(cp.Platform, cp.Architecture)
-	if tc != nil {
+		util.LogInfo("Using toolchain %s (from %s)", tc.Name, c.where)
 		return tc, nil
 	}
 
-	// No toolchain found
-	availableToolchains := cp.ToolchainManager.ListToolchains()
-	names := []string{}
-	for _, tc := range availableToolchains {
+	if tc := cp.ToolchainManager.AutoDetect(cp.Platform, cp.Architecture); tc != nil {
+		return tc, nil
+	}
+	var names []string
+	for _, tc := range cp.ToolchainManager.ListToolchains() {
 		names = append(names, tc.Name)
 	}
-	return nil, fmt.Errorf(
-		"no suitable toolchain found for %s-%s. Available toolchains: %v",
-		cp.Platform, cp.Architecture, names,
-	)
+	return nil, fmt.Errorf("no suitable toolchain found for %s-%s. Available toolchains: %v", cp.Platform, cp.Architecture, names)
 }
 
 // GenerateWorkspaceTasks generates the tasks of every module. A build of selected targets runs
@@ -171,37 +122,26 @@ func (cp *ConfigParser) SelectToolchain(config map[string]any) (*resource.Toolch
 // names anyway.
 func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	if cp.Workspace == nil {
-		return nil, fmt.Errorf("no workspace configured. Use GenerateTasks() for single-file builds")
+		return nil, fmt.Errorf("no workspace configured")
+	}
+	if err := cp.checkNames(); err != nil {
+		return nil, err
 	}
 
 	// Start from an empty task registry: it maps this generation's targets to their tasks
 	globalTaskRegistry.Clear()
 
-	// Initialize target registry
 	cp.TargetRegistry = NewTargetRegistry(cp.Workspace)
 	if err := cp.TargetRegistry.Initialize(); err != nil {
 		return nil, err
 	}
 
-	allTasks := []*BuildTask{}
-
-	// Create workspace-level variable environment
-	workspaceVarEnv := util.NewVariableEnvironment(nil)
-	workspaceVarEnv.PushScope("workspace")
-	if variables, ok := cp.Workspace.Config.RawConfig["variables"].(map[string]any); ok {
-		// Extract platform-specific variables from variables.platforms.<platform>
-		workspaceVarEnv.ExtractPlatformVariables(variables, cp.Platform, "workspace.variables")
-		// Extract general variables from variables section
-		workspaceVarEnv.ExtractVariablesFromSection(variables, "workspace")
+	// The workspace root's variables (workspace-level staging and install use them)
+	rootVars, err := Variables(cp.Workspace.Config.File, cp.buildContext(), cp.Workspace.RootDir, cp.CLIDefines)
+	if err != nil {
+		return nil, err
 	}
-	// Add built-in variables
-	workspaceVarEnv.SetVariable("platform", cp.Platform, "built-in")
-	workspaceVarEnv.SetVariable("arch", cp.Architecture, "built-in")
-	workspaceVarEnv.SetVariable("config", cp.Configuration, "built-in")
-	workspaceVarEnv.SetVariable("workspace", cp.Workspace.RootDir, "built-in")
-	
-	// Store workspace VarEnv for use in generateWorkspaceLevelTasks
-	cp.VarEnv = workspaceVarEnv
+	cp.VarEnv = rootVars
 
 	// Generate every module's targets, in a fixed order, then every module's packaging tasks
 	// (copies, staging, install), which may name targets of other modules
@@ -211,21 +151,22 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	}
 	sort.Strings(modulePaths)
 	type generated struct {
-		gen    *TaskGenerator
-		config map[string]any
-		tasks  []*BuildTask
+		gen   *TaskGenerator
+		file  *config.File
+		tasks []*BuildTask
 	}
+	allTasks := []*BuildTask{}
 	modules := make([]generated, 0, len(modulePaths))
 	for _, modulePath := range modulePaths {
-		moduleTasks, gen, moduleConfig, err := cp.processModule(modulePath, cp.Workspace.Modules[modulePath], workspaceVarEnv)
+		moduleTasks, gen, file, err := cp.processModule(modulePath, cp.Workspace.Modules[modulePath])
 		if err != nil {
 			return nil, err
 		}
-		modules = append(modules, generated{gen, moduleConfig, moduleTasks})
+		modules = append(modules, generated{gen, file, moduleTasks})
 		allTasks = append(allTasks, moduleTasks...)
 	}
 	for i, modulePath := range modulePaths {
-		packaging, err := modules[i].gen.GeneratePackagingTasks(modules[i].config, modules[i].tasks)
+		packaging, err := modules[i].gen.GeneratePackagingTasks(modules[i].file, modules[i].tasks)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
 		}
@@ -241,7 +182,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	}
 
 	// Third pass: generate workspace-level staging and install tasks from root config
-	workspaceTasks, err := cp.generateWorkspaceLevelTasks(allTasks)
+	workspaceTasks, err := cp.generateWorkspaceLevelTasks()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate workspace-level tasks: %w", err)
 	}
@@ -251,165 +192,128 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	return allTasks, nil
 }
 
-// processModule generates tasks for a single module
-func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo, workspaceVarEnv *util.VariableEnvironment) ([]*BuildTask, *TaskGenerator, map[string]any, error) {
+// checkNames checks the names the workspace's configs use that only the loaded toolchains can
+// confirm: every filter key names a platform, an architecture, a configuration (debug, release,
+// or one a config declares) or a toolchain, and every abstract keyword is one some toolchain's
+// flag_mappings maps.
+func (cp *ConfigParser) checkNames() error {
+	files := map[string]*config.File{}
+	if root := cp.Workspace.Config.File; root != nil {
+		files[filepath.Clean(root.Path)] = root
+	}
+	for _, m := range cp.Workspace.Modules {
+		files[filepath.Clean(m.File.Path)] = m.File
+	}
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	names := config.Names{Configurations: []string{"debug", "release"}}
+	for _, path := range paths {
+		for _, c := range files[path].ConfigurationNames() {
+			if !hasString(names.Configurations, c) {
+				names.Configurations = append(names.Configurations, c)
+			}
+		}
+	}
+	sort.Strings(names.Configurations)
+	for _, tc := range cp.ToolchainManager.ListToolchains() {
+		names.Toolchains = append(names.Toolchains, tc.Name)
+		for _, k := range tc.Keywords() {
+			if !hasString(names.Keywords, k) {
+				names.Keywords = append(names.Keywords, k)
+			}
+		}
+	}
+	sort.Strings(names.Keywords)
+
+	var problems []string
+	for _, path := range paths {
+		problems = append(problems, config.CheckFilterKeys(files[path].FilterKeys, names)...)
+		problems = append(problems, config.CheckKeywords(files[path].Keywords, names.Keywords)...)
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("the workspace's configs name what doesn't exist:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// processModule generates the target tasks of a module, from its config with the workspace
+// root's settings merged in
+func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo) ([]*BuildTask, *TaskGenerator, *config.File, error) {
 	util.LogInfo("Processing module: %s", modulePath)
 
-	// Create module-specific parser with chained variable environment
-	moduleParser := NewConfigParser(
-		cp.buildContext(),
-		cp.CLIDefines,
-		cp.ToolchainManager,
-		cp.DefaultToolchain,
-		cp.TemplateEngine,
-		cp.Workspace,
-		cp.DependencyResolver,
-		workspaceVarEnv,
-	)
-
+	moduleParser := NewConfigParser(cp.buildContext(), cp.CLIDefines, cp.ToolchainManager, cp.DefaultToolchain,
+		cp.TemplateEngine, cp.Workspace, cp.DependencyResolver)
+	moduleParser.CacheDir = cp.CacheDir
 	moduleParser.CurrentModule = modulePath
 	moduleParser.TargetRegistry = cp.TargetRegistry
 	moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
 
-	// For fetch dependencies, use the source directory (RelativePath) not the config file directory
-	// This allows the buildy config to reference source files relative to the fetched source
-	if strings.HasPrefix(modulePath, "@fetch:") && moduleInfo.RelativePath != "" {
-		moduleParser.ConfigFileDir = moduleInfo.RelativePath
-	} else if cp.Workspace.ConfigPath != "" {
-		// For explicit config path (e.g., dependency builds with override configs),
-		// use the workspace root for path resolution, not the config file's directory
+	// Paths in a module are relative to its directory; in a standalone config (a dependency's
+	// override config) to the workspace root, which is the fetched source
+	if cp.Workspace.ConfigPath != "" {
 		moduleParser.ConfigFileDir = cp.Workspace.RootDir
 	} else {
 		moduleParser.ConfigFileDir = filepath.Dir(moduleInfo.Path)
 	}
 
-	// Merge workspace root config into module config
-	moduleConfig := make(map[string]any)
-	for k, v := range moduleInfo.Config {
-		moduleConfig[k] = v
-	}
-
-	// Inherit environment section from workspace if module doesn't have one
-	if workspaceEnv, ok := cp.Workspace.Config.RawConfig["environment"].(map[string]any); ok {
-		if _, hasEnv := moduleConfig["environment"]; !hasEnv {
-			moduleConfig["environment"] = workspaceEnv
-		} else if moduleEnv, ok := moduleConfig["environment"].(map[string]any); ok {
-			mergedEnv := make(map[string]any)
-			for k, v := range workspaceEnv {
-				mergedEnv[k] = v
-			}
-			for k, v := range moduleEnv {
-				mergedEnv[k] = v
-			}
-			moduleConfig["environment"] = mergedEnv
-		}
-	}
-
-	if workspaceConfig, ok := cp.Workspace.Config.RawConfig["config"].(map[string]any); ok {
-		mergedModuleConfig := make(map[string]any)
-		for k, v := range workspaceConfig {
-			mergedModuleConfig[k] = v
-		}
-
-		if moduleConfigSection, ok := moduleConfig["config"].(map[string]any); ok {
-			for key, value := range moduleConfigSection {
-				if valueList, ok := value.([]any); ok {
-					if existingList, ok := mergedModuleConfig[key].([]any); ok {
-						mergedModuleConfig[key] = append(existingList, valueList...)
-					} else {
-						mergedModuleConfig[key] = value
-					}
-				} else {
-					mergedModuleConfig[key] = value
-				}
-			}
-		}
-		moduleConfig["config"] = mergedModuleConfig
-	}
-
-	// Generate the module's targets; its packaging tasks come once every module's targets exist
-	moduleTasks, gen, err := moduleParser.GenerateTasks(moduleConfig)
+	file := config.Inherit(cp.Workspace.Config.File, moduleInfo.File)
+	moduleTasks, gen, err := moduleParser.GenerateTasks(file)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
 	}
 	for _, task := range moduleTasks {
 		task.Module = modulePath
 	}
-
-	return moduleTasks, gen, moduleConfig, nil
+	return moduleTasks, gen, file, nil
 }
 
 // generateWorkspaceLevelTasks generates staging and install tasks from the workspace root config
-func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) ([]*BuildTask, error) {
-	var tasks []*BuildTask
-
-	rootConfig := cp.Workspace.Config.RawConfig
-	if rootConfig == nil {
-		return tasks, nil
+func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
+	root := cp.Workspace.Config.File
+	if root == nil {
+		return nil, nil
 	}
 
 	// A root config that is also a module (".", as in discovery mode) has had its staging and
 	// install generated with the module; generating them again would produce every output twice
-	rootConfigPath := cp.Workspace.ConfigPath
-	if rootConfigPath == "" {
-		rootConfigPath = filepath.Join(cp.Workspace.RootDir, "buildy.yaml")
-	}
 	for _, module := range cp.Workspace.Modules {
-		if filepath.Clean(module.Path) == filepath.Clean(rootConfigPath) {
-			return tasks, nil
+		if filepath.Clean(module.Path) == filepath.Clean(root.Path) {
+			return nil, nil
 		}
 	}
 
-	// Determine output directory for workspace-level tasks
 	outputDir := filepath.Join(cp.Workspace.RootDir, "build", fmt.Sprintf("%s-%s-%s", cp.Platform, cp.Architecture, cp.Configuration))
 
-	// Create a task generator for workspace-level tasks
-	tg := NewTaskGenerator(
-		cp.Platform,
-		cp.Architecture,
-		cp.Configuration,
-		cp.ToolchainManager,
-		cp.TemplateEngine,
-		cp.DependencyResolver,
-		cp.VarEnv,
-		cp.Workspace,
-	)
+	tg := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
+		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
 	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir)
-	tg.ConfigHash = hashConfig(rootConfig)
+	tg.ConfigHash = hashConfig(root)
 	if cp.CurrentToolchain != nil {
-		tg.SetToolchain(cp.CurrentToolchain)
+		if err := tg.SetToolchain(cp.CurrentToolchain); err != nil {
+			return nil, err
+		}
 	}
 
-	// Generate staging tasks from workspace root config
-	if staging, ok := rootConfig["staging"].(map[string]any); ok {
-		// Merge config for variable resolution
-		mergedConfig := make(map[string]any)
-		for k, v := range rootConfig {
-			mergedConfig[k] = v
-		}
-
-		stagingTasks, err := tg.generateStagingTasks(staging, mergedConfig, outputDir, existingTasks)
+	var tasks []*BuildTask
+	if root.Staging != nil {
+		stagingTasks, err := tg.generateStagingTasks(root.Staging, outputDir)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate staging tasks: %w", err)
 		}
 		tasks = append(tasks, stagingTasks...)
 	}
-
-	// Generate install tasks from workspace root config
-	if install, ok := rootConfig["install"].([]any); ok {
-		mergedConfig := make(map[string]any)
-		for k, v := range rootConfig {
-			mergedConfig[k] = v
-		}
-
-		installTasks, err := tg.generateInstallTasks(install, mergedConfig, outputDir, tasks)
+	if len(root.Install) > 0 {
+		installTasks, err := tg.generateInstallTasks(root.Install, root.Project, outputDir)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate install tasks: %w", err)
 		}
 		tasks = append(tasks, installTasks...)
 	}
-
 	return tasks, nil
 }
 
@@ -468,9 +372,9 @@ func hasInput(task *BuildTask, path string) bool {
 	return false
 }
 
-// GenerateTasks generates a module's target tasks from its configuration, and returns the task
-// generator that generates its packaging tasks later
-func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, *TaskGenerator, error) {
+// GenerateTasks generates a module's target tasks from its (inherited) config, and returns the
+// task generator that generates its packaging tasks later
+func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGenerator, error) {
 	if cp.TaskIDGen == nil {
 		moduleName := cp.CurrentModule
 		if moduleName == "" {
@@ -479,167 +383,148 @@ func (cp *ConfigParser) GenerateTasks(config map[string]any) ([]*BuildTask, *Tas
 		cp.TaskIDGen = NewTaskIDGenerator(moduleName)
 	}
 
-	// Select and initialize toolchain
-	tc, err := cp.SelectToolchain(config)
+	tc, err := cp.SelectToolchain(file)
 	if err != nil {
 		return nil, nil, err
 	}
 	cp.CurrentToolchain = tc
-	cp.ToolchainHash = resource.HashToolchainConfig(tc)
-
-	toolMatcher, err := resource.NewToolMatcher(tc)
-	if err != nil {
-		return nil, nil, err
-	}
-	cp.ToolMatcher = toolMatcher
-	cp.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, cp.Platform, cp.Configuration)
 	util.LogInfo("Using toolchain: %s (%s)", tc.Name, tc.Description)
 
-	// Build variable environment
-	if err := cp.setupVariableEnvironment(config); err != nil {
+	root := ""
+	if cp.Workspace != nil {
+		root = cp.Workspace.RootDir
+	}
+	if cp.VarEnv, err = Variables(file, cp.buildContext(), root, cp.CLIDefines); err != nil {
 		return nil, nil, err
 	}
 
-	// Compute output_dir early so it can be used in artifacts section
-	outputDir, err := cp.getOutputDir(config)
+	outputDir, err := cp.getOutputDir(file)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Add output_dir to variable environment for use in artifacts and other sections
 	cp.VarEnv.SetVariable("output_dir", outputDir, "built-in")
-
-	// Note: Variable resolution is deferred to task generation time.
-	// This allows task-time variables (like ${basename}, ${filename}) to be
-	// resolved in context, and consolidates all resolution to one location.
-
-	// Create path resolver
-	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, "")
-	if cp.Workspace != nil {
-		cp.PathResolver.WorkspaceRoot = cp.Workspace.RootDir
+	cp.VarEnv.SetVariable("out_dir", outputDir, "built-in")
+	cp.VarEnv.SetVariable("gen_dir", filepath.Join(outputDir, "gen"), "built-in")
+	if cp.CacheDir != "" {
+		cp.VarEnv.SetVariable("cache_dir", cp.CacheDir, "built-in")
 	}
 
-	// Create task generator
-	taskGen := NewTaskGenerator(
-		cp.Platform,
-		cp.Architecture,
-		cp.Configuration,
-		cp.ToolchainManager,
-		cp.TemplateEngine,
-		cp.DependencyResolver,
-		cp.VarEnv,
-		cp.Workspace,
-	)
+	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, root)
+
+	taskGen := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
+		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	taskGen.SetPathResolver(cp.PathResolver)
-	taskGen.SetToolchain(tc)
+	if err := taskGen.SetToolchain(tc); err != nil {
+		return nil, nil, err
+	}
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.TargetRegistry = cp.TargetRegistry
-	taskGen.ConfigHash = hashConfig(config)
+	taskGen.ConfigHash = hashConfig(file)
 
-	// Generate the target tasks - pass raw config, resolution happens during task generation
-	tasks, err := taskGen.GenerateTargetTasks(config, outputDir)
+	tasks, err := taskGen.GenerateTargetTasks(file, outputDir)
 	return tasks, taskGen, err
 }
 
-// setupVariableEnvironment builds the variable environment hierarchy
-func (cp *ConfigParser) setupVariableEnvironment(config map[string]any) error {
-	// Extract sections
-	project := cp.YAMLParser.ExtractSection(config, "project")
-	platforms := cp.YAMLParser.ExtractSection(config, "platforms")
-	architectures := cp.YAMLParser.ExtractSection(config, "architectures")
-	configurations := cp.YAMLParser.ExtractSection(config, "configurations")
-
-	// 1. Workspace-level variables
-	cp.VarEnv.PushScope("workspace")
-
-	if variablesSection, ok := config["variables"].(map[string]any); ok {
-		if err := cp.VarEnv.ImportEnvVars(variablesSection, "buildy.yaml"); err != nil {
-			return err
+// Variables builds a config's variables for a build, in this order of priority, highest first:
+//
+//  1. --define VAR=value
+//  2. imported environment variables (variables.import_env_vars)
+//  3. the configuration's variables (configurations.<config>.variables)
+//  4. the architecture's (architectures.<arch>.variables)
+//  5. the platform's (variables.platforms.<platform>, platforms.<platform>.variables)
+//  6. the module's variables, then the workspace root's (variables)
+//  7. the built-in variables (platform, arch, config, workspace, project_name, ...)
+//
+// file is a module's config with the root's merged in (config.Inherit), or the root's own.
+func Variables(file *config.File, ctx BuildContext, workspaceRoot string, cliDefines map[string]string) (*util.VariableEnvironment, error) {
+	builtins := util.NewVariableEnvironment(nil)
+	builtins.PushScope("built-in")
+	builtins.SetVariable("platform", ctx.Platform, "built-in")
+	builtins.SetVariable("arch", ctx.Architecture, "built-in")
+	builtins.SetVariable("config", ctx.Configuration, "built-in")
+	if workspaceRoot != "" {
+		builtins.SetVariable("workspace", workspaceRoot, "built-in")
+	}
+	projectName, projectVersion := "unknown", "0.0.0"
+	if file.Project != nil {
+		if file.Project.Name != "" {
+			projectName = file.Project.Name
 		}
-		cp.VarEnv.ExtractPlatformVariables(variablesSection, cp.Platform, "variables")
+		if file.Project.Version != "" {
+			projectVersion = file.Project.Version
+		}
 	}
-
-	cp.VarEnv.ExtractVariablesFromSection(config, "workspace")
-
-	// 2. Project-level variables
-	cp.VarEnv.PushScope("project")
-	cp.VarEnv.ExtractVariablesFromSection(project, "project")
-
-	// 3. Platform-specific variables
-	platformConfig := cp.YAMLParser.ExtractSection(platforms, cp.Platform)
-	cp.VarEnv.PushScope(fmt.Sprintf("platform[%s]", cp.Platform))
-	cp.VarEnv.ExtractVariablesFromSection(platformConfig, fmt.Sprintf("platform[%s]", cp.Platform))
-
-	// 4. Architecture-specific variables
-	archConfig := cp.YAMLParser.ExtractSection(architectures, cp.Architecture)
-	cp.VarEnv.PushScope(fmt.Sprintf("architecture[%s]", cp.Architecture))
-	cp.VarEnv.ExtractVariablesFromSection(archConfig, fmt.Sprintf("architecture[%s]", cp.Architecture))
-
-	// 5. Configuration-specific variables
-	configConfig := cp.YAMLParser.ExtractSection(configurations, cp.Configuration)
-	cp.VarEnv.PushScope(fmt.Sprintf("configuration[%s]", cp.Configuration))
-	cp.VarEnv.ExtractVariablesFromSection(configConfig, fmt.Sprintf("configuration[%s]", cp.Configuration))
-
-	// 6. Built-in variables
-	cp.VarEnv.PushScope("built-in")
-	cp.VarEnv.SetVariable("platform", cp.Platform, "built-in")
-	cp.VarEnv.SetVariable("arch", cp.Architecture, "built-in")
-	cp.VarEnv.SetVariable("config", cp.Configuration, "built-in")
-	if cp.Workspace != nil {
-		cp.VarEnv.SetVariable("workspace", cp.Workspace.RootDir, "built-in")
-	}
-
-	projectName := "unknown"
-	if name, ok := project["name"].(string); ok {
-		projectName = name
-	}
-	cp.VarEnv.SetVariable("project_name", projectName, "built-in")
-
-	projectVersion := "0.0.0"
-	if version, ok := project["version"]; ok {
-		projectVersion = fmt.Sprintf("%v", version)
-	}
-	cp.VarEnv.SetVariable("project_version", projectVersion, "built-in")
-
+	builtins.SetVariable("project_name", projectName, "built-in")
+	builtins.SetVariable("project_version", projectVersion, "built-in")
 	baseDir := "build"
-	if outputConfig, ok := config["output"].(map[string]any); ok {
-		if bd, ok := outputConfig["base_dir"].(string); ok {
-			baseDir = bd
+	if file.Output.BaseDir != "" {
+		baseDir = file.Output.BaseDir
+	}
+	builtins.SetVariable("base_dir", baseDir, "output.base_dir")
+
+	layer := func(parent *util.VariableEnvironment, source string, vars ...map[string]config.Scalar) *util.VariableEnvironment {
+		env := parent.CreateChild()
+		env.PushScope(source)
+		for _, m := range vars {
+			for name, value := range m {
+				env.SetVariable(name, string(value), source)
+			}
+		}
+		return env
+	}
+	env := layer(builtins, "variables", file.Variables.Values)
+	platformVars := []map[string]config.Scalar{file.Variables.Platforms[ctx.Platform]}
+	if p := file.Platforms[ctx.Platform]; p != nil {
+		platformVars = append(platformVars, p.Variables)
+	}
+	env = layer(env, "platform["+ctx.Platform+"]", platformVars...)
+	if a := file.Architectures[ctx.Architecture]; a != nil {
+		env = layer(env, "architecture["+ctx.Architecture+"]", a.Variables)
+	}
+	var configVars []map[string]config.Scalar
+	for _, levels := range []map[string]*config.Level{file.Configurations, file.Environment.Configurations} {
+		if c := levels[ctx.Configuration]; c != nil {
+			configVars = append(configVars, c.Variables)
 		}
 	}
-	cp.VarEnv.SetVariable("base_dir", baseDir, "output.base_dir")
+	env = layer(env, "configuration["+ctx.Configuration+"]", configVars...)
 
-	// 7. CLI-provided overrides
-	if len(cp.CLIDefines) > 0 {
-		cp.VarEnv.PushScope("cli")
-		for name, value := range cp.CLIDefines {
-			cp.VarEnv.SetVariable(name, value, "cli")
+	imports := env.CreateChild()
+	imports.PushScope("import_env_vars")
+	for _, imp := range file.Variables.ImportEnvVars {
+		if value, ok := os.LookupEnv(imp.Name); ok {
+			imports.SetVariable(imp.Name, value, "environment")
+		} else if !imp.Default.Null {
+			imports.SetVariable(imp.Name, imp.Default.Value, "default")
+		} else {
+			return nil, fmt.Errorf("required environment variable '%s' is not set (variables.import_env_vars at %s)\n"+
+				"       To fix: export %s=/path/to/value", imp.Name, imp.Pos, imp.Name)
 		}
 	}
 
-	return nil
+	cli := imports.CreateChild()
+	cli.PushScope("cli")
+	for name, value := range cliDefines {
+		cli.SetVariable(name, value, "cli")
+	}
+	return cli, nil
 }
 
-// getOutputDir gets output directory pattern and resolves template variables
-func (cp *ConfigParser) getOutputDir(config map[string]any) (string, error) {
-	outputConfig := cp.YAMLParser.ExtractSection(config, "output")
-
+// getOutputDir resolves the module's output directory: output.pattern, by default
+// ${base_dir}/<platform>-<arch>-<config>
+func (cp *ConfigParser) getOutputDir(file *config.File) (string, error) {
 	pattern := fmt.Sprintf("${base_dir}/%s-%s-%s", cp.Platform, cp.Architecture, cp.Configuration)
-	if p, ok := outputConfig["pattern"].(string); ok {
-		pattern = p
+	if file.Output.Pattern != "" {
+		pattern = file.Output.Pattern
 	}
-
-	errors := []string{}
-	resolvedPattern := cp.VarEnv.ResolveString(pattern, &errors, 10)
-
-	if len(errors) > 0 {
-		return "", fmt.Errorf("output pattern contains unresolved variables: %v", errors)
+	resolved, err := resolveStrict(cp.VarEnv, pattern, "output.pattern")
+	if err != nil {
+		return "", err
 	}
-
-	if cp.Workspace != nil && !filepath.IsAbs(resolvedPattern) {
-		resolvedPattern = filepath.Join(cp.Workspace.RootDir, resolvedPattern)
+	if cp.Workspace != nil && !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(cp.Workspace.RootDir, resolved)
 	}
-
-	util.LogInfo("Output directory pattern '%s' resolved to '%s'", pattern, resolvedPattern)
-	return resolvedPattern, nil
+	util.LogInfo("Output directory pattern '%s' resolved to '%s'", pattern, resolved)
+	return resolved, nil
 }

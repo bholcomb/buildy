@@ -4,17 +4,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
-
-// SourceEntry represents a source file entry that can be either a simple string
-// or an object with pattern and optional flag
-type SourceEntry struct {
-	Pattern  string
-	Optional bool
-}
 
 // PathResolver handles source file and include directory resolution
 type PathResolver struct {
@@ -45,94 +38,18 @@ func (pr *PathResolver) ClearVirtualFiles() {
 	pr.VirtualFiles = []string{}
 }
 
-// ParseSourceEntries parses source entries from config, handling both string and object forms
-// Supports:
-//   - Simple string: "src/*.cpp"
-//   - Object form: {pattern: "src/*.cpp", optional: true}
-func (pr *PathResolver) ParseSourceEntries(sourcesRaw any) ([]SourceEntry, error) {
-	entries := []SourceEntry{}
-
-	switch v := sourcesRaw.(type) {
-	case string:
-		entries = append(entries, SourceEntry{Pattern: v, Optional: false})
-	case []any:
-		for i, item := range v {
-			switch s := item.(type) {
-			case string:
-				entries = append(entries, SourceEntry{Pattern: s, Optional: false})
-			case map[string]any:
-				pattern, ok := s["pattern"].(string)
-				if !ok {
-					return nil, fmt.Errorf("source entry %d: missing 'pattern' field", i)
-				}
-				optional := false
-				if opt, ok := s["optional"].(bool); ok {
-					optional = opt
-				}
-				entries = append(entries, SourceEntry{Pattern: pattern, Optional: optional})
-			default:
-				return nil, fmt.Errorf("source entry %d: must be a string or object with 'pattern' field", i)
-			}
-		}
-	case []string:
-		for _, s := range v {
-			entries = append(entries, SourceEntry{Pattern: s, Optional: false})
-		}
-	default:
-		return nil, fmt.Errorf("sources must be a string or list")
-	}
-
-	return entries, nil
-}
-
-// ResolveSources resolves source file paths from config, expanding globs
-// Returns an error if a non-optional glob matches no files
-// Deprecated: Use ResolveSourcesWithContext for filtered sources
-func (pr *PathResolver) ResolveSources(itemConfig map[string]any) ([]string, error) {
-	return pr.ResolveSourcesWithContext(itemConfig, BuildContext{})
-}
-
-// ResolveSourcesForPlatform resolves source file paths with platform filtering
-// Deprecated: Use ResolveSourcesWithContext instead
-func (pr *PathResolver) ResolveSourcesForPlatform(itemConfig map[string]any, platform string) ([]string, error) {
-	return pr.ResolveSourcesWithContext(itemConfig, BuildContext{Platform: platform})
-}
-
-// ResolveSourcesWithContext resolves source file paths with full filter support.
-// Sources can be:
-//   - Simple strings (always included)
-//   - Filter maps (included when filter matches context)
-//
-// Example:
-//
-//	sources:
-//	  - "src/common.c"        # Always included
-//	  - linux:                # Included when platform=linux
-//	      - "src/linux.c"
-//	  - windows:              # Included when platform=windows
-//	      - "src/windows.c"
-func (pr *PathResolver) ResolveSourcesWithContext(itemConfig map[string]any, ctx BuildContext) ([]string, error) {
-	sourcesRaw, ok := itemConfig["sources"]
-	if !ok {
-		return []string{}, nil
-	}
-
-	// Use ResolveFilteredList to get the filtered source patterns
-	patterns := ResolveFilteredList(sourcesRaw, ctx)
-
-	// Expand globs for each pattern
-	var allSources []string
-	for _, pattern := range patterns {
-		// Check if this is an optional pattern (object form with optional: true)
-		// For now, treat all patterns from filtered list as required
-		resolved, err := pr.expandGlob(pattern, false)
+// ResolveSources expands a target's source patterns, in order, to absolute files. A pattern that
+// matches no file is an error unless it is optional ({pattern: ..., optional: true}).
+func (pr *PathResolver) ResolveSources(sources []config.Source) ([]string, error) {
+	var all []string
+	for _, source := range sources {
+		resolved, err := pr.expandGlob(source.Pattern, source.Optional)
 		if err != nil {
 			return nil, err
 		}
-		allSources = append(allSources, resolved...)
+		all = append(all, resolved...)
 	}
-
-	return allSources, nil
+	return all, nil
 }
 
 // expandGlob expands a glob pattern, relative to the config file directory, to a sorted list of
@@ -202,90 +119,16 @@ func (pr *PathResolver) matchVirtualFiles(pattern string) []string {
 	return matches
 }
 
-// ResolveIncludeDirs resolves include directory paths relative to config file directory
-func (pr *PathResolver) ResolveIncludeDirs(itemConfig map[string]any) ([]string, error) {
-	includeDirsRaw, ok := itemConfig["include_dirs"]
-	if !ok {
-		return []string{}, nil
+// ResolveIncludeDirs makes include directories absolute, relative to the config file's directory
+func (pr *PathResolver) ResolveIncludeDirs(dirs []string) []string {
+	result := make([]string, len(dirs))
+	for i, dir := range dirs {
+		result[i] = pr.absolute(dir)
 	}
-
-	var includeDirs []string
-
-	resolvePath := pr.absolute
-
-	switch v := includeDirsRaw.(type) {
-	case string:
-		includeDirs = append(includeDirs, resolvePath(v))
-	case []any:
-		for _, item := range v {
-			if str, ok := item.(string); ok {
-				includeDirs = append(includeDirs, resolvePath(str))
-			}
-		}
-	case []string:
-		for _, str := range v {
-			includeDirs = append(includeDirs, resolvePath(str))
-		}
-	}
-
-	return includeDirs, nil
-}
-
-// ResolveLibDirs resolves library directory paths
-func (pr *PathResolver) ResolveLibDirs(itemConfig map[string]any) ([]string, error) {
-	libDirsRaw, ok := itemConfig["lib_dirs"]
-	if !ok {
-		return []string{}, nil
-	}
-
-	return pr.resolvePathList(libDirsRaw)
-}
-
-// resolvePathList resolves a list of paths
-func (pr *PathResolver) resolvePathList(pathsRaw any) ([]string, error) {
-	var paths []string
-
-	resolvePath := pr.absolute
-
-	switch v := pathsRaw.(type) {
-	case string:
-		paths = append(paths, resolvePath(v))
-	case []any:
-		for _, item := range v {
-			if str, ok := item.(string); ok {
-				paths = append(paths, resolvePath(str))
-			}
-		}
-	case []string:
-		for _, str := range v {
-			paths = append(paths, resolvePath(str))
-		}
-	}
-
-	return paths, nil
+	return result
 }
 
 // ResolveRelativePath resolves a path relative to the config file directory to an absolute path
 func (pr *PathResolver) ResolveRelativePath(path string) string {
 	return pr.absolute(path)
-}
-
-// ExtractStringList extracts a string slice from various input types
-func ExtractStringList(value any) []string {
-	result := []string{}
-	switch v := value.(type) {
-	case string:
-		if strings.TrimSpace(v) != "" {
-			result = append(result, v)
-		}
-	case []any:
-		for _, item := range v {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
-			}
-		}
-	case []string:
-		result = v
-	}
-	return result
 }

@@ -1,0 +1,15 @@
+# Root variables reach modules (finding 1.4), and a module's environment.compile adds to the
+# root's (finding 1.5): the module only adds a define, and keeps the root's c_standard and define.
+project:
+  name: root_settings
+
+variables:
+  APPDEF: "42"
+
+workspace:
+  modules: [app]
+
+environment:
+  compile:
+    c_standard: "c11"
+    defines: ["ROOTDEF=1"]

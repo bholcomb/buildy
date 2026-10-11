@@ -382,31 +382,8 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 ) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
 
-	// Get sources
-	sourcesRaw, ok := itemConfig["sources"]
-	if !ok {
-		return tasks, nil
-	}
-
-	var sources []string
-	switch v := sourcesRaw.(type) {
-	case string:
-		// Expand glob pattern
-		matches, err := filepath.Glob(v)
-		if err != nil {
-			return nil, fmt.Errorf("failed to expand glob %s: %w", v, err)
-		}
-		sources = matches
-		sort.Strings(sources)
-	case []any:
-		for _, s := range v {
-			if str, ok := s.(string); ok {
-				sources = append(sources, str)
-			}
-		}
-	case []string:
-		sources = v
-	}
+	// The target's sources, resolved to files
+	sources, _ := itemConfig["sources"].([]string)
 
 	action := step.Action
 
@@ -589,40 +566,13 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 
 	// Handle target dependencies (depends_on.targets) for all target types
 	// This ONLY adds build order dependencies (no linking) - use for code generators, etc.
-	dependsOnTargets := []string{}
-	if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
-		if targets, ok := depsMap["targets"].([]any); ok {
-			for _, d := range targets {
-				if str, ok := d.(string); ok {
-					dependsOnTargets = append(dependsOnTargets, str)
-				}
-			}
-		}
-	} else if deps, ok := itemConfig["depends_on"].([]any); ok {
-		// Handle flat format: depends_on: [...]
-		for _, d := range deps {
-			if str, ok := d.(string); ok {
-				dependsOnTargets = append(dependsOnTargets, str)
-			}
-		}
+	if dependsOn, ok := itemConfig["depends_on"].(map[string]any); ok {
+		targets, _ := dependsOn["targets"].([]string)
+		dependencies = append(dependencies, targets...)
 	}
 
-	// Add build order dependencies for depends_on.targets (no linking)
-	for _, dep := range dependsOnTargets {
-		dependencies = append(dependencies, dep)
-	}
-
-	// Extract libs from itemConfig - these establish both linking AND build order
-	libsFromConfig := []string{}
-	if libs, ok := itemConfig["libs"].([]any); ok {
-		for _, lib := range libs {
-			if libStr, ok := lib.(string); ok {
-				libsFromConfig = append(libsFromConfig, libStr)
-			}
-		}
-	} else if libs, ok := itemConfig["libs"].([]string); ok {
-		libsFromConfig = libs
-	}
+	// The target's libs establish both linking and build order
+	libsFromConfig, _ := itemConfig["libs"].([]string)
 
 	// Handle library linking for executables and shared libraries
 	// libs: establishes both build order AND linking

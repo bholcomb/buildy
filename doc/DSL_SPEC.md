@@ -113,14 +113,19 @@ configurations:    # Per-configuration settings (optional)
 ### Strict Validation
 
 Every config file (the workspace root, every module, a dependency's override config) is read by
-one loader that rejects duplicate keys and validates the file before anything is generated. A key
-buildy doesn't read is an error, not something silently ignored, and so is a missing required
-field. Each error names the file and the key, with a suggestion for a likely typo:
+one loader into typed models, and validated before anything is generated. A key buildy doesn't
+read is an error, not something silently ignored, and so are a duplicate key, a value of the
+wrong type and a missing required field. Each error names the file, the line and the key path,
+with a suggestion for a likely typo:
 
 ```
 FATAL: Failed to load the workspace: /src/game/buildy.yaml is not a valid buildy config:
-  - unknown key 'targets.executables[0] (app).defnies' (did you mean 'defines'?)
+  - line 9: unknown key 'targets.executables[0] (app).defnies' (did you mean 'defines'?)
 ```
+
+Two kinds of name are checked once the toolchains are loaded, since a toolchain can define them:
+[filter keys](#filtered-lists) and abstract keywords (`optimisation: full` is an error suggesting
+`optimization`).
 
 Required fields: `project.name` in the root config; `name` and `language` on every target;
 `sources` on C and C++ targets; `path` on Go and Rust targets. The old `library:`, `executable:`
@@ -225,12 +230,16 @@ Priority from highest to lowest:
 
 1. CLI `--define VAR=value`
 2. Imported environment variables (via `import_env_vars`)
-3. Configuration-specific variables (`configurations.debug.variables`)
+3. Configuration-specific variables (`configurations.debug.variables`, `environment.configurations.debug.variables`)
 4. Architecture-specific variables (`architectures.x86_64.variables`)
-5. Platform-specific variables (`variables.platforms.linux`)
-6. Project-level variables
-7. Workspace-level variables
+5. Platform-specific variables (`variables.platforms.linux`, `platforms.linux.variables`)
+6. Project-level variables: the module's `variables`
+7. Workspace-level variables: the root config's `variables`
 8. Built-in variables
+
+The root config's variables, imports and platform variables reach every module (a module's own
+override them), and the dependency definitions see the root's. A `${name}` that resolves to
+nothing is an error naming where it is used.
 
 ### Built-in Variables
 
@@ -242,7 +251,7 @@ Priority from highest to lowest:
 | `${workspace}` | Workspace root directory | `/home/user/myproject` |
 | `${project_name}` | From `project.name` | `game_engine` |
 | `${project_version}` | From `project.version` | `2.0.0` |
-| `${out_dir}` | Output directory | `build/linux-x86_64-debug` |
+| `${out_dir}` | Output directory (also `${output_dir}`) | `build/linux-x86_64-debug` |
 | `${cache_dir}` | Cache directory | `.buildy_cache` |
 | `${gen_dir}` | Generated files directory | `build/.../gen` |
 
@@ -684,6 +693,39 @@ environment:
         flags: ["-flto", "-Wl,-O1"]
 ```
 
+A settings level (`environment.compile`, `config`, a configuration, a platform or an architecture
+section) takes `cpp_standard`, `c_standard`, `output_prefix`, `defines`, `flags`, `remove_flags`,
+`remove_defines`, and abstract keywords: any key some toolchain's `flag_mappings` defines
+(`optimization`, `warnings`, `symbols`, `runtime`, or a custom one). A configuration, platform or
+architecture section also takes `compile:`, `link:` and `variables:`. Any other key is an error.
+
+### How Settings Merge
+
+A module's settings are the workspace root's merged with its own, by three rules:
+
+- **Mappings merge key by key.** A key both set merges its two values by these rules.
+- **Lists append**: the root's items, then the module's.
+- **Scalars override**: a value the module sets replaces the root's (`output_prefix: ""` counts as
+  set).
+
+So a module that adds `environment.compile.defines: [X]` keeps the root's `c_standard`, flags and
+defines, and gets `X` after them. What merges: `variables`, `environment` (`toolchains`, `compile`,
+`link`, `configurations`), `config`, and the settings of `platforms`, `architectures` and
+`configurations`. A module's targets, artifacts, staging, install, output, project and toolchain
+are its own.
+
+The levels then merge in this order, by the same rules: `config`, `environment.compile` (and
+`environment.link`), the build's platform section, its architecture section, then its
+configuration (`configurations.<config>`, then `environment.configurations.<config>`). Each level's
+`compile:` section merges into the level first. The abstract keywords' flags come first in the
+result, and every `remove_flags` and `remove_defines` applies last.
+
+A platform section's `targets` override the module's targets of the same name and type: each field
+the override sets replaces the target's, except `compile` and `link`, which merge into the target's
+by the rules above. An override of a target the module doesn't have is an error.
+
+Merging never changes the loaded configuration: a module's settings are a new value.
+
 ---
 
 ## 6. Targets Section
@@ -880,6 +922,8 @@ targets:
 | `{pattern: "...", optional: true}` | **Optional** - empty matches are silently skipped |
 | `{pattern: "...", optional: false}` | Same as string form (default) |
 
+Either form can sit under a filter key: `- linux: [{pattern: "src/linux/*.c", optional: true}]`.
+
 ### Filtered Lists
 
 Many list fields support **filtering** based on four dimensions: **platform**, **architecture**, **configuration**, and **toolchain**. Filtering allows conditional inclusion of items without duplicating entire target definitions.
@@ -964,9 +1008,15 @@ targets:
 
 **Filter evaluation order:**
 
-Filters are evaluated in the order they appear in the YAML array. All matching filters contribute their items to the final list. The same filter key can appear multiple times.
+Filters are evaluated in the order they appear in the YAML array. All matching filters contribute their items to the final list. The same filter key can appear multiple times. Within one map item with several keys, the keys that match contribute in the order they are written, so `{linux: [-DA], debug: [-DB]}` gives `-DA -DB` on every run.
 
-**Note:** Filters match exact strings. The platform filter matches the `--platform` argument (e.g., `linux`, `windows`, `macos`). Configuration matches `--config` (e.g., `debug`, `release`, or any user-defined value like `ProfileBuild`).
+**Filter keys are checked.** A key must be a [platform or architecture](#platform-and-architecture-names) (aliases included), a configuration (`debug`, `release`, or one the workspace declares under `configurations` or `environment.configurations`), or a toolchain name. Anything else is an error, with a suggestion:
+
+```
+buildy.yaml:12: filter key 'linxu' in 'targets.executables[0] (app).defines[1]' is not a platform, architecture, configuration or toolchain (did you mean 'linux'?)
+```
+
+The same filtered-list form works for `sources`, `defines`, `libs`, `include_dirs` and `flags` of a target, the `flags`, `defines`, `remove_flags` and `remove_defines` of every settings level and its `compile:` and `link:` sections, staging `files`, and `workspace.modules`.
 
 ### Executables
 

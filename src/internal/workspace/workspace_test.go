@@ -2,15 +2,15 @@ package workspace
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
+	"buildy/internal/config"
 	"buildy/internal/resource"
 	"buildy/pkg/util"
-
-	"gopkg.in/yaml.v3"
 )
 
 // moduleNames loads the workspace at root for ctx and returns its module paths.
@@ -129,12 +129,9 @@ func TestModuleListErrors(t *testing.T) {
 	} {
 		root := t.TempDir()
 		writeFiles(t, root, map[string]string{"buildy.yaml": "project: {name: ws}\nworkspace:\n  modules: " + modules + "\n"})
-		ws, err := NewWorkspace(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := ws.DiscoverModules(linuxDebug()); err == nil {
-			t.Errorf("modules: %s was accepted", modules)
+		// The loader rejects the file
+		if _, err := NewWorkspace(root); err == nil || !strings.Contains(err.Error(), "workspace.modules") {
+			t.Errorf("modules: %s: %v", modules, err)
 		}
 	}
 }
@@ -171,7 +168,7 @@ func TestShippedConfigsValidate(t *testing.T) {
 	for _, path := range configs {
 		root := filepath.Base(filepath.Dir(path)) == "examples" || filepath.Dir(path) == repoRoot ||
 			filepath.Base(filepath.Dir(filepath.Dir(path))) == "examples" || strings.HasSuffix(path, "_build.yaml")
-		if _, err := loadConfigFile(path, root); err != nil {
+		if _, err := config.LoadFile(path, root); err != nil {
 			t.Errorf("%v", err)
 		}
 	}
@@ -215,8 +212,16 @@ func TestUnknownKeysFailToLoad(t *testing.T) {
 
 // The schema matches what the generator reads: Go and Rust targets have a path, not sources.
 func TestSchemaAcceptsWhatTheGeneratorReads(t *testing.T) {
-	config := map[string]any{}
-	if err := yaml.Unmarshal([]byte(`
+	dir := t.TempDir()
+	load := func(text string) error {
+		path := filepath.Join(dir, "buildy.yaml")
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := config.LoadFile(path, true)
+		return err
+	}
+	if err := load(`
 project: {name: ok, toolchain: gcc-cpp-linux}
 toolchain: gcc-cpp-linux
 architectures: {x86_64: {defines: [X64]}}
@@ -239,11 +244,8 @@ targets:
       link: {flags: [-s], remove_flags: [-g]}
   static_libraries:
     - {name: rustlib, language: rust, path: lib}
-`), &config); err != nil {
-		t.Fatal(err)
-	}
-	if problems := NewYAMLParser().ValidateConfig(config, true); len(problems) > 0 {
-		t.Errorf("rejected: %v", problems)
+`); err != nil {
+		t.Errorf("rejected: %v", err)
 	}
 
 	for _, bad := range []string{
@@ -253,11 +255,7 @@ targets:
 		"project: {name: x}\nenvironment:\n  dependency_builds: {}\n",
 		"targets: {}\n",
 	} {
-		config := map[string]any{}
-		if err := yaml.Unmarshal([]byte(bad), &config); err != nil {
-			t.Fatal(err)
-		}
-		if problems := NewYAMLParser().ValidateConfig(config, true); len(problems) == 0 {
+		if err := load(bad); err == nil {
 			t.Errorf("accepted:\n%s", bad)
 		}
 	}

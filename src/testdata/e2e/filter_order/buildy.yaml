@@ -1,0 +1,19 @@
+# A filter map with several matching keys contributes them in the order written, on every run
+# (finding 1.2).
+project:
+  name: filter_order
+
+environment:
+  compile:
+    cpp_standard: "c++17"
+
+targets:
+  executables:
+    - name: app
+      language: cpp
+      sources: ["main.cpp"]
+      defines:
+        - {linux: [A], debug: [B], x86_64: [C], gcc-cpp-linux: [D]}
+        - {release: [R], linux: [E]}
+      libs:
+        - {linux: [m], debug: [dl], x86_64: [pthread]}

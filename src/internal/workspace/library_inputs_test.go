@@ -93,7 +93,7 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps, nil).GenerateWorkspaceTasks()
+	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}

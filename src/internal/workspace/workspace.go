@@ -7,106 +7,41 @@ import (
 	"sort"
 	"strings"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// ModuleInfo represents information about a discovered module
+// ModuleInfo is a loaded module
 type ModuleInfo struct {
-	Path         string         `json:"path"`
-	RelativePath string         `json:"relative_path"`
-	Config       map[string]any `json:"-"` // Not serialized to cache
-	Targets      []string       `json:"targets"`
+	Path         string       `json:"path"`
+	RelativePath string       `json:"relative_path"`
+	File         *config.File `json:"-"`
+	Targets      []string     `json:"targets"`
 }
 
-// WorkspaceConfig represents workspace configuration from root buildy.yaml
+// WorkspaceConfig is the workspace's root config and what buildy reads from it before loading
+// the modules
 type WorkspaceConfig struct {
-	RootDir          string                   `json:"root"`
-	DiscoverPatterns []string                 `json:"discover_patterns"` // Legacy: for backward compat
-	ExcludePatterns  []string                 `json:"exclude_patterns"`  // Legacy: for backward compat
-	Modules          any                      `json:"modules"`           // workspace.modules as written: a filtered list, or the legacy map form
-	Variables        map[string]any           `json:"variables"`
-	DependenciesFile string                   `json:"dependencies_file"` // Path to external dependencies file
-	RawConfig        map[string]any           `json:"-"`
+	RootDir          string             `json:"root"`
+	DiscoverPatterns []string           `json:"discover_patterns"` // without workspace.modules: the configs to discover
+	ExcludePatterns  []string           `json:"exclude_patterns"`
+	Modules          *config.ModuleList `json:"-"` // workspace.modules as written
+	DependenciesFile string             `json:"dependencies_file"`
+	File             *config.File       `json:"-"`
 }
 
-// ModuleEntry represents a module in the workspace.modules section
-type ModuleEntry struct {
-	Path   string `json:"path"`   // Relative path to module directory
-	Config string `json:"config"` // Custom config filename (default: buildy.yaml)
-}
-
-// resolveModuleEntries returns the modules a workspace.modules section selects for ctx. It
-// takes the same filtered-list form as every other list: plain entries ("core" or
-// {path: core, config: core.yaml}) are always included, and a filter map ({linux: [...]},
-// {x86_64: [...]}, {release: [...]}) includes its entries when the key matches the platform,
-// architecture or configuration. The legacy map form ({common: [...], linux: [...]}) includes
-// "common" and the keys that match.
-func resolveModuleEntries(raw any, ctx BuildContext) ([]ModuleEntry, error) {
-	var entries []ModuleEntry
-	switch v := raw.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		return []ModuleEntry{{Path: v, Config: "buildy.yaml"}}, nil
-	case []any:
-		for i, item := range v {
-			switch entry := item.(type) {
-			case string:
-				entries = append(entries, ModuleEntry{Path: entry, Config: "buildy.yaml"})
-			case map[string]any:
-				if pathValue, hasPath := entry["path"]; hasPath {
-					path, ok := pathValue.(string)
-					if !ok || path == "" {
-						return nil, fmt.Errorf("modules[%d]: 'path' must be a non-empty string", i)
-					}
-					configName := "buildy.yaml"
-					if c, ok := entry["config"]; ok {
-						if configName, ok = c.(string); !ok {
-							return nil, fmt.Errorf("modules[%d]: 'config' must be a string", i)
-						}
-					}
-					entries = append(entries, ModuleEntry{Path: path, Config: configName})
-					continue
-				}
-				filtered, err := resolveFilterMap(entry, ctx, false)
-				if err != nil {
-					return nil, err
-				}
-				entries = append(entries, filtered...)
-			default:
-				return nil, fmt.Errorf("modules[%d]: expected a path, {path: ...}, or a filter map, got %T", i, item)
-			}
-		}
-	case map[string]any:
-		return resolveFilterMap(v, ctx, true)
-	default:
-		return nil, fmt.Errorf("modules: expected a list, got %T", raw)
+// resolveModuleEntries returns the modules a workspace.modules section selects for ctx. It is
+// a filtered list like any other: plain entries ("core" or {path: core, config: core.yaml}) are
+// always included, and a filter map ({linux: [...]}, {x86_64: [...]}, {release: [...]}) includes
+// its entries when the key matches the platform, architecture or configuration. The legacy map
+// form ({common: [...], linux: [...]}) includes "common" and the keys that match.
+func resolveModuleEntries(modules *config.ModuleList, ctx BuildContext) []config.ModuleEntry {
+	if modules == nil {
+		return nil
 	}
-	return entries, nil
-}
-
-// resolveFilterMap includes the entries of each key that matches ctx (and "common" in the legacy
-// map form), in key order.
-func resolveFilterMap(m map[string]any, ctx BuildContext, legacy bool) ([]ModuleEntry, error) {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var entries []ModuleEntry
-	for _, key := range keys {
-		if !matchesFilter(key, ctx) && !(legacy && key == "common") {
-			continue
-		}
-		selected, err := resolveModuleEntries(m[key], ctx)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", key, err)
-		}
-		entries = append(entries, selected...)
-	}
-	return entries, nil
+	return modules.Entries.Resolve(ctx)
 }
 
 // Workspace manages multi-module workspace with buildy.yaml files
@@ -223,67 +158,34 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 		return nil, fmt.Errorf("workspace config not found: %s", configFile)
 	}
 
-	rawConfig, err := loadConfigFile(configFile, true)
+	file, err := config.LoadFile(configFile, true)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract workspace section
-	workspaceSection := map[string]any{}
-	if wsSection, ok := rawConfig["workspace"].(map[string]any); ok {
-		workspaceSection = wsSection
-	}
-
 	// Explicit modules (resolved against the build context at discovery); without them, every
 	// buildy.yaml under the root is discovered
-	modules, hasExplicitModules := workspaceSection["modules"]
+	var modules *config.ModuleList
+	var discover, exclude []string
+	if file.Workspace != nil {
+		modules = file.Workspace.Modules
+		discover, exclude = file.Workspace.Discover, file.Workspace.Exclude
+	}
+	hasExplicitModules := modules != nil
 
-	// Legacy: Get discovery patterns (only if no explicit modules)
 	discoverPatterns := []string{}
 	excludePatterns := []string{".buildy_cache/**", "venv/**", ".git/**", "**/.git/**"}
-	
 	if !hasExplicitModules {
 		discoverPatterns = []string{"**/buildy.yaml"}
-		if discover, ok := workspaceSection["discover"]; ok {
-			switch v := discover.(type) {
-			case string:
-				discoverPatterns = []string{v}
-			case []any:
-				discoverPatterns = []string{}
-				for _, item := range v {
-					if str, ok := item.(string); ok {
-						discoverPatterns = append(discoverPatterns, str)
-					}
-				}
-			}
+		if len(discover) > 0 {
+			discoverPatterns = discover
 		}
-
-		if exclude, ok := workspaceSection["exclude"]; ok {
-			switch v := exclude.(type) {
-			case string:
-				excludePatterns = append(excludePatterns, v)
-			case []any:
-				for _, item := range v {
-					if str, ok := item.(string); ok {
-						excludePatterns = append(excludePatterns, str)
-					}
-				}
-			}
-		}
+		excludePatterns = append(excludePatterns, exclude...)
 	}
 
-	// Get workspace variables
-	variables := map[string]any{}
-	if vars, ok := rawConfig["variables"].(map[string]any); ok {
-		variables = vars
-	}
-
-	// Get dependencies file path
 	dependenciesFile := ""
-	if deps, ok := rawConfig["dependencies"].(map[string]any); ok {
-		if file, ok := deps["file"].(string); ok {
-			dependenciesFile = file
-		}
+	if file.Dependencies != nil {
+		dependenciesFile = file.Dependencies.File
 	}
 
 	config := &WorkspaceConfig{
@@ -291,9 +193,8 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 		DiscoverPatterns: discoverPatterns,
 		ExcludePatterns:  excludePatterns,
 		Modules:          modules,
-		Variables:        variables,
 		DependenciesFile: dependenciesFile,
-		RawConfig:        rawConfig,
+		File:             file,
 	}
 
 	if hasExplicitModules {
@@ -374,10 +275,7 @@ func (ws *Workspace) DiscoverModules(ctx BuildContext) (map[string]*ModuleInfo, 
 
 // loadExplicitModules loads the modules workspace.modules selects for ctx
 func (ws *Workspace) loadExplicitModules(ctx BuildContext) (map[string]*ModuleInfo, error) {
-	modulesToLoad, err := resolveModuleEntries(ws.Config.Modules, ctx)
-	if err != nil {
-		return nil, fmt.Errorf("workspace.modules in %s: %w", ws.configFile(), err)
-	}
+	modulesToLoad := resolveModuleEntries(ws.Config.Modules, ctx)
 
 	// Track modules currently being loaded to detect cycles
 	loadingStack := make(map[string]bool)
@@ -424,16 +322,12 @@ func (ws *Workspace) configFile() string {
 
 // loadChildModulesWithCycleDetection recursively loads child modules with circular dependency detection
 func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent *ModuleInfo, ctx BuildContext, loadingStack map[string]bool) error {
-	workspaceSection, ok := parent.Config["workspace"].(map[string]any)
-	if !ok {
+	if parent.File.Workspace == nil {
 		return nil // No workspace section, this is a leaf module
 	}
 
 	// Child modules are selected exactly like the root's
-	childModules, err := resolveModuleEntries(workspaceSection["modules"], ctx)
-	if err != nil {
-		return fmt.Errorf("workspace.modules in %s: %w", parent.Path, err)
-	}
+	childModules := resolveModuleEntries(parent.File.Workspace.Modules, ctx)
 
 	// Load each child module
 	for _, entry := range childModules {
@@ -558,43 +452,15 @@ func matchPattern(path, pattern string) bool {
 
 // loadModule loads and validates a module configuration file
 func (ws *Workspace) loadModule(modulePath, relativeDir string) (*ModuleInfo, error) {
-	config, err := loadConfigFile(modulePath, filepath.Clean(modulePath) == filepath.Clean(ws.configFile()))
+	file, err := config.LoadFile(modulePath, filepath.Clean(modulePath) == filepath.Clean(ws.configFile()))
 	if err != nil {
 		return nil, err
 	}
-
-	// Extract target names from various sections
-	targets := []string{}
-	
-	// Helper to extract names from a list of target maps
-	extractNames := func(items []any) {
-		for _, item := range items {
-			if itemMap, ok := item.(map[string]any); ok {
-				if name, ok := itemMap["name"].(string); ok {
-					targets = append(targets, name)
-				}
-			}
-		}
-	}
-
-	// New format: targets.static_libraries, targets.shared_libraries, targets.executables
-	if targetsSection, ok := config["targets"].(map[string]any); ok {
-		if libs, ok := targetsSection["static_libraries"].([]any); ok {
-			extractNames(libs)
-		}
-		if libs, ok := targetsSection["shared_libraries"].([]any); ok {
-			extractNames(libs)
-		}
-		if exes, ok := targetsSection["executables"].([]any); ok {
-			extractNames(exes)
-		}
-	}
-
 	return &ModuleInfo{
 		Path:         modulePath,
 		RelativePath: relativeDir,
-		Config:       config,
-		Targets:      targets,
+		File:         file,
+		Targets:      file.Targets.Names(),
 	}, nil
 }
 
