@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -351,12 +350,6 @@ func (te *TaskExecutor) checkInputs(task *workspace.BuildTask) error {
 // tasks keep their outputs: their tool uses them for its own incremental work.
 func (te *TaskExecutor) prepareOutputs(task *workspace.BuildTask) error {
 	for _, output := range task.Outputs {
-		if isDirOutput(output) {
-			if err := os.MkdirAll(output, 0755); err != nil {
-				return fmt.Errorf("failed to create output directory %s: %w", output, err)
-			}
-			continue
-		}
 		if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
 			return fmt.Errorf("failed to create output directory %s: %w", filepath.Dir(output), err)
 		}
@@ -368,11 +361,6 @@ func (te *TaskExecutor) prepareOutputs(task *workspace.BuildTask) error {
 		}
 	}
 	return nil
-}
-
-// isDirOutput reports whether an output is declared as a directory (a trailing separator).
-func isDirOutput(path string) bool {
-	return strings.HasSuffix(path, "/") || strings.HasSuffix(path, string(filepath.Separator))
 }
 
 // checkOutputs fails if the task exited 0 without producing a declared output.
@@ -390,8 +378,7 @@ func checkOutputs(task *workspace.BuildTask) error {
 	return nil
 }
 
-// run executes the task's work: copies natively, setup tasks by creating their directories
-// (done by prepareOutputs), everything else through its command.
+// run executes the task's work: copies natively, everything else through its command.
 func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 	switch task.TaskType {
 	case "copy":
@@ -401,8 +388,6 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 				task.TaskID, len(task.Inputs), len(task.Outputs))
 		}
 		return util.CopyFile(task.Inputs[0].Path, task.Outputs[0])
-	case "setup":
-		return nil
 	}
 
 	// Process command through response file manager for long commands (Windows)

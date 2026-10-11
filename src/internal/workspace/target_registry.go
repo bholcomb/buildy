@@ -53,11 +53,27 @@ func (tr *TargetRegistry) Initialize() error {
 		return err
 	}
 
-	// Index all targets
-	for modulePath, moduleInfo := range modules {
+	// Index all targets. Target names are unique across the workspace: libraries are linked by
+	// name, and executables and libraries share bin/ and lib/ in the output directory.
+	modulePaths := make([]string, 0, len(modules))
+	for modulePath := range modules {
+		modulePaths = append(modulePaths, modulePath)
+	}
+	sort.Strings(modulePaths)
+	for _, modulePath := range modulePaths {
+		moduleInfo := modules[modulePath]
 		tr.targetsByModule[modulePath] = make(map[string]*TargetReference)
 
 		for _, targetName := range moduleInfo.Targets {
+			if existing, ok := tr.targetsByName[targetName]; ok {
+				if existing[0].ModulePath == modulePath {
+					return fmt.Errorf("target '%s' is defined twice in module %s (%s); target names must be unique across the workspace",
+						targetName, modulePath, moduleInfo.Path)
+				}
+				return fmt.Errorf("target '%s' is defined in module %s (%s) and in module %s (%s); target names must be unique across the workspace",
+					targetName, existing[0].ModulePath, existing[0].ModuleInfo.Path, modulePath, moduleInfo.Path)
+			}
+
 			// Create target reference
 			ref := &TargetReference{
 				Name:       targetName,

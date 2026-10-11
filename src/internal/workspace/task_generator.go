@@ -166,7 +166,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 	targetConfig map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
-	setupTaskID string,
 	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
 	// Resolve variables in target config
@@ -252,18 +251,24 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
-	// If target depends on artifacts, add their outputs as virtual files for glob matching
+	targetName, _ := targetConfig["name"].(string)
+
+	// A target that depends on artifacts (generated sources and headers) sees their outputs as
+	// virtual files for glob matching, and every one of its tasks, compiles included, runs after
+	// the tasks that produce them.
 	tg.PathResolver.ClearVirtualFiles()
+	var artifactTaskIDs []string
 	if depsMap, ok := targetConfig["depends_on"].(map[string]any); ok {
-		if artifacts, ok := depsMap["artifacts"].([]any); ok {
-			for _, a := range artifacts {
-				if artifactName, ok := a.(string); ok {
-					if outputs, exists := tg.artifactOutputs[artifactName]; exists {
-						tg.PathResolver.AddVirtualFiles(outputs)
-						util.LogInfo("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
-					}
-				}
+		for _, artifactName := range ExtractStringList(depsMap["artifacts"]) {
+			taskIDs, exists := tg.artifactTaskIDs[artifactName]
+			if !exists {
+				return nil, fmt.Errorf("target '%s' in module %s depends on artifact '%s', which is not a generate or transform artifact of the module",
+					targetName, tg.moduleName(), artifactName)
 			}
+			artifactTaskIDs = append(artifactTaskIDs, taskIDs...)
+			outputs := tg.artifactOutputs[artifactName]
+			tg.PathResolver.AddVirtualFiles(outputs)
+			util.LogInfo("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
 		}
 	}
 
@@ -370,7 +375,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 		targetConfig,
 		mergedConfig,
 		outputDir,
-		setupTaskID,
 		tg.TaskIDGen,
 		toolMatcher,
 		tg.CommandBuilder,
@@ -383,22 +387,14 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.VarEnv,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("target '%s' in module %s: %w", targetName, tg.moduleName(), err)
 	}
-
-	// Apply post-processing based on metadata
-	if metadata.PostProcessing.AddSetupDependency && setupTaskID != "" {
-		for _, task := range tasks {
-			// Check if setup task is already in dependencies
-			hasSetup := false
-			for _, dep := range task.Dependencies {
-				if dep == setupTaskID {
-					hasSetup = true
-					break
-				}
-			}
-			if !hasSetup {
-				task.Dependencies = append([]string{setupTaskID}, task.Dependencies...)
+	for _, task := range tasks {
+		task.Module = tg.CurrentModule
+		task.Target = targetName
+		for _, id := range artifactTaskIDs {
+			if !hasString(task.Dependencies, id) {
+				task.Dependencies = append(task.Dependencies, id)
 			}
 		}
 	}
@@ -522,10 +518,6 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 		tg.TaskIDGen = NewTaskIDGenerator(moduleName)
 	}
 
-	// Generate setup task
-	setupTask := tg.createSetupTask(outputDir)
-	tasks = append(tasks, &setupTask)
-
 	mergedConfig, err := tg.getMergedConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build merged config: %w", err)
@@ -585,7 +577,7 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 				for k, v := range mergedConfig {
 					targetMergedConfig[k] = v
 				}
-				targetTasks, err := tg.generateTargetTasks(target, targetMergedConfig, outputDir, setupTask.TaskID, tasks)
+				targetTasks, err := tg.generateTargetTasks(target, targetMergedConfig, outputDir, tasks)
 				if err != nil {
 					return nil, err
 				}
@@ -622,47 +614,6 @@ func (tg *TaskGenerator) GenerateTasks(config map[string]any, outputDir string) 
 	}
 
 	return tasks, nil
-}
-
-// createSetupTask creates directory setup task
-// Directory creation is handled by the executor before each task runs,
-// so this task just needs to declare the directories as outputs.
-func (tg *TaskGenerator) createSetupTask(outputDir string) BuildTask {
-	libDir := filepath.Join(outputDir, "lib")
-	binDir := filepath.Join(outputDir, "bin")
-	objDir := filepath.Join(outputDir, "obj")
-
-	// Use a no-op command - the executor's MkdirAll handles actual directory creation
-	var command string
-	if strings.Contains(strings.ToLower(tg.Platform), "windows") {
-		command = "cmd /c echo Setup complete"
-	} else {
-		command = "true"
-	}
-
-	taskID := tg.TaskIDGen.Next("setup", "dirs")
-	task := NewBuildTask(
-		taskID,
-		"setup",
-		[]TaskInput{},
-		[]string{
-			libDir + string(filepath.Separator),
-			binDir + string(filepath.Separator),
-			objDir + string(filepath.Separator),
-		},
-		[]string{},
-		command,
-	)
-	task.Platform = tg.Platform
-	task.Architecture = tg.Architecture
-	task.Configuration = tg.Configuration
-	task.ConfigHash = tg.ConfigHash
-	if tg.CurrentToolchain != nil {
-		task.Toolchain = tg.CurrentToolchain.Name
-	}
-	task.EstimatedTime = util.DefaultSetupTimeSeconds
-	task.ResourceRequirements = ResourceRequirements{CPUCores: 1, MemoryMB: 10, DiskMB: 1}
-	return task
 }
 
 // resolveDeps resolves dependencies and merges their settings into the target config
@@ -719,6 +670,14 @@ func (tg *TaskGenerator) resolveDeps(targetConfig map[string]any) error {
 	}
 
 	return nil
+}
+
+// moduleName names the generator's module for messages.
+func (tg *TaskGenerator) moduleName() string {
+	if tg.CurrentModule == "" {
+		return "workspace"
+	}
+	return tg.CurrentModule
 }
 
 // GetArtifactOutputs returns the outputs for a named artifact
@@ -865,10 +824,9 @@ func (tg *TaskGenerator) generateTransformTasks(
 			iterVarEnv.SetVariable("output_dir", outputDir, "transform-iteration")
 
 			// Resolve output path using the variable environment chain
-			var resolveErrors []string
-			resolvedOutput := iterVarEnv.ResolveString(outputPattern, &resolveErrors, 10)
-			if len(resolveErrors) > 0 {
-				util.LogWarning("Unresolved variables in transform output pattern: %v", resolveErrors)
+			resolvedOutput, err := resolveStrict(iterVarEnv, outputPattern, "the outputs of artifacts.transform '"+name+"'")
+			if err != nil {
+				return nil, err
 			}
 
 			// Make output path absolute if relative (use module directory)
@@ -914,7 +872,10 @@ func (tg *TaskGenerator) generateTransformTasks(
 			iterVarEnv.SetVariable("includes", "", "transform-command")
 
 			// Resolve command using VarEnv (handles all ${var} syntax)
-			command = iterVarEnv.ResolveString(command, nil, 10)
+			command, err = resolveStrict(iterVarEnv, command, "the command of artifacts.transform '"+name+"'")
+			if err != nil {
+				return nil, err
+			}
 
 			// Create mkdir prefix for output directory
 			fullCommand := tg.prependMkdir(command, resolvedOutput)
@@ -930,6 +891,7 @@ func (tg *TaskGenerator) generateTransformTasks(
 				fullCommand,
 			)
 			tg.finalizeTask(&task, toolName, 1.0, ResourceRequirements{CPUCores: 1, MemoryMB: 256, DiskMB: 50})
+			task.Target = name
 
 			tasks = append(tasks, &task)
 			artifactOutputPaths = append(artifactOutputPaths, resolvedOutput)
@@ -1012,10 +974,9 @@ func (tg *TaskGenerator) generateGenerateTasks(
 			genVarEnv.SetVariable("template", templatePath, "generate-task")
 
 			// Resolve output path using VarEnv
-			var resolveErrors []string
-			outputPath = genVarEnv.ResolveString(outputPath, &resolveErrors, 10)
-			if len(resolveErrors) > 0 {
-				util.LogWarning("Unresolved variables in generate output path: %v", resolveErrors)
+			outputPath, err := resolveStrict(genVarEnv, outputPath, "the output of artifacts.generate '"+name+"'")
+			if err != nil {
+				return nil, err
 			}
 
 			if !filepath.IsAbs(outputPath) && moduleDir != "" {
@@ -1028,7 +989,10 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				for key, val := range v {
 					if strVal, ok := val.(string); ok {
 						// Resolve variables using the environment chain
-						strVal = genVarEnv.ResolveString(strVal, nil, 10)
+						strVal, err = resolveStrict(genVarEnv, strVal, "variable "+key+" of artifacts.generate '"+name+"'")
+						if err != nil {
+							return nil, err
+						}
 						vars[key] = strVal
 					}
 				}
@@ -1045,7 +1009,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				escapedVal := strings.ReplaceAll(val, "/", "\\/")
 				escapedVal = strings.ReplaceAll(escapedVal, "&", "\\&")
 				sedCmds = append(sedCmds, fmt.Sprintf("s/@%s@/%s/g", key, escapedVal))
-				sedCmds = append(sedCmds, fmt.Sprintf("s/${%s}/%s/g", key, escapedVal))
+				sedCmds = append(sedCmds, fmt.Sprintf("s/\\${%s}/%s/g", key, escapedVal))
 			}
 
 			var command string
@@ -1080,6 +1044,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				command,
 			)
 			tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1})
+			task.Target = name
 
 			tasks = append(tasks, &task)
 
@@ -1188,10 +1153,9 @@ func (tg *TaskGenerator) generateGenerateTasks(
 				// Resolve output paths using VarEnv
 				var resolvedOutputs []string
 				for _, pattern := range outputPatterns {
-					var resolveErrors []string
-					resolved := iterVarEnv.ResolveString(pattern, &resolveErrors, 10)
-					if len(resolveErrors) > 0 {
-						util.LogWarning("Unresolved variables in generate output pattern: %v", resolveErrors)
+					resolved, err := resolveStrict(iterVarEnv, pattern, "the outputs of artifacts.generate '"+name+"'")
+					if err != nil {
+						return nil, err
 					}
 					if !filepath.IsAbs(resolved) && moduleDir != "" {
 						resolved = filepath.Join(moduleDir, resolved)
@@ -1214,7 +1178,10 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 				// Add args - resolve variables in args too
 				argsStr := strings.Join(args, " ")
-				argsStr = iterVarEnv.ResolveString(argsStr, nil, 10)
+				argsStr, err = resolveStrict(iterVarEnv, argsStr, "the args of artifacts.generate '"+name+"'")
+				if err != nil {
+					return nil, err
+				}
 				iterVarEnv.SetVariable("args", argsStr, "generate-command")
 
 				// Set empty placeholders
@@ -1224,7 +1191,10 @@ func (tg *TaskGenerator) generateGenerateTasks(
 
 				// Build command - resolve all ${var} syntax through VarEnv
 				command := tool.GetCommand(tg.Platform)
-				command = iterVarEnv.ResolveString(command, nil, 10)
+				command, err = resolveStrict(iterVarEnv, command, "the command of artifacts.generate '"+name+"'")
+				if err != nil {
+					return nil, err
+				}
 				
 				// Handle args appending if no placeholder was present
 				if !strings.Contains(tool.GetCommand(tg.Platform), "${args}") && argsStr != "" {
@@ -1249,6 +1219,7 @@ func (tg *TaskGenerator) generateGenerateTasks(
 					fullCommand,
 				)
 				tg.finalizeTask(&task, toolName, 0.5, ResourceRequirements{CPUCores: 1, MemoryMB: 128, DiskMB: 10})
+				task.Target = name
 
 				tasks = append(tasks, &task)
 				artifactOutputPaths = append(artifactOutputPaths, resolvedOutputs...)
@@ -1314,11 +1285,11 @@ func (tg *TaskGenerator) generateStagingTasks(
 	destination := filepath.Join(outputDir, "staging")
 	if d, ok := staging["destination"].(string); ok {
 		// Resolve destination using VarEnv and normalize path separators
-		var resolveErrors []string
-		destination = filepath.Clean(stagingVarEnv.ResolveString(d, &resolveErrors, 10))
-		if len(resolveErrors) > 0 {
-			util.LogWarning("Unresolved variables in staging destination: %v", resolveErrors)
+		resolved, err := resolveStrict(stagingVarEnv, d, "staging.destination")
+		if err != nil {
+			return nil, err
 		}
+		destination = filepath.Clean(resolved)
 	}
 
 	workspaceRoot := ""
@@ -1355,7 +1326,10 @@ func (tg *TaskGenerator) generateStagingTasks(
 
 	// Process contents section - new hierarchical folder-based format
 	if contents, ok := staging["contents"].([]any); ok {
-		folderTasks := tg.processStagingContents(contents, destination, "", defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, stagingVarEnv)
+		folderTasks, err := tg.processStagingContents(contents, destination, "", defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, stagingVarEnv)
+		if err != nil {
+			return nil, err
+		}
 		tasks = append(tasks, folderTasks...)
 		for _, t := range folderTasks {
 			stagingTaskIDs = append(stagingTaskIDs, t.TaskID)
@@ -1380,7 +1354,7 @@ func (tg *TaskGenerator) processStagingContents(
 	workspaceRoot string,
 	moduleDir string,
 	varEnv *util.VariableEnvironment,
-) []*BuildTask {
+) ([]*BuildTask, error) {
 	var tasks []*BuildTask
 
 	for _, itemRaw := range contents {
@@ -1395,11 +1369,11 @@ func (tg *TaskGenerator) processStagingContents(
 			folderName = f
 			// Resolve variables in folder name using VarEnv
 			if strings.Contains(folderName, "${") {
-				var resolveErrors []string
-				folderName = filepath.Clean(varEnv.ResolveString(folderName, &resolveErrors, 10))
-				if len(resolveErrors) > 0 {
-					util.LogWarning("Unresolved variables in staging folder '%s': %v", f, resolveErrors)
+				resolved, err := resolveStrict(varEnv, folderName, "staging folder")
+				if err != nil {
+					return nil, err
 				}
+				folderName = filepath.Clean(resolved)
 			}
 		}
 
@@ -1522,7 +1496,11 @@ func (tg *TaskGenerator) processStagingContents(
 
 				// Resolve variables in source pattern and normalize path separators
 				if strings.Contains(sourcePattern, "${") {
-					sourcePattern = filepath.Clean(varEnv.ResolveString(sourcePattern, nil, 10))
+					resolved, err := resolveStrict(varEnv, sourcePattern, "staging files of folder '"+folderName+"'")
+					if err != nil {
+						return nil, err
+					}
+					sourcePattern = filepath.Clean(resolved)
 				}
 
 				// Resolve source pattern relative to module directory (not workspace root)
@@ -1587,12 +1565,15 @@ func (tg *TaskGenerator) processStagingContents(
 			} else {
 				nestedPath = filepath.Join(currentPath, folderName)
 			}
-			nestedTasks := tg.processStagingContents(nestedContents, stagingRoot, nestedPath, defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, varEnv)
+			nestedTasks, err := tg.processStagingContents(nestedContents, stagingRoot, nestedPath, defaultUseSymlinks, isWindows, outputDir, workspaceRoot, moduleDir, varEnv)
+			if err != nil {
+				return nil, err
+			}
 			tasks = append(tasks, nestedTasks...)
 		}
 	}
 
-	return tasks
+	return tasks, nil
 }
 
 // createTargetStagingTask creates a staging task for a target (auto-detects executable vs library)
@@ -1776,11 +1757,11 @@ func (tg *TaskGenerator) generateInstallTasks(
 		destination := filepath.Join(outputDir, "dist")
 		if d, ok := installItem["destination"].(string); ok {
 			// Resolve destination using VarEnv
-			var resolveErrors []string
-			destination = installVarEnv.ResolveString(d, &resolveErrors, 10)
-			if len(resolveErrors) > 0 {
-				util.LogWarning("Unresolved variables in install destination: %v", resolveErrors)
+			resolved, err := resolveStrict(installVarEnv, d, "the destination of install '"+name+"'")
+			if err != nil {
+				return nil, err
 			}
+			destination = resolved
 		}
 		if !filepath.IsAbs(destination) && workspaceRoot != "" {
 			destination = filepath.Join(workspaceRoot, destination)
@@ -1800,11 +1781,11 @@ func (tg *TaskGenerator) generateInstallTasks(
 		// Build filename - resolve using VarEnv
 		filename := name
 		if fn, ok := installItem["filename"].(string); ok {
-			var resolveErrors []string
-			filename = installVarEnv.ResolveString(fn, &resolveErrors, 10)
-			if len(resolveErrors) > 0 {
-				util.LogWarning("Unresolved variables in install filename: %v", resolveErrors)
+			resolved, err := resolveStrict(installVarEnv, fn, "the filename of install '"+name+"'")
+			if err != nil {
+				return nil, err
 			}
+			filename = resolved
 		}
 
 		// Get staging directory path
@@ -1973,11 +1954,11 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			copyVarEnv.SetVariable("out_dir", outputDir, "copy-task")
 
 			// Resolve dest variables using VarEnv
-			var resolveErrors []string
-			dest = copyVarEnv.ResolveString(dest, &resolveErrors, 10)
-			if len(resolveErrors) > 0 {
-				util.LogWarning("Unresolved variables in copy destination: %v", resolveErrors)
+			resolved, err := resolveStrict(copyVarEnv, dest, "the destination of artifacts.copy '"+artifactName+"'")
+			if err != nil {
+				return nil, err
 			}
+			dest = resolved
 
 			// Make dest absolute if relative
 			if !filepath.IsAbs(dest) && moduleDir != "" {
@@ -1990,7 +1971,10 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 			// Process each source pattern
 			for _, pattern := range sourcePatterns {
 				// Resolve variables in source pattern
-				pattern = copyVarEnv.ResolveString(pattern, nil, 10)
+				pattern, err := resolveStrict(copyVarEnv, pattern, "the sources of artifacts.copy '"+artifactName+"'")
+				if err != nil {
+					return nil, err
+				}
 
 				// Make pattern absolute if relative
 				if !filepath.IsAbs(pattern) && moduleDir != "" {
@@ -2094,11 +2078,12 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(
 		copyVarEnv.SetVariable("out_dir", outputDir, "copy-task")
 
 		// Resolve variables in source and dest using VarEnv
-		var resolveErrors []string
-		source = copyVarEnv.ResolveString(source, &resolveErrors, 10)
-		dest = copyVarEnv.ResolveString(dest, &resolveErrors, 10)
-		if len(resolveErrors) > 0 {
-			util.LogWarning("Variable resolution errors in artifacts.copy: %v", resolveErrors)
+		var err error
+		if source, err = resolveStrict(copyVarEnv, source, "the source of artifacts.copy"); err != nil {
+			return nil, err
+		}
+		if dest, err = resolveStrict(copyVarEnv, dest, "the destination of artifacts.copy"); err != nil {
+			return nil, err
 		}
 
 		// Make relative paths absolute (relative to module dir)

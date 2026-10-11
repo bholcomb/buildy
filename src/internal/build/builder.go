@@ -88,11 +88,18 @@ func (b *Builder) BuildWorkspace(
 
 	result.TotalTasks = len(allTasks)
 
-	// Build task graph
+	// Build and validate the task graph (under --dry-run too)
 	graph := workspace.NewTaskGraph()
 	for _, task := range allTasks {
-		graph.AddTask(task)
+		if err := graph.AddTask(task); err != nil {
+			result.Finish(false)
+			return result, err
+		}
 		result.TasksByType[task.TaskType]++
+	}
+	if err := graph.Validate(); err != nil {
+		result.Finish(false)
+		return result, err
 	}
 
 	// Save task graph for debugging

@@ -64,6 +64,9 @@ type BuildTask struct {
 	DepFile              *DepFile             `json:"dep_file,omitempty"`
 	ToolCached           bool                 `json:"tool_cached,omitempty"` // The tool keeps its own cache: always run, never a buildy cache hit
 	Dependencies         []string             `json:"dependencies"`
+	LinkLibs             []string             `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
+	Module               string               `json:"module"`              // Module that defined the task ("" for the workspace root config)
+	Target               string               `json:"target,omitempty"`    // Target or artifact the task belongs to
 	Command              string               `json:"command"`
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
@@ -73,6 +76,18 @@ type BuildTask struct {
 	EstimatedTime        float64              `json:"estimated_time"`
 	ResourceRequirements ResourceRequirements `json:"resource_requirements"`
 	CacheKey             string               `json:"cache_key"`
+}
+
+// Describe names the task with the module and target it came from, for error messages.
+func (t *BuildTask) Describe() string {
+	module := t.Module
+	if module == "" {
+		module = "workspace"
+	}
+	if t.Target == "" {
+		return fmt.Sprintf("%s (module %s)", t.TaskID, module)
+	}
+	return fmt.Sprintf("%s (module %s, target %s)", t.TaskID, module, t.Target)
 }
 
 // NewBuildTask creates a BuildTask with default values

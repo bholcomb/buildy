@@ -28,7 +28,6 @@ type TemplateMetadata struct {
 	PostProcessing struct {
 		ScanSourcesPattern string // Glob pattern for source file scanning (e.g., "*.go", "*.rs")
 		RegisterTarget     bool   // Register the target in the global registry
-		AddSetupDependency bool   // Add setup task as dependency
 	}
 	ToolchainLanguage string // Language to use for toolchain selection (if different from Language)
 	LibraryOutputDir  string // Subdirectory under output_dir where libraries are placed (e.g., "bin", "lib")
@@ -275,9 +274,6 @@ func (bte *BuildTemplateEngine) parseTemplateMetadata(tmpl map[string]any) *Temp
 		if v, ok := postProc["register_target"].(bool); ok {
 			metadata.PostProcessing.RegisterTarget = v
 		}
-		if v, ok := postProc["add_setup_dependency"].(bool); ok {
-			metadata.PostProcessing.AddSetupDependency = v
-		}
 	}
 
 	// Parse library_output_dir (defaults to "bin" if not specified)
@@ -391,7 +387,6 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	itemConfig map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
-	setupTaskID string,
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
@@ -500,7 +495,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			// Generate multiple tasks (one per source file)
 			stepTasks, err = bte.expandForEachStep(
 				step, context, itemConfig, mergedConfig, outputDir,
-				setupTaskID, idGen, toolMatcher, commandBuilder,
+				idGen, toolMatcher, commandBuilder,
 				platform, architecture, configuration, toolchain,
 				templateEnv,
 			)
@@ -567,7 +562,6 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 	itemConfig map[string]any,
 	mergedConfig map[string]any,
 	outputDir string,
-	setupTaskID string,
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
@@ -644,14 +638,21 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		if out, ok := step["output"].(string); ok {
 			outputTemplate = out
 		}
-		output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
+		output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+		if err != nil {
+			return nil, err
+		}
+		output = filepath.Clean(output)
 
 		// Get tool parameters
 		toolParams := map[string]any{}
 		if tp, ok := step["tool_params"].(map[string]any); ok {
 			toolParams = tp
 		}
-		resolvedParams := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+		resolvedParams, err := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+		if err != nil {
+			return nil, fmt.Errorf("compiling %s: %w", source, err)
+		}
 
 		// Convert params to expected format
 		defines, includeDirs, extraFlags, kwargs := convertResolvedParams(resolvedParams)
@@ -683,7 +684,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 			action,
 			[]TaskInput{NewTaskInput(source)},
 			outputs,
-			[]string{setupTaskID},
+			nil,
 			command,
 		)
 		task.Platform = platform
@@ -747,7 +748,10 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	patternVarEnv := varEnv.CreateChild()
 	patternVarEnv.SetVariable("name", itemName, "output-pattern")
 	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
-	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
+	resolvedOutputPattern, err := resolveStrict(patternVarEnv, tool.OutputPattern, "the output pattern of tool "+tool.Name)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create step context with tool info
 	sc := newStepContext(context, varEnv, "link_step", struct {
@@ -765,7 +769,11 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
+	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+	if err != nil {
+		return nil, err
+	}
+	output = filepath.Clean(output)
 
 	// Collect inputs from previous step
 	inputsRef := ""
@@ -804,26 +812,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	for _, depRef := range dependsOnRef {
 		resolvedDeps := bte.resolveReference(depRef, stepResults)
 		dependencies = append(dependencies, toStringSlice(resolvedDeps)...)
-	}
-
-	// Handle artifact dependencies (depends_on.artifacts)
-	// Artifacts are processed before targets, so their task IDs are available
-	if depsMap, ok := itemConfig["depends_on"].(map[string]any); ok {
-		if artifacts, ok := depsMap["artifacts"].([]any); ok {
-			for _, a := range artifacts {
-				if artifactName, ok := a.(string); ok {
-					// Look up artifact task IDs from existing tasks
-					for _, task := range existingTasks {
-						// Artifact tasks are named like "generate_<name>_..." or "transform_<name>_..."
-						if strings.Contains(task.TaskID, artifactName) &&
-							(strings.HasPrefix(task.TaskID, "generate_") || strings.HasPrefix(task.TaskID, "transform_")) {
-							dependencies = append(dependencies, task.TaskID)
-							util.LogInfo("Added artifact dependency: %s -> %s", artifactName, task.TaskID)
-						}
-					}
-				}
-			}
-		}
 	}
 
 	// Handle target dependencies (depends_on.targets) for all target types
@@ -874,12 +862,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		libOutputDir := bte.GetLibraryOutputDir("cpp", "shared_library")
 		libDirs = append(libDirs, filepath.Join(outputDir, libOutputDir))
 
-		// Add all libs as potential dependencies - resolution happens later
-		// in resolveCrossModuleDependencies where we know all targets
-		for _, lib := range libsFromConfig {
-			dependencies = append(dependencies, lib)
-		}
-
 		// For link ordering within the libs list, we don't need complex
 		// topological sorting here - the linker handles static lib order,
 		// and the dependency resolution will ensure build order is correct
@@ -893,7 +875,10 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if tp, ok := step["tool_params"].(map[string]any); ok {
 		toolParams = tp
 	}
-	resolvedParams := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+	resolvedParams, err := bte.resolveToolParams(toolParams, sc.Context, sc.VarEnv)
+	if err != nil {
+		return nil, err
+	}
 
 	// Merge library linking info (prepend dependency libs, append item libs)
 	if len(libDirs) > 0 {
@@ -983,6 +968,9 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		dependencies,
 		command,
 	)
+	// Libraries that are workspace targets are linked to their link tasks once every module is
+	// generated (resolveCrossModuleDependencies); the rest are system libraries
+	task.LinkLibs = libNames
 	task.Platform = platform
 	task.Architecture = architecture
 	task.Configuration = configuration
@@ -1021,7 +1009,10 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	patternVarEnv := varEnv.CreateChild()
 	patternVarEnv.SetVariable("name", itemName, "output-pattern")
 	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
-	resolvedOutputPattern := patternVarEnv.ResolveString(tool.OutputPattern, nil, 10)
+	resolvedOutputPattern, err := resolveStrict(patternVarEnv, tool.OutputPattern, "the output pattern of tool "+tool.Name)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create step context with tool info
 	sc := newStepContext(context, varEnv, "build_step", struct {
@@ -1034,12 +1025,19 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	if out, ok := step["output"].(string); ok {
 		outputTemplate = out
 	}
-	output := filepath.Clean(sc.VarEnv.ResolveString(outputTemplate, nil, 10))
+	output, err := resolveStrict(sc.VarEnv, outputTemplate, "the output of step "+fmt.Sprint(step["name"]))
+	if err != nil {
+		return nil, err
+	}
+	output = filepath.Clean(output)
 
 	// Get working directory (module path)
 	workingDir := ""
 	if wd, ok := step["working_dir"].(string); ok {
-		workingDir = filepath.Clean(sc.VarEnv.ResolveString(wd, nil, 10))
+		if workingDir, err = resolveStrict(sc.VarEnv, wd, "the working_dir of step "+fmt.Sprint(step["name"])); err != nil {
+			return nil, err
+		}
+		workingDir = filepath.Clean(workingDir)
 	}
 	if workingDir == "" {
 		if path, ok := itemConfig["path"].(string); ok {
@@ -1050,7 +1048,9 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	// Get tool parameters from template step
 	toolParams := map[string]any{}
 	if tp, ok := step["tool_params"].(map[string]any); ok {
-		toolParams = bte.resolveToolParams(tp, sc.Context, sc.VarEnv)
+		if toolParams, err = bte.resolveToolParams(tp, sc.Context, sc.VarEnv); err != nil {
+			return nil, err
+		}
 	}
 
 	// Create a child VarEnv for command resolution with all needed variables
@@ -1082,7 +1082,10 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 
 	// Build and resolve the command using VarEnv
-	command := cmdVarEnv.ResolveString(tool.Command, nil, 10)
+	command, err := resolveStrict(cmdVarEnv, tool.Command, "the command of tool "+tool.Name)
+	if err != nil {
+		return nil, err
+	}
 
 	// Clean up extra spaces from empty optional parameters
 	command = strings.Join(strings.Fields(command), " ")

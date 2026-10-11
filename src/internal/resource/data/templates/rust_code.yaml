@@ -22,7 +22,6 @@ templates:
       post_processing:
         scan_sources_pattern: "*.rs"
         register_target: true
-        add_setup_dependency: true
     steps:
       - name: build
         action: build
@@ -49,7 +48,6 @@ templates:
       post_processing:
         scan_sources_pattern: "*.rs"
         register_target: true
-        add_setup_dependency: true
     steps:
       - name: build
         action: build
@@ -76,7 +74,6 @@ templates:
       post_processing:
         scan_sources_pattern: "*.rs"
         register_target: true
-        add_setup_dependency: true
     steps:
       - name: build
         action: build

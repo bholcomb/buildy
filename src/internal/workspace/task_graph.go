@@ -2,6 +2,9 @@ package workspace
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 
 	"buildy/pkg/util"
 )
@@ -20,9 +23,91 @@ func NewTaskGraph() *TaskGraph {
 	}
 }
 
-// AddTask adds a task to the graph
-func (tg *TaskGraph) AddTask(task *BuildTask) {
+// AddTask adds a task to the graph. Task IDs are unique.
+func (tg *TaskGraph) AddTask(task *BuildTask) error {
+	if existing, ok := tg.Tasks[task.TaskID]; ok {
+		return fmt.Errorf("two tasks have the ID %s: %s and %s", task.TaskID, existing.Describe(), task.Describe())
+	}
 	tg.Tasks[task.TaskID] = task
+	return nil
+}
+
+// unresolvedVariable matches a ${...} reference that is not escaped as \${...}.
+var unresolvedVariable = regexp.MustCompile(`(^|[^\\])(\$\{[^}]*\})`)
+
+// Validate checks the graph before anything runs, under --dry-run too, and adds the edges that
+// follow from data. Each failure names the tasks and targets involved.
+//
+//  1. Every output has exactly one producer.
+//  2. If a task's input is another task's output, the task depends on that producer.
+//  3. Every dependency names a task in the graph.
+//  4. No ${...} is left unresolved in a command, input or output.
+func (tg *TaskGraph) Validate() error {
+	var problems []string
+
+	producers := make(map[string]*BuildTask)
+	for _, id := range tg.sortedIDs() {
+		task := tg.Tasks[id]
+		for _, output := range task.Outputs {
+			key := util.NormalizePath(output)
+			if other, ok := producers[key]; ok && other != task {
+				problems = append(problems, fmt.Sprintf("output %s is produced by both %s and %s",
+					output, other.Describe(), task.Describe()))
+				continue
+			}
+			producers[key] = task
+		}
+	}
+
+	for _, id := range tg.sortedIDs() {
+		task := tg.Tasks[id]
+		for _, input := range task.Inputs {
+			producer, ok := producers[util.NormalizePath(input.Path)]
+			if ok && producer != task && !hasString(task.Dependencies, producer.TaskID) {
+				task.Dependencies = append(task.Dependencies, producer.TaskID)
+			}
+		}
+		for _, dep := range task.Dependencies {
+			if _, ok := tg.Tasks[dep]; !ok {
+				problems = append(problems, fmt.Sprintf("%s depends on %s, which is not a task", task.Describe(), dep))
+			}
+		}
+		check := func(what, text string) {
+			if m := unresolvedVariable.FindStringSubmatch(text); m != nil {
+				problems = append(problems, fmt.Sprintf("%s: unresolved variable %s in %s: %s", task.Describe(), m[2], what, text))
+			}
+		}
+		check("command", task.Command)
+		for _, input := range task.Inputs {
+			check("input", input.Path)
+		}
+		for _, output := range task.Outputs {
+			check("output", output)
+		}
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid task graph:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return nil
+}
+
+func (tg *TaskGraph) sortedIDs() []string {
+	ids := make([]string, 0, len(tg.Tasks))
+	for id := range tg.Tasks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func hasString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildExecutionStages builds parallel execution stages using topological sort
@@ -85,7 +170,7 @@ func (tg *TaskGraph) BuildExecutionStages() ([][]string, error) {
 	}
 
 	tg.ExecutionStages = stages
-	
+
 	// Assign sequential task numbers in execution order (1-based)
 	taskNumber := 1
 	for _, stage := range stages {
@@ -96,7 +181,7 @@ func (tg *TaskGraph) BuildExecutionStages() ([][]string, error) {
 			}
 		}
 	}
-	
+
 	return stages, nil
 }
 
@@ -138,12 +223,12 @@ func (tg *TaskGraph) GetExecutionPlan() (map[string]any, error) {
 	}
 
 	return map[string]any{
-		"total_stages":            len(tg.ExecutionStages),
-		"total_tasks":             len(tg.Tasks),
-		"estimated_time_seconds":  totalTime,
-		"max_parallel_tasks":      maxParallel,
-		"total_cpu_hours":         totalCPUHours,
-		"stages":                  stagesList,
+		"total_stages":           len(tg.ExecutionStages),
+		"total_tasks":            len(tg.Tasks),
+		"estimated_time_seconds": totalTime,
+		"max_parallel_tasks":     maxParallel,
+		"total_cpu_hours":        totalCPUHours,
+		"stages":                 stagesList,
 	}, nil
 }
 
@@ -166,4 +251,3 @@ func (tg *TaskGraph) LogExecutionPlan() {
 		util.LogVerbose("  Stage %d: %d tasks", i+1, len(stage))
 	}
 }
-

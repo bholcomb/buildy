@@ -284,9 +284,14 @@ targets:
 ```
 
 When a target declares `depends_on.artifacts`:
-1. The artifact tasks run before the target's compilation
+1. The artifact tasks run before every task of the target, compiles included (a compile can
+   include a generated header it doesn't list)
 2. The artifact's output files are added to the "virtual file" list
 3. Source globs in the target will match these virtual files
+
+Naming an artifact the module doesn't define is an error. A task that reads another task's output
+(a compile of a generated source, a staging copy of a library) always runs after it, whether or
+not anything declares the dependency.
 
 This means you use regular globs for generated files - no need to list each file explicitly. The outputs declared in the artifact's `outputs` field determine what files are available for matching.
 

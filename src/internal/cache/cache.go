@@ -123,11 +123,6 @@ func (bc *BuildCache) saveCacheIndexLocked() error {
 	return nil
 }
 
-// isDirOutput reports whether an output is declared as a directory (a trailing separator).
-func isDirOutput(path string) bool {
-	return len(path) > 0 && (path[len(path)-1] == '/' || path[len(path)-1] == filepath.Separator)
-}
-
 // Lookup reports whether the task's recorded result is still valid, and if not, why. The task's
 // inputs must be hashed (BuildTask.HashInputs). A hit needs an entry for the task's key, every
 // declared output present with its recorded hash, and every input the dependency file reported
@@ -145,15 +140,8 @@ func (bc *BuildCache) Lookup(task *workspace.BuildTask) (bool, string) {
 		if !ok {
 			return false, fmt.Sprintf("output %s was not recorded", output)
 		}
-		info, err := os.Stat(output)
-		if err != nil {
+		if _, err := os.Stat(output); err != nil {
 			return false, fmt.Sprintf("output %s is missing", output)
-		}
-		if isDirOutput(output) {
-			if !info.IsDir() {
-				return false, fmt.Sprintf("output %s is not a directory", output)
-			}
-			continue
 		}
 		actual, err := util.HashFile(output)
 		if err != nil || actual != recorded {
@@ -188,13 +176,9 @@ func (bc *BuildCache) Lookup(task *workspace.BuildTask) (bool, string) {
 func (bc *BuildCache) Record(task *workspace.BuildTask, executionTime float64, workDir string) error {
 	outputs := make(map[string]string, len(task.Outputs))
 	for _, output := range task.Outputs {
-		hash := "directory"
-		if !isDirOutput(output) {
-			var err error
-			hash, err = util.HashFile(output)
-			if err != nil {
-				return fmt.Errorf("declared output %s: %w", output, err)
-			}
+		hash, err := util.HashFile(output)
+		if err != nil {
+			return fmt.Errorf("declared output %s: %w", output, err)
 		}
 		outputs[util.NormalizePath(output)] = hash
 	}

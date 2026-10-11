@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -116,9 +117,27 @@ func lookupContextPath(context map[string]any, path string) (any, bool) {
 	return obj, true
 }
 
+// resolveStrict resolves every ${...} in text, or fails naming what was being resolved.
+func resolveStrict(env *util.VariableEnvironment, text, what string) (string, error) {
+	var errs []string
+	resolved := env.ResolveString(text, &errs, 10)
+	if len(errs) > 0 {
+		seen := map[string]bool{}
+		var names []string
+		for _, m := range unresolvedVariable.FindAllStringSubmatch(resolved, -1) {
+			if !seen[m[2]] {
+				seen[m[2]] = true
+				names = append(names, m[2])
+			}
+		}
+		return "", fmt.Errorf("unresolved variable %s in %s %q", strings.Join(names, ", "), what, text)
+	}
+	return resolved, nil
+}
+
 // resolveToolParams resolves tool parameters using VarEnv for variable resolution
 // and context map for structural references (like ${item.includes} arrays)
-func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context map[string]any, varEnv *util.VariableEnvironment) map[string]any {
+func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context map[string]any, varEnv *util.VariableEnvironment) (map[string]any, error) {
 	resolved := map[string]any{
 		"defines":      []string{},
 		"include_dirs": []string{},
@@ -158,7 +177,11 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 				continue
 			}
 			// Use VarEnv for variable resolution
-			resolved[key] = varEnv.ResolveString(v, nil, 10)
+			value, err := resolveStrict(varEnv, v, "tool parameter "+key)
+			if err != nil {
+				return nil, err
+			}
+			resolved[key] = value
 		case []any:
 			strList := []string{}
 			for _, item := range v {
@@ -177,7 +200,11 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 						continue
 					}
 					// Use VarEnv for variable resolution
-					strList = append(strList, varEnv.ResolveString(str, nil, 10))
+					value, err := resolveStrict(varEnv, str, "tool parameter "+key)
+					if err != nil {
+						return nil, err
+					}
+					strList = append(strList, value)
 				}
 			}
 			resolved[key] = strList
@@ -186,7 +213,7 @@ func (bte *BuildTemplateEngine) resolveToolParams(params map[string]any, context
 		}
 	}
 
-	return resolved
+	return resolved, nil
 }
 
 // toStringSlice converts various types to a string slice

@@ -143,8 +143,29 @@ func (cb *CommandBuilder) BuildCommand(
 	}
 
 	command = strings.TrimSpace(command)
+	if err := checkPlaceholders(tool, command); err != nil {
+		return "", "", "", fmt.Errorf("compiling %s: %w", source, err)
+	}
 
 	return command, depFile, depFormat, nil
+}
+
+// checkPlaceholders fails if a ${...} placeholder of the tool's command was given no value.
+func checkPlaceholders(tool *Tool, command string) error {
+	start := strings.Index(command, "${")
+	if start < 0 {
+		return nil
+	}
+	end := strings.Index(command[start:], "}")
+	name := command[start:]
+	if end >= 0 {
+		name = command[start : start+end+1]
+	}
+	hint := ""
+	if name == "${std}" {
+		hint = " (set cpp_standard or c_standard under environment.compile)"
+	}
+	return fmt.Errorf("the command of tool %s has no value for %s%s: %s", tool.Name, name, hint, command)
 }
 
 // BuildLinkCommand builds a link command using the tool template
@@ -268,6 +289,9 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	}
 
 	command = strings.TrimSpace(command)
+	if err := checkPlaceholders(tool, command); err != nil {
+		return "", "", fmt.Errorf("linking %s: %w", output, err)
+	}
 
 	return command, implib, nil
 }

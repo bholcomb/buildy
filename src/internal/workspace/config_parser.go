@@ -222,7 +222,9 @@ func (cp *ConfigParser) GenerateWorkspaceTasks(targetFilter []string) ([]*BuildT
 	}
 
 	// Second pass: resolve cross-module dependencies (target names -> task IDs)
-	allTasks = cp.resolveCrossModuleDependencies(allTasks)
+	if err := cp.resolveCrossModuleDependencies(allTasks); err != nil {
+		return nil, err
+	}
 
 	// Third pass: generate workspace-level staging and install tasks from root config
 	workspaceTasks, err := cp.generateWorkspaceLevelTasks(allTasks)
@@ -337,6 +339,9 @@ func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo,
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
 	}
+	for _, task := range moduleTasks {
+		task.Module = modulePath
+	}
 
 	return moduleTasks, nil
 }
@@ -348,6 +353,18 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) 
 	rootConfig := cp.Workspace.Config.RawConfig
 	if rootConfig == nil {
 		return tasks, nil
+	}
+
+	// A root config that is also a module (".", as in discovery mode) has had its staging and
+	// install generated with the module; generating them again would produce every output twice
+	rootConfigPath := cp.Workspace.ConfigPath
+	if rootConfigPath == "" {
+		rootConfigPath = filepath.Join(cp.Workspace.RootDir, "buildy.yaml")
+	}
+	for _, module := range cp.Workspace.Modules {
+		if filepath.Clean(module.Path) == filepath.Clean(rootConfigPath) {
+			return tasks, nil
+		}
 	}
 
 	// Determine output directory for workspace-level tasks
@@ -403,60 +420,44 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks(existingTasks []*BuildTask) 
 	return tasks, nil
 }
 
-// resolveCrossModuleDependencies resolves cross-module dependencies using the global task registry
-func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) []*BuildTask {
-	// First pass: ensure all link tasks are registered in the global registry
-	// (they should already be registered during generation, but this is a safety net)
+// resolveCrossModuleDependencies resolves dependencies by target name, now that every module's
+// targets are registered. A dependency is a task ID or a target name (depends_on.targets); a name
+// that is neither is an error. A link task's libraries that are workspace targets become
+// dependencies on their link tasks; the others are system libraries.
+func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) error {
+	taskIDs := make(map[string]bool, len(allTasks))
 	for _, task := range allTasks {
-		if task.TaskType == "link" {
-			// Check if already registered
-			if targetName, ok := globalTaskRegistry.GetTargetName(task.TaskID); ok {
-				util.LogInfo("Target '%s' already registered -> link task '%s'", targetName, task.TaskID)
-			}
-		}
+		taskIDs[task.TaskID] = true
 	}
 
-	// Now resolve dependencies in all tasks using the registry
 	for _, task := range allTasks {
 		resolvedDeps := []string{}
-		for _, dep := range task.Dependencies {
-			// Try to resolve using the registry
-			if resolvedID, ok := globalTaskRegistry.ResolveDependency(dep); ok {
-				if resolvedID != dep {
-					util.LogInfo("Resolved dependency '%s' to link task '%s' in task '%s'", dep, resolvedID, task.TaskID)
-				}
-				resolvedDeps = append(resolvedDeps, resolvedID)
-			} else {
-				// For link tasks, unresolved dependencies are likely external libs (vulkan, pthread, etc.)
-				// These don't need build ordering - they're system libraries.
-				// Only warn for non-link tasks where unresolved deps might indicate a config error.
-				if task.TaskType != "link" {
-					util.BuildWarning("dependency", "Could not resolve dependency '%s' in task '%s'", dep, task.TaskID)
-				} else {
-					util.LogVerbose("Skipping external library '%s' for build ordering in task '%s'", dep, task.TaskID)
-				}
-				// Don't add unresolved dependencies - they're either:
-				// - External libraries (no build order needed)
-				// - Task IDs that are already valid
-				// Check if it looks like a task ID (contains underscore pattern typical of task IDs)
-				if strings.Contains(dep, "_") && (strings.HasPrefix(dep, "compile_") ||
-					strings.HasPrefix(dep, "link_") ||
-					strings.HasPrefix(dep, "setup_") ||
-					strings.HasPrefix(dep, "transform_") ||
-					strings.HasPrefix(dep, "generate_") ||
-					strings.HasPrefix(dep, "copy_") ||
-					strings.HasPrefix(dep, "stage_")) {
-					// This looks like a task ID, keep it
-					resolvedDeps = append(resolvedDeps, dep)
-				}
-				// Otherwise, drop it (it's an external library name)
+		add := func(id string) {
+			if !hasString(resolvedDeps, id) {
+				resolvedDeps = append(resolvedDeps, id)
 			}
 		}
-
+		for _, dep := range task.Dependencies {
+			if taskIDs[dep] {
+				add(dep)
+			} else if linkID, ok := globalTaskRegistry.GetLinkTaskID(dep); ok {
+				util.LogInfo("Resolved dependency '%s' to task '%s' in task '%s'", dep, linkID, task.TaskID)
+				add(linkID)
+			} else {
+				return fmt.Errorf("%s depends on '%s', which is not a target in the workspace", task.Describe(), dep)
+			}
+		}
+		for _, lib := range task.LinkLibs {
+			if linkID, ok := globalTaskRegistry.GetLinkTaskID(lib); ok {
+				add(linkID)
+			} else {
+				util.LogVerbose("Library '%s' of task '%s' is not a workspace target: a system library", lib, task.TaskID)
+			}
+		}
 		task.Dependencies = resolvedDeps
 	}
 
-	return allTasks
+	return nil
 }
 
 // GenerateTasks generates tasks from configuration with variable resolution

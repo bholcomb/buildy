@@ -200,18 +200,6 @@ func (r *TaskIDRegistry) GetAllTargets() []string {
 	return targets
 }
 
-// ResolveDependency resolves a dependency string to a task ID
-// It handles both raw target names and already-resolved task IDs
-func (r *TaskIDRegistry) ResolveDependency(dep string) (string, bool) {
-	// If it looks like a task ID already, return it
-	if isTaskID(dep) {
-		return dep, true
-	}
-	
-	// Otherwise, look it up as a target name
-	return r.GetLinkTaskID(dep)
-}
-
 // GetTaskIDByOutputPath returns the link task ID for a given output file path
 func (r *TaskIDRegistry) GetTaskIDByOutputPath(outputPath string) (string, bool) {
 	r.mu.RLock()
@@ -245,17 +233,6 @@ func (r *TaskIDRegistry) Clear() {
 	r.moduleTargets = make(map[string][]string)
 	r.targetOutputPath = make(map[string]string)
 	r.outputPathToTask = make(map[string]string)
-}
-
-// isTaskID checks if a string looks like a task ID (rather than a target name)
-func isTaskID(s string) bool {
-	prefixes := []string{"setup_", "compile_", "link_", "build_", "copy_", "transform_", "generate_"}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // Global registry instance for cross-module dependency resolution

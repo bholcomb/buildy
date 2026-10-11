@@ -78,36 +78,6 @@ func TestTaskIDRegistryTargetResolution(t *testing.T) {
 	}
 }
 
-// TestTaskIDRegistryResolveDependency tests resolving both target names and task IDs.
-func TestTaskIDRegistryResolveDependency(t *testing.T) {
-	registry := NewTaskIDRegistry()
-	registry.RegisterTarget("vulkease", "link_vulkease_001__src", "src")
-
-	// Target name should resolve to task ID
-	taskID, ok := registry.ResolveDependency("vulkease")
-	if !ok {
-		t.Error("Should resolve vulkease target")
-	}
-	if taskID != "link_vulkease_001__src" {
-		t.Errorf("Expected link_vulkease_001__src, got %s", taskID)
-	}
-
-	// Task ID should pass through unchanged
-	taskID, ok = registry.ResolveDependency("compile_foo_001__bar")
-	if !ok {
-		t.Error("Should recognize task ID format")
-	}
-	if taskID != "compile_foo_001__bar" {
-		t.Errorf("Task ID should pass through unchanged: %s", taskID)
-	}
-
-	// Unknown target should not resolve
-	_, ok = registry.ResolveDependency("unknown_target")
-	if ok {
-		t.Error("Should not resolve unknown target")
-	}
-}
-
 // TestTaskIDRegistryOutputPathLookup tests looking up tasks by output path.
 func TestTaskIDRegistryOutputPathLookup(t *testing.T) {
 	registry := NewTaskIDRegistry()

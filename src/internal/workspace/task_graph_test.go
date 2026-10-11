@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -223,4 +224,86 @@ func TestTaskNumbersAssigned(t *testing.T) {
 
 	t.Logf("SUCCESS: Task numbers assigned: %d, %d, %d",
 		task1.TaskNumber, task2.TaskNumber, task3.TaskNumber)
+}
+
+func graphOf(t *testing.T, tasks ...*BuildTask) *TaskGraph {
+	t.Helper()
+	graph := NewTaskGraph()
+	for _, task := range tasks {
+		if err := graph.AddTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return graph
+}
+
+// Findings 2 and S4: two tasks declaring one output are rejected, both named.
+func TestValidateRejectsTwoProducersOfOneOutput(t *testing.T) {
+	one := &BuildTask{TaskID: "compile_one_main_cpp", Module: ".", Target: "one", Outputs: []string{"/b/obj/main.o"}}
+	two := &BuildTask{TaskID: "compile_two_main_cpp", Module: ".", Target: "two", Outputs: []string{"/b/obj/main.o"}}
+	err := graphOf(t, one, two).Validate()
+	if err == nil {
+		t.Fatal("two producers of one output were accepted")
+	}
+	for _, want := range []string{"/b/obj/main.o", "compile_one_main_cpp (module ., target one)", "compile_two_main_cpp (module ., target two)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
+
+func TestValidateRejectsUnknownDependency(t *testing.T) {
+	task := &BuildTask{TaskID: "link_app", Module: "appmod", Target: "app", Dependencies: []string{"link_nosuch"}}
+	err := graphOf(t, task).Validate()
+	if err == nil || !strings.Contains(err.Error(), "link_app (module appmod, target app) depends on link_nosuch") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// S15: a task reading another task's output depends on it, without anyone declaring the edge.
+func TestValidateAddsProducerEdges(t *testing.T) {
+	gen := &BuildTask{TaskID: "generate_version", Outputs: []string{"/b/gen/version.cpp"}}
+	compile := &BuildTask{TaskID: "compile_version", Inputs: []TaskInput{{Path: "/b/gen/version.cpp"}}, Outputs: []string{"/b/obj/version.o"}}
+	link := &BuildTask{TaskID: "link_app", Inputs: []TaskInput{{Path: "/b/obj/version.o"}}, Outputs: []string{"/b/bin/app"}, Dependencies: []string{"compile_version"}}
+	graph := graphOf(t, gen, compile, link)
+	if err := graph.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(compile.Dependencies, ",") != "generate_version" {
+		t.Errorf("compile dependencies = %v, want [generate_version]", compile.Dependencies)
+	}
+	if strings.Join(link.Dependencies, ",") != "compile_version" {
+		t.Errorf("link dependencies = %v, want [compile_version] once", link.Dependencies)
+	}
+	stages, err := graph.BuildExecutionStages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stages) != 3 {
+		t.Errorf("stages = %v, want generate, compile, link", stages)
+	}
+}
+
+func TestValidateRejectsUnresolvedVariables(t *testing.T) {
+	task := &BuildTask{TaskID: "compile_main", Command: "g++ -std=${std} -c main.cpp", Outputs: []string{"/b/main.o"}}
+	err := graphOf(t, task).Validate()
+	if err == nil || !strings.Contains(err.Error(), "${std}") {
+		t.Fatalf("got %v", err)
+	}
+
+	// An escaped \${...} is not a variable (sed patterns in generate tasks).
+	sed := &BuildTask{TaskID: "generate_config", Command: `sed 's/\${VERSION}/1.0/g' in > out`, Outputs: []string{"/b/out"}}
+	if err := graphOf(t, sed).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddTaskRejectsDuplicateIDs(t *testing.T) {
+	graph := NewTaskGraph()
+	if err := graph.AddTask(&BuildTask{TaskID: "x", Module: "a_b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := graph.AddTask(&BuildTask{TaskID: "x", Module: "a/b"}); err == nil {
+		t.Fatal("a duplicate task ID was accepted")
+	}
 }

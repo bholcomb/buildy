@@ -972,6 +972,12 @@ These are **intentionally separate** concepts:
 | `depends_on.targets` | Build ordering only (no linking) - for code generators, tools, etc. | `[proto_gen, asset_compiler]` |
 | `depends_on.artifacts` | Build ordering + virtual files for globs | Code generators (protobuf, etc.) |
 
+Target names are unique across the workspace: `libs` and `depends_on.targets` refer to targets by
+name, and every module's executables and libraries share the output directory's `bin/` and `lib/`.
+Two targets with the same name, in one module or in two, are an error naming both modules. A
+`depends_on.targets` name that is not a target is an error; a `libs` name that is not a target is
+a system library.
+
 **Why separate?**
 
 1. **deps are external**: They provide platform-specific settings (includes, libs, defines) from `buildy_config/dependencies.yaml`
@@ -1019,7 +1025,8 @@ targets:
 ```
 
 When a target declares `depends_on.artifacts`:
-1. The artifact tasks are added as build dependencies (artifact runs first)
+1. The artifact tasks are added as build dependencies of every task of the target, compiles
+   included (artifact runs first)
 2. The artifact's `outputs` are registered as "virtual files"
 3. Source globs in the target can match these virtual files even though they don't exist yet
 
@@ -1757,7 +1764,6 @@ The `metadata` section controls how buildy processes the target:
 |-------|-------------|
 | `register_target` | Register target for dependency resolution |
 | `scan_sources_pattern` | Pattern for scanning source files (e.g., `"*.go"`) |
-| `add_setup_dependency` | Add dependency on setup tasks (Go/Rust) |
 
 ### Step Fields
 
@@ -1803,6 +1809,19 @@ steps:
       features: "${item.features}"
       build_tags: "${item.build_tags}"
 ```
+
+### Task Graph Validation
+
+After generation, before anything runs (under `--dry-run` too), buildy checks the task graph and
+fails with an error naming the tasks, modules and targets involved if:
+
+1. two tasks declare the same output
+   (`output …/obj/app/one/main.o is produced by both compile_one_… (module ., target one) and …`),
+2. a task depends on a task that doesn't exist, or
+3. a `${…}` is left unresolved in a command, input or output path (an escaped `\${…}` is kept).
+
+A task that reads another task's output is made to depend on it, so the order follows from the
+data. There are no setup tasks: the executor creates every output's directory.
 
 ### Output Paths
 
