@@ -273,7 +273,9 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 
 	// Execute task
 	util.LogProgress("[%d/%d] %s - executing", task.TaskNumber, te.totalTaskCount, task.TaskID)
-	util.LogInfo("  Command: %s", task.Command)
+	if task.Native == nil {
+		util.LogInfo("  Command: %s", task.Command)
+	}
 	startTime := time.Now()
 
 	if err := te.prepareOutputs(task); err != nil {
@@ -385,16 +387,10 @@ func checkOutputs(task *workspace.BuildTask) error {
 	return nil
 }
 
-// run executes the task's work: copies natively, everything else through its command.
+// run executes the task's work: its native operation, or its command.
 func (te *TaskExecutor) run(task *workspace.BuildTask) error {
-	switch task.TaskType {
-	case "copy":
-		// Copy natively with Go's file operations, avoiding platform-specific shell commands
-		if len(task.Inputs) != 1 || len(task.Outputs) != 1 {
-			return fmt.Errorf("copy task %s needs exactly one input and one output, has %d and %d",
-				task.TaskID, len(task.Inputs), len(task.Outputs))
-		}
-		return util.CopyFile(task.Inputs[0].Path, task.Outputs[0])
+	if task.Native != nil {
+		return runNative(task)
 	}
 
 	// Process command through response file manager for long commands (Windows)
@@ -418,6 +414,26 @@ func (te *TaskExecutor) run(task *workspace.BuildTask) error {
 		return fmt.Errorf("exit code %d", result.ReturnCode)
 	}
 	return nil
+}
+
+// runNative carries out a task's native operation on its input and output.
+func runNative(task *workspace.BuildTask) error {
+	if len(task.Inputs) != 1 || len(task.Outputs) != 1 {
+		return fmt.Errorf("%s task %s needs exactly one input and one output, has %d and %d",
+			task.Native.Op, task.TaskID, len(task.Inputs), len(task.Outputs))
+	}
+	in, out := task.Inputs[0].Path, task.Outputs[0]
+	switch task.Native.Op {
+	case workspace.NativeCopy:
+		return util.CopyFile(in, out)
+	case workspace.NativeSymlink:
+		return os.Symlink(in, out)
+	case workspace.NativeTemplate:
+		return util.FillTemplate(in, out, task.Native.Substitutions)
+	case workspace.NativeArchive:
+		return util.WriteArchive(in, out, task.Native.Format, task.Native.FollowSymlinks)
+	}
+	return fmt.Errorf("task %s: unknown native operation %q", task.TaskID, task.Native.Op)
 }
 
 // printDryRun prints the execution plan: every task, stage by stage, without running any

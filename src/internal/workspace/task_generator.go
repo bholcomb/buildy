@@ -915,44 +915,18 @@ func (tg *TaskGenerator) generateFromTemplate(g *config.Generate, outputDir, gen
 	}
 	outputPath = tg.absolute(outputPath)
 
-	type substitution struct{ key, value string }
-	var vars []substitution
+	var substitutions [][2]string
 	for _, key := range g.Variables.Keys {
 		value, err := resolveStrict(env, string(g.Variables.Values[key]), "variable "+key+" of "+what)
 		if err != nil {
 			return nil, err
 		}
-		vars = append(vars, substitution{key, value})
-	}
-
-	outputFileDir := filepath.Dir(outputPath)
-	var command string
-	if tg.isWindows() {
-		psScript := fmt.Sprintf("$content = Get-Content '%s' -Raw; ", templatePath)
-		for _, v := range vars {
-			psScript += fmt.Sprintf("$content = $content -replace '@%s@', '%s'; ", v.key, v.value)
-			psScript += fmt.Sprintf("$content = $content -replace '\\${%s}', '%s'; ", v.key, v.value)
-		}
-		psScript += fmt.Sprintf("$content | Set-Content '%s'", outputPath)
-		command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && powershell -Command \"%s\"",
-			outputFileDir, outputFileDir, psScript)
-	} else {
-		var sedCmds []string
-		for _, v := range vars {
-			escaped := strings.ReplaceAll(v.value, "/", "\\/")
-			escaped = strings.ReplaceAll(escaped, "&", "\\&")
-			sedCmds = append(sedCmds, fmt.Sprintf("s/@%s@/%s/g", v.key, escaped))
-			sedCmds = append(sedCmds, fmt.Sprintf("s/\\${%s}/%s/g", v.key, escaped))
-		}
-		if len(sedCmds) == 0 {
-			command = fmt.Sprintf("mkdir -p %s && cp %s %s", outputFileDir, templatePath, outputPath)
-		} else {
-			command = fmt.Sprintf("mkdir -p %s && sed '%s' %s > %s", outputFileDir, strings.Join(sedCmds, "; "), templatePath, outputPath)
-		}
+		substitutions = append(substitutions, [2]string{key, value})
 	}
 
 	taskID := tg.TaskIDGen.Next("generate", g.Name)
-	task := NewBuildTask(taskID, "generate", []TaskInput{NewTaskInput(templatePath)}, []string{outputPath}, []string{}, command)
+	task := NewNativeTask(taskID, "generate", []TaskInput{NewTaskInput(templatePath)}, []string{outputPath}, []string{},
+		NativeOp{Op: NativeTemplate, Substitutions: substitutions})
 	tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 1})
 	task.Target = g.Name
 
@@ -1142,27 +1116,16 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(source, dest string, useSymlink
 	source = filepath.Clean(source)
 	dest = filepath.Clean(dest)
 
-	var command string
-	taskType := "copy"
-	var inputs []TaskInput
-	switch {
-	case useSymlink:
-		taskType = "symlink"
-		command = fmt.Sprintf("ln -sf %s %s", source, dest)
-		// A symlink's key is the path it points to, not the content behind it
-		inputs = []TaskInput{{Path: source, Hash: "symlink:" + source}}
-	case tg.isWindows():
-		command = fmt.Sprintf("copy /Y \"%s\" \"%s\"", source, dest)
-		inputs = []TaskInput{NewTaskInput(source)}
-	default:
-		command = fmt.Sprintf("cp %s %s", source, dest)
-		inputs = []TaskInput{NewTaskInput(source)}
-	}
-
 	taskID := tg.TaskIDGen.Next("stage", filepath.Base(dest))
-	task := NewBuildTask(taskID, taskType, inputs, []string{dest}, dependencies, command)
+	var task BuildTask
+	if useSymlink {
+		// A symlink's key is the path it points to, not the content behind it
+		task = NewNativeTask(taskID, NativeSymlink, []TaskInput{{Path: source, Hash: "symlink:" + source}}, []string{dest}, dependencies, NativeOp{Op: NativeSymlink})
+	} else {
+		task = NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, NativeOp{Op: NativeCopy})
+	}
 	tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
-	util.LogInfo("Generated %s task: %s -> %s", taskType, source, dest)
+	util.LogInfo("Generated %s task: %s -> %s", task.TaskType, source, dest)
 	return &task
 }
 
@@ -1205,7 +1168,7 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 		}
 
 		format := inst.Format
-		if format == "" {
+		if format == "" || format == "tgz" {
 			format = "tar.gz"
 		}
 		followSymlinks := inst.FollowSymlinks == nil || *inst.FollowSymlinks
@@ -1231,53 +1194,17 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 			return nil, fmt.Errorf("install '%s' in module %s: staging '%s' is not a staging section of the module", name, tg.moduleName(), stagingName)
 		}
 
-		ext := map[string]string{"tar.gz": ".tar.gz", "tgz": ".tar.gz", "zip": ".zip", "tar": ".tar"}[format]
-		outputFile := filepath.Join(destination, filename+ext)
-
-		var command string
-		if tg.isWindows() {
-			switch format {
-			case "zip":
-				command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && powershell -Command \"Compress-Archive -Path '%s\\*' -DestinationPath '%s' -Force\"",
-					destination, destination, stagingDir, outputFile)
-			default:
-				command = fmt.Sprintf("if not exist \"%s\" mkdir \"%s\" && tar -czvf \"%s\" -C \"%s\" .",
-					destination, destination, outputFile, stagingDir)
-			}
-		} else {
-			mkdirCmd := fmt.Sprintf("mkdir -p %s", destination)
-			follow := ""
-			if followSymlinks {
-				follow = "h"
-			}
-			switch format {
-			case "zip":
-				// zip follows symlinks by default
-				command = fmt.Sprintf("%s && cd %s && zip -r %s .", mkdirCmd, stagingDir, outputFile)
-			case "tar":
-				command = fmt.Sprintf("%s && tar -c%sf %s -C %s .", mkdirCmd, follow, outputFile, stagingDir)
-			default:
-				command = fmt.Sprintf("%s && tar -cz%sf %s -C %s .", mkdirCmd, follow, outputFile, stagingDir)
-			}
-		}
+		outputFile := filepath.Join(destination, filename+"."+format)
 
 		taskID := tg.TaskIDGen.Next("install", name)
-		task := NewBuildTask(taskID, "install", []TaskInput{{Path: stagingDir, Hash: "directory"}}, []string{outputFile},
-			tg.stagingTasksByName[stagingName], command)
+		task := NewNativeTask(taskID, "install", []TaskInput{{Path: stagingDir}}, []string{outputFile},
+			tg.stagingTasksByName[stagingName], NativeOp{Op: NativeArchive, Format: format, FollowSymlinks: followSymlinks})
 		tg.finalizeTask(&task, "", 5.0, ResourceRequirements{CPUCores: 1, MemoryMB: 512, DiskMB: 500})
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
 	}
 
 	return tasks, nil
-}
-
-// copyCommand is the command that copies one file.
-func (tg *TaskGenerator) copyCommand(source, dest string) string {
-	if tg.isWindows() {
-		return fmt.Sprintf("copy /Y \"%s\" \"%s\"", source, dest)
-	}
-	return fmt.Sprintf("cp %s %s", source, dest)
 }
 
 // generateArtifactCopyTasks generates copy tasks from the artifacts.copy section
@@ -1316,7 +1243,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 					srcFile = filepath.Clean(srcFile)
 					destFile := filepath.Join(destDir, filepath.Base(srcFile))
 					taskID := tg.TaskIDGen.Next("copy", filepath.Base(srcFile))
-					task := NewBuildTask(taskID, "copy", []TaskInput{NewTaskInput(srcFile)}, []string{destFile}, nil, tg.copyCommand(srcFile, destFile))
+					task := NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(srcFile)}, []string{destFile}, nil, NativeOp{Op: NativeCopy})
 					tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
 					tasks = append(tasks, &task)
 					outputs = append(outputs, destFile)
@@ -1372,7 +1299,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 		}
 
 		taskID := tg.TaskIDGen.Next("copy", filepath.Base(dest))
-		task := NewBuildTask(taskID, "copy", []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, tg.copyCommand(source, dest))
+		task := NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, NativeOp{Op: NativeCopy})
 		tg.finalizeTask(&task, "", 0.1, ResourceRequirements{CPUCores: 1, MemoryMB: 64, DiskMB: 10})
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated copy task: %s -> %s", source, dest)

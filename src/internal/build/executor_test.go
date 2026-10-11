@@ -270,3 +270,61 @@ func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 		t.Errorf("specs %+v: want one docker and one native run", specs)
 	}
 }
+
+// Copies, symlinks, template files and install archives are native: buildy does them itself,
+// whatever the paths hold, and they are cached like any task.
+func TestExecutorRunsNativeOperations(t *testing.T) {
+	root := filepath.Join(t.TempDir(), `it's a "dir"`)
+	if runtime.GOOS == "windows" {
+		root = filepath.Join(t.TempDir(), "it's a dir")
+	}
+	src := filepath.Join(root, "in", "version.h.in")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("v@V@\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(root, "stage")
+	gen := filepath.Join(root, "gen", "version.h")
+	copied := filepath.Join(stage, "copied.h")
+	archive := filepath.Join(root, "dist", "pkg.tar.gz")
+	native := func(id string, in, out string, op workspace.NativeOp, deps ...string) *workspace.BuildTask {
+		task := workspace.NewNativeTask(id, op.Op, []workspace.TaskInput{workspace.NewTaskInput(in)}, []string{out}, deps, op)
+		return &task
+	}
+	tasks := []*workspace.BuildTask{
+		native("generate_version", src, gen, workspace.NativeOp{Op: workspace.NativeTemplate, Substitutions: [][2]string{{"V", "1 & 2"}}}),
+		native("stage_copy", gen, copied, workspace.NativeOp{Op: workspace.NativeCopy}, "generate_version"),
+		native("install_pkg", stage, archive, workspace.NativeOp{Op: workspace.NativeArchive, Format: "tar.gz", FollowSymlinks: true}, "stage_copy"),
+	}
+	if runtime.GOOS != "windows" {
+		link := native("stage_link", gen, filepath.Join(stage, "linked.h"), workspace.NativeOp{Op: workspace.NativeSymlink}, "generate_version")
+		link.Inputs[0].Hash = "symlink:" + gen
+		tasks = append(tasks, link)
+		tasks[2].Dependencies = append(tasks[2].Dependencies, "stage_link")
+	}
+	te := newExecutor(t, root, false)
+	if !runTasks(te, tasks...) {
+		t.Fatal("native tasks failed")
+	}
+	if got := read(t, copied); got != "v1 & 2\n" {
+		t.Errorf("copied.h = %q", got)
+	}
+	if runtime.GOOS != "windows" {
+		if target, err := os.Readlink(filepath.Join(stage, "linked.h")); err != nil || target != gen {
+			t.Errorf("linked.h -> %q (%v), want %s", target, err, gen)
+		}
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Errorf("no archive: %v", err)
+	}
+
+	te = newExecutor(t, root, false)
+	if !runTasks(te, tasks...) {
+		t.Fatal("second run failed")
+	}
+	if te.ExecutionStats.CacheHits != len(tasks) {
+		t.Errorf("second run: %d cache hits, want %d", te.ExecutionStats.CacheHits, len(tasks))
+	}
+}

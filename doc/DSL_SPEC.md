@@ -1236,6 +1236,13 @@ artifacts:
       args: ["--cpp_out=${gen_dir}"]
 ```
 
+A `template` generate is filled in by buildy itself: each variable, in the order written,
+replaces every `@NAME@` and `${NAME}` in the file with its value as is (quotes, slashes, `&` and
+spaces included). The output keeps the template's permission bits. A `tool` generate runs the
+tool once per input file.
+
+Copies and staging symlinks are native too: `cp`, `ln` and `copy` are never run.
+
 ---
 
 ## 8. Staging Section
@@ -1384,11 +1391,18 @@ install:
 
 ### Supported Formats
 
-| Format | Extension | Symlink Handling |
-|--------|-----------|------------------|
-| `tar.gz` | .tar.gz | Uses `-h` flag to dereference symlinks |
-| `zip` | .zip | Follows symlinks by default |
-| `tar` | .tar | Uses `-h` flag to dereference symlinks |
+| Format | Extension |
+|--------|-----------|
+| `tar.gz` (or `tgz`) | .tar.gz |
+| `zip` | .zip |
+| `tar` | .tar |
+
+Buildy writes the archive itself, the same way on every platform: no `tar`, `zip` or PowerShell
+is needed. Entries are the staging area's paths with forward slashes and no `./` prefix,
+in name order, each directory before its contents. Every entry has the modification time
+2000-01-01 00:00:00 UTC and owner 0, and keeps its permission bits, so the same staging area
+always gives the same archive. With `follow_symlinks: true` (the default) a symlink is stored as
+the file or directory it points to; with `false`, as a link.
 
 ### Filename Variables
 

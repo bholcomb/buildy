@@ -38,6 +38,25 @@ func CopyFile(src, dst string) error {
 	return os.Chmod(dst, sourceInfo.Mode())
 }
 
+// FillTemplate writes the file src to dst with every @KEY@ and ${KEY} replaced by its value, one
+// substitution after the other in the order given. dst gets src's permission bits.
+func FillTemplate(src, dst string, substitutions [][2]string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	text := string(data)
+	for _, s := range substitutions {
+		text = strings.ReplaceAll(text, "@"+s[0]+"@", s[1])
+		text = strings.ReplaceAll(text, "${"+s[0]+"}", s[1])
+	}
+	return os.WriteFile(dst, []byte(text), info.Mode().Perm())
+}
+
 // NormalizePath normalizes a file path for consistent cache key generation.
 // On Windows, this lowercases the entire path since the filesystem is case-insensitive.
 // On all platforms, it cleans the path to remove redundant separators.

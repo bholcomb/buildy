@@ -49,6 +49,23 @@ type DepFile struct {
 	Format string `json:"format"` // resource.DepFormatMake or resource.DepFormatMSVCJSON
 }
 
+// Native operations: work buildy does itself, in Go, instead of running a command.
+const (
+	NativeCopy     = "copy"     // copy Inputs[0] to Outputs[0]
+	NativeSymlink  = "symlink"  // make Outputs[0] a symlink to Inputs[0]
+	NativeTemplate = "template" // fill the template file Inputs[0] in, into Outputs[0]
+	NativeArchive  = "archive"  // pack the directory Inputs[0] into the archive Outputs[0]
+)
+
+// NativeOp describes a task's native operation, for its cache key and the tasks file. The paths
+// it works on are the task's input and output.
+type NativeOp struct {
+	Op             string      `json:"op"`
+	Substitutions  [][2]string `json:"substitutions,omitempty"`   // template: @KEY@ and ${KEY} -> value, in order
+	Format         string      `json:"format,omitempty"`          // archive: tar, tar.gz or zip
+	FollowSymlinks bool        `json:"follow_symlinks,omitempty"` // archive: store what links point to
+}
+
 // BuildTask represents an individual build task following Blizzard's parse/execute model.
 //
 // The contract: Inputs are every file the task reads that can be named before it runs, including
@@ -67,7 +84,8 @@ type BuildTask struct {
 	LinkLibs             []string             `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
 	Module               string               `json:"module"`              // Module that defined the task ("" for the workspace root config)
 	Target               string               `json:"target,omitempty"`    // Target or artifact the task belongs to
-	Command              string               `json:"command"`
+	Command              string               `json:"command,omitempty"`
+	Native               *NativeOp            `json:"native,omitempty"` // Set instead of Command for work buildy does itself
 	Platform             string               `json:"platform"`
 	Architecture         string               `json:"architecture"`
 	Configuration        string               `json:"configuration"`
@@ -90,6 +108,13 @@ func (t *BuildTask) Describe() string {
 		return fmt.Sprintf("%s (module %s)", t.TaskID, module)
 	}
 	return fmt.Sprintf("%s (module %s, target %s)", t.TaskID, module, t.Target)
+}
+
+// NewNativeTask creates a task that buildy carries out itself.
+func NewNativeTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, op NativeOp) BuildTask {
+	task := NewBuildTask(taskID, taskType, inputs, outputs, dependencies, "")
+	task.Native = &op
+	return task
 }
 
 // NewBuildTask creates a BuildTask with default values
@@ -131,6 +156,7 @@ func (t *BuildTask) CalculateCacheKey() string {
 		"inputs":         inputTuples,
 		"outputs":        outputs,
 		"command":        t.Command,
+		"native":         t.Native,
 		"platform":       t.Platform,
 		"architecture":   t.Architecture,
 		"configuration":  t.Configuration,
