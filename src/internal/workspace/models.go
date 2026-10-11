@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -176,9 +175,9 @@ func (t *BuildTask) CalculateCacheKey() string {
 	return fmt.Sprintf("%x", hash[:])
 }
 
-// HashInputs hashes every declared input and computes the cache key. Every input must exist:
-// the executor calls it once the task's producers have run.
-func (t *BuildTask) HashInputs() error {
+// HashInputs hashes every declared input with hash, which hashes a file, and computes the cache
+// key. Every input must exist: the executor calls it once the task's producers have run.
+func (t *BuildTask) HashInputs(hash func(path string) (string, error)) error {
 	for i := range t.Inputs {
 		path := t.Inputs[i].Path
 		info, err := os.Stat(path)
@@ -189,52 +188,25 @@ func (t *BuildTask) HashInputs() error {
 		if strings.HasPrefix(t.Inputs[i].Hash, "symlink:") {
 			continue
 		}
-		var hash string
+		var h string
 		if info.IsDir() {
 			// Directory inputs (install tasks packaging a staging directory) hash as a tree
-			hash, err = calculateDirectoryHash(path)
+			h, err = directoryHash(path, hash)
 		} else {
-			hash, err = calculateFileHashForInput(path)
+			h, err = hash(path)
 		}
 		if err != nil {
 			return fmt.Errorf("input %s: %w", path, err)
 		}
-		t.Inputs[i].Hash = hash
+		t.Inputs[i].Hash = h
 	}
 	t.CacheKey = t.CalculateCacheKey()
 	return nil
 }
 
-// calculateFileHashForInput calculates SHA-256 hash of a file for input hashing
-func calculateFileHashForInput(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	h := sha256.New()
-	buf := make([]byte, 8192)
-	for {
-		n, err := file.Read(buf)
-		if n > 0 {
-			h.Write(buf[:n])
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-// calculateDirectoryHash calculates a hash of directory contents
-// This includes all file paths and their content hashes, sorted for determinism
-func calculateDirectoryHash(dirPath string) (string, error) {
+// directoryHash hashes a directory's files: each one's path relative to it and its hash, sorted.
+func directoryHash(dirPath string, hash func(path string) (string, error)) (string, error) {
 	var entries []string
-
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -242,19 +214,14 @@ func calculateDirectoryHash(dirPath string) (string, error) {
 		if info.IsDir() {
 			return nil
 		}
-
-		// Get relative path for consistent hashing
 		relPath, err := filepath.Rel(dirPath, path)
 		if err != nil {
 			return err
 		}
-
-		// Calculate file hash
-		fileHash, err := calculateFileHashForInput(path)
+		fileHash, err := hash(path)
 		if err != nil {
 			return err
 		}
-
 		// Use forward slashes for cross-platform consistency
 		entries = append(entries, filepath.ToSlash(relPath)+":"+fileHash)
 		return nil
@@ -262,11 +229,7 @@ func calculateDirectoryHash(dirPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	// Sort for deterministic ordering
 	sort.Strings(entries)
-
-	// Hash the combined entries
 	h := sha256.New()
 	for _, entry := range entries {
 		h.Write([]byte(entry))

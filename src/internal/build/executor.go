@@ -241,7 +241,7 @@ func (te *TaskExecutor) executeSingleTask(task *workspace.BuildTask) bool {
 	if err := te.checkInputs(task); err != nil {
 		return te.fail(task, 0, err)
 	}
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(te.Cache.HashFile); err != nil {
 		return te.fail(task, 0, err)
 	}
 
@@ -345,6 +345,7 @@ func (te *TaskExecutor) checkInputs(task *workspace.BuildTask) error {
 // tasks keep their outputs: their tool uses them for its own incremental work.
 func (te *TaskExecutor) prepareOutputs(task *workspace.BuildTask) error {
 	for _, output := range task.Outputs {
+		te.Cache.Forget(output)
 		if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
 			return fmt.Errorf("failed to create output directory %s: %w", filepath.Dir(output), err)
 		}

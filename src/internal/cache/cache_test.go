@@ -37,7 +37,7 @@ func ran(t *testing.T, bc *BuildCache, task *workspace.BuildTask, dir string) {
 	t.Helper()
 	write(t, filepath.Join(dir, "main.o"), "object")
 	write(t, filepath.Join(dir, "main.d"), "main.o: main.cpp config other.h\n")
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := bc.Record(task, dir); err != nil {
@@ -47,7 +47,7 @@ func ran(t *testing.T, bc *BuildCache, task *workspace.BuildTask, dir string) {
 
 func lookup(t *testing.T, bc *BuildCache, task *workspace.BuildTask) (bool, string) {
 	t.Helper()
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 	return bc.Lookup(task)
@@ -161,7 +161,7 @@ func TestRecordFailsWithoutADeclaredOutput(t *testing.T) {
 	}
 	task := compileTask(t, dir)
 	write(t, filepath.Join(dir, "main.d"), "main.o: main.cpp\n")
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 	err = bc.Record(task, dir)
@@ -183,7 +183,7 @@ func TestRecordFailsOnAnUnparsableDepFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := compileTask(t, dir)
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := bc.Record(task, dir); err == nil {
@@ -198,10 +198,10 @@ func TestCacheKeyIncludesOutputs(t *testing.T) {
 	a := compileTask(t, dir)
 	b := compileTask(t, dir)
 	b.Outputs = []string{filepath.Join(dir, "other.o")}
-	if err := a.HashInputs(); err != nil {
+	if err := a.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.HashInputs(); err != nil {
+	if err := b.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 	if a.CacheKey == b.CacheKey {
@@ -216,7 +216,7 @@ func TestCacheKeyIncludesExecAndToolchainHash(t *testing.T) {
 	key := func(mutate func(*workspace.BuildTask)) string {
 		task := compileTask(t, dir)
 		mutate(task)
-		if err := task.HashInputs(); err != nil {
+		if err := task.HashInputs(util.HashFile); err != nil {
 			t.Fatal(err)
 		}
 		return task.CacheKey

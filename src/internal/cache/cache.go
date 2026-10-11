@@ -61,6 +61,7 @@ type BuildCache struct {
 	newest   map[string]string     // task ID and context -> the key of its newest entry
 	journal  *os.File              // opened for appending at the first Record
 	dirty    bool                  // the snapshot is out of date: the journal has entries
+	files    *FileHashes
 }
 
 // NewBuildCache opens the cache in cacheDir, creating it if needed.
@@ -76,6 +77,10 @@ func NewBuildCache(cacheDir string) (*BuildCache, error) {
 		entries:  make(map[string]CacheEntry),
 		newest:   make(map[string]string),
 	}
+	var err error
+	if bc.files, err = loadFileHashes(cacheDir); err != nil {
+		return nil, err
+	}
 	if err := bc.loadSnapshot(); err != nil {
 		return nil, err
 	}
@@ -83,6 +88,17 @@ func NewBuildCache(cacheDir string) (*BuildCache, error) {
 		return nil, err
 	}
 	return bc, nil
+}
+
+// HashFile returns a file's SHA-256, read once per run, and not at all when its stat says it is
+// unchanged since an earlier run (FileHashes).
+func (bc *BuildCache) HashFile(path string) (string, error) {
+	return bc.files.Hash(path)
+}
+
+// Forget drops the remembered hash of a file a task is about to write.
+func (bc *BuildCache) Forget(path string) {
+	bc.files.Forget(path)
 }
 
 // CacheDir returns the cache directory path
@@ -156,9 +172,13 @@ func (bc *BuildCache) replayJournal() error {
 }
 
 // Close compacts the cache: it writes the snapshot with the newest entry of each task and
-// context, then removes the journal. A run calls it once it has finished or stopped, and an
-// interrupted run too; until then, the journal holds what the run recorded.
+// context, then removes the journal; and it saves the file hashes. A run calls it once it has
+// finished or stopped, and an interrupted run too; until then, the journal holds what the run
+// recorded.
 func (bc *BuildCache) Close() error {
+	if err := bc.files.Save(); err != nil {
+		return err
+	}
 	bc.mutex.Lock()
 	defer bc.mutex.Unlock()
 	if bc.journal != nil {
@@ -245,28 +265,25 @@ func (bc *BuildCache) Lookup(task *workspace.BuildTask) (bool, string) {
 		if !ok {
 			return false, fmt.Sprintf("output %s was not recorded", output)
 		}
-		if _, err := os.Stat(output); err != nil {
+		actual, err := bc.files.Hash(output)
+		if errors.Is(err, fs.ErrNotExist) {
 			return false, fmt.Sprintf("output %s is missing", output)
 		}
-		actual, err := util.HashFile(output)
 		if err != nil || actual != recorded {
 			return false, fmt.Sprintf("output %s changed", output)
 		}
 	}
 
 	for path, recorded := range entry.DepInputs {
-		_, statErr := os.Stat(path)
-		if recorded == missingHash {
-			if statErr == nil {
-				return false, fmt.Sprintf("%s now exists", path)
-			}
+		actual, err := bc.files.Hash(path)
+		switch {
+		case recorded == missingHash && errors.Is(err, fs.ErrNotExist):
 			continue
-		}
-		if statErr != nil {
+		case recorded == missingHash:
+			return false, fmt.Sprintf("%s now exists", path)
+		case errors.Is(err, fs.ErrNotExist):
 			return false, fmt.Sprintf("%s was removed", path)
-		}
-		actual, err := util.HashFile(path)
-		if err != nil || actual != recorded {
+		case err != nil || actual != recorded:
 			return false, fmt.Sprintf("%s changed", path)
 		}
 	}
@@ -281,14 +298,14 @@ func (bc *BuildCache) Lookup(task *workspace.BuildTask) (bool, string) {
 func (bc *BuildCache) Record(task *workspace.BuildTask, workDir string) error {
 	outputs := make(map[string]string, len(task.Outputs))
 	for _, output := range task.Outputs {
-		hash, err := util.HashFile(output)
+		hash, err := bc.files.Hash(output)
 		if err != nil {
 			return fmt.Errorf("declared output %s: %w", output, err)
 		}
 		outputs[util.NormalizePath(output)] = hash
 	}
 
-	depInputs, err := discoveredInputs(task, workDir)
+	depInputs, err := bc.discoveredInputs(task, workDir)
 	if err != nil {
 		return err
 	}
@@ -325,7 +342,7 @@ func (bc *BuildCache) Record(task *workspace.BuildTask, workDir string) error {
 
 // discoveredInputs reads the task's dependency file and hashes every input it lists, apart from
 // the task's declared inputs (the source), which are already part of the key.
-func discoveredInputs(task *workspace.BuildTask, workDir string) (map[string]string, error) {
+func (bc *BuildCache) discoveredInputs(task *workspace.BuildTask, workDir string) (map[string]string, error) {
 	if task.DepFile == nil {
 		return nil, nil
 	}
@@ -349,7 +366,7 @@ func discoveredInputs(task *workspace.BuildTask, workDir string) (map[string]str
 		if declared[util.NormalizePath(p)] {
 			continue
 		}
-		hash, err := util.HashFile(p)
+		hash, err := bc.files.Hash(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			hash = missingHash
 		} else if err != nil {

@@ -42,7 +42,7 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 	task.Architecture = "x86_64"
 	task.Configuration = "debug"
 	task.Toolchain = "gcc"
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,7 +63,7 @@ func TestCacheKeyChangesWhenInputFileChanges(t *testing.T) {
 	}
 
 	// Call HashInputs - the executor calls it before the cache lookup
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatalf("HashInputs failed: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestCacheKeyChangesWhenDirectoryContentsChange(t *testing.T) {
 	task.Configuration = "debug"
 
 	// Update hashes - this should calculate the actual directory hash
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatalf("HashInputs failed: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestCacheKeyChangesWhenDirectoryContentsChange(t *testing.T) {
 	}
 
 	// Update hashes again
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatalf("HashInputs failed: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestSymlinkInputsAreNotRehashed(t *testing.T) {
 	originalHash := task.Inputs[0].Hash
 
 	// Update hashes
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatalf("HashInputs failed: %v", err)
 	}
 
@@ -251,7 +251,7 @@ func TestMultipleInputsAllRehashed(t *testing.T) {
 		commandLine("ld -o output.exe file1.o file2.o file3.o"),
 	)
 	task.Platform = "linux"
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -268,7 +268,7 @@ func TestMultipleInputsAllRehashed(t *testing.T) {
 	}
 
 	// Update hashes
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatalf("HashInputs failed: %v", err)
 	}
 
@@ -316,7 +316,7 @@ func TestCacheKeyStableWhenNoChanges(t *testing.T) {
 		commandLine("ld -o output.exe stable.o"),
 	)
 	task.Platform = "linux"
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -324,7 +324,7 @@ func TestCacheKeyStableWhenNoChanges(t *testing.T) {
 
 	// Call HashInputs multiple times without changing the file
 	for i := 0; i < 5; i++ {
-		if err := task.HashInputs(); err != nil {
+		if err := task.HashInputs(util.HashFile); err != nil {
 			t.Fatalf("HashInputs failed on iteration %d: %v", i, err)
 		}
 
@@ -367,7 +367,7 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 	task1.Platform = "test"
 	task1.Architecture = "x86_64"
 	task1.Configuration = "debug"
-	if err := task1.HashInputs(); err != nil {
+	if err := task1.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -383,7 +383,7 @@ func TestCacheKeyPathNormalization(t *testing.T) {
 	task2.Platform = "test"
 	task2.Architecture = "x86_64"
 	task2.Configuration = "debug"
-	if err := task2.HashInputs(); err != nil {
+	if err := task2.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -419,7 +419,7 @@ func TestCacheKeyDifferentPlatforms(t *testing.T) {
 		task.Platform = platform
 		task.Architecture = "x86_64"
 		task.Configuration = "debug"
-		if err := task.HashInputs(); err != nil {
+		if err := task.HashInputs(util.HashFile); err != nil {
 			t.Fatal(err)
 		}
 		return &task
@@ -463,7 +463,7 @@ func TestCacheKeyDifferentToolchains(t *testing.T) {
 		task.Architecture = "x86_64"
 		task.Configuration = "debug"
 		task.ToolchainHash = toolchain
-		if err := task.HashInputs(); err != nil {
+		if err := task.HashInputs(util.HashFile); err != nil {
 			t.Fatal(err)
 		}
 		return &task
@@ -525,7 +525,7 @@ func TestConfigHashInvalidatesCache(t *testing.T) {
 		task.Configuration = "debug"
 		task.Toolchain = "gcc"
 		task.ConfigHash = configHash
-		if err := task.HashInputs(); err != nil {
+		if err := task.HashInputs(util.HashFile); err != nil {
 			t.Fatal(err)
 		}
 		return &task
@@ -567,7 +567,7 @@ func TestConfigHashEmptyDoesNotPanic(t *testing.T) {
 		commandLine("g++ -c input.cpp -o output.o"),
 	)
 	task.ConfigHash = ""
-	if err := task.HashInputs(); err != nil {
+	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)
 	}
 
