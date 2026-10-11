@@ -442,6 +442,13 @@ In a debug build, `myapp` would receive compile flags: `[resolved abstract keywo
 
 Note: Top-level `flags:` at the environment or configuration level is a shorthand for compile flags. For clarity, prefer using the explicit `compile:` section.
 
+Each item of `flags` (and of `defines`, `include_dirs`, `lib_dirs` and `libs`) is one argument of
+the compiler or linker, passed exactly as written: buildy runs commands without a shell. So a
+path with spaces needs no quotes, `defines: ['MSG="hello world"']` defines `MSG` as the string
+`"hello world"`, and `-Wl,-rpath,$ORIGIN` is written without the shell quotes a Makefile would
+need (quotes would reach the linker). Write one flag per item: `["-framework", "Cocoa"]`, not
+`["-framework Cocoa"]`.
+
 ### Flag Removal
 
 Use `remove_flags` and `remove_defines` to exclude flags or defines inherited from higher levels. This is useful when a specific target or configuration needs to opt out of a global setting:
@@ -948,6 +955,10 @@ install:
     filename: "${project_name}-${project_version}-${platform}-${arch}"
 ```
 
+Buildy writes the archive itself (no `tar`, `zip` or PowerShell needed), the same on every
+platform, and the same bytes for the same files: entries in name order, without a `./` prefix,
+with a fixed date. Copies, staging symlinks and template files are done by buildy too.
+
 ## Customization
 
 ### Custom Toolchains
@@ -971,6 +982,13 @@ toolchain:
       input_extensions: [".fbx", ".obj"]
       output_extension: ".mesh"
 ```
+
+A tool's command runs without a shell: buildy splits it into words, and each placeholder that is a
+word of its own becomes its values, each one argument (`${flags}` may be several, an empty one
+none), while one inside a word (`-o${output}`) must have one value. A tool that needs pipes or
+`&&` sets `shell: true`, and buildy quotes the values for the shell. A tool that reads arguments
+from an `@file` says so with `response_file: gnu` or `msvc`, and buildy uses one when a command
+line is too long for the system. See [Command Syntax](DSL_SPEC.md#command-syntax).
 
 ### Custom Build Systems
 
@@ -1106,12 +1124,13 @@ Generate `compile_commands.json` for IDE support:
 buildy --compile-commands
 ```
 
-This creates `buildy_config/compile_commands.json` which IDEs and language servers use for code intelligence.
+This creates `buildy_config/compile_commands.json` which IDEs and language servers use for code intelligence. Each entry has the compile's `arguments`, exactly as buildy runs them.
 
 ## Cache Management
 
 Buildy uses content-addressable caching for incremental builds. A task's cache key covers its
-type, command, declared outputs, platform, architecture, configuration, toolchain, the module's
+type, command (its argument list and directory, or for a copy, symlink, template or archive, what
+buildy does), declared outputs, platform, architecture, configuration, toolchain, the module's
 configuration, and the content of every declared input. A task is skipped (a cache hit) only when:
 
 - the cache has an entry for that key,

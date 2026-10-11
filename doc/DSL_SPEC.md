@@ -36,7 +36,7 @@ Buildy is a multi-language build system designed for:
 | **Paths** | Always use forward slashes in YAML; converted to native separators at runtime |
 | **Platform deps** | Use subsections (`common:`, `linux:`, `windows:`, `macos:`) |
 | **Executable extensions** | Toolchain handles via `output_pattern` (e.g., `{name}.exe` on Windows) |
-| **Shell commands** | Abstract tools preferred; platform subsections when shell is unavoidable |
+| **Commands** | Run as argument lists, without a shell ([Command Syntax](#command-syntax)); a tool that needs one says `shell: true` |
 
 ### Platform and Architecture Names
 
@@ -86,7 +86,7 @@ project/
     ├── downloads/                 # Cached archive downloads, keyed by a hash of the URL
     │   ├── 3f2a…-glfw-3.4.zip           # Downloaded archive
     │   └── 3f2a…-glfw-3.4.zip.meta.json # Download metadata (SHA256, etc.)
-    └── response_files/            # Compiler response files
+    └── response_files/            # Arguments of a command too long for the command line (while it runs)
 ```
 
 ---
@@ -606,7 +606,7 @@ glfw:
 build:
   system: cmake         # cmake, meson, make, autoconf, buildy, none
   override: custom.yaml # Custom build file (for buildy system)
-  args:                 # Arguments passed to build system
+  args:                 # Arguments passed to build system, each item one argument
     - "-DFOO=ON"
     - "-DBAR=OFF"
 ```
@@ -681,7 +681,7 @@ environment:
     warnings: everything
     
   link:
-    flags: ["-Wl,-rpath,'$ORIGIN'"]       # Extra linker flags for all targets
+    flags: ["-Wl,-rpath,$ORIGIN"]         # Extra linker flags for all targets
     remove_flags: ["-s"]                   # Remove specific linker flags
     
   configurations:
@@ -703,6 +703,13 @@ section) takes `cpp_standard`, `c_standard`, `output_prefix`, `defines`, `flags`
 `remove_defines`, and abstract keywords: any key some toolchain's `flag_mappings` defines
 (`optimization`, `warnings`, `symbols`, `runtime`, or a custom one). A configuration, platform or
 architecture section also takes `compile:`, `link:` and `variables:`. Any other key is an error.
+
+Each item of `flags`, `defines`, `include_dirs`, `lib_dirs` and `libs` is one argument of the
+compiler or linker, passed as written: commands run without a shell, and no shell reads the
+items. `defines: ['MSG="hello world"']` passes `-DMSG="hello world"`, a string literal, and a path
+with spaces needs no quotes. Shell quotes are passed on too: write `-Wl,-rpath,$ORIGIN`, not
+`-Wl,-rpath,'$ORIGIN'`, and one flag per item (`["-framework", "Cocoa"]`, not
+`["-framework Cocoa"]`).
 
 ### How Settings Merge
 
@@ -1572,7 +1579,9 @@ tools:
 | Field | Description |
 |-------|-------------|
 | `action` | Tool action type (compile, link, transform, convert, generate, build) (required) |
-| `command` | Command template with variable substitution, or one per platform (required) |
+| `command` | [Command template](#command-syntax), or one per platform (required) |
+| `shell` | `true` runs the command with a shell ([Shell Tools](#shell-tools)); default `false` |
+| `response_file` | How the tool reads arguments from an `@file`: `gnu` or `msvc` ([Response Files](#response-files)) |
 | `input_extensions` | File extensions this tool accepts |
 | `output_extension` | Extension for output files |
 | `output_pattern` | Pattern for output filename (supports `${name}`, `${output_prefix}`) |
@@ -1595,7 +1604,7 @@ The `supports` section declares tool capabilities and flag formats:
 | `pic` | bool | Supports position-independent code |
 | `pic_flag` | string | Flag for PIC (e.g., `-fPIC`) |
 | `std` | bool | Supports language standard flag |
-| `dependencies` | string | Dependency tracking flags (e.g., `-MMD -MP -MF ${dep_file}`) |
+| `dependencies` | string | Dependency tracking arguments, a [command template](#command-syntax) with `${dep_file}` (e.g., `-MMD -MP -MF ${dep_file}`) |
 
 **Linking supports:**
 
@@ -1607,7 +1616,13 @@ The `supports` section declares tool capabilities and flag formats:
 | `libs` | bool | Supports library linking |
 | `lib_flag` | string | Flag prefix for libs (e.g., `-l`) |
 | `frameworks` | bool | Supports macOS frameworks |
-| `framework_flag` | string | Flag for frameworks (e.g., `-framework`) |
+| `framework_flag` | string | Flag for frameworks (default `"-framework "`) |
+
+Each `*_flag` is joined to each value: `include_flag: "-I"` and `inc` give the argument `-Iinc`.
+A flag ending in a space is an argument of its own before each value: `"-framework "` and `Cocoa`
+give `-framework` `Cocoa`. A flag that isn't set has its default (`-D`, `-I`, `-fPIC`, `-L`,
+`-l`, `"-framework "`); one set to `""` is no flag (MSVC: `lib_flag: ""` with `lib_suffix: ".lib"`
+gives `glfw3.lib`).
 
 **Go/Rust supports** (descriptive: the tool's `command_params` do the work, buildy doesn't read
 these):
@@ -1623,13 +1638,81 @@ these):
 | `buildmode` | bool | Supports Go buildmode |
 | `buildmode_flag` | string | Flag for buildmode |
 
-### Variable Syntax
+### Command Syntax
 
-All variables in toolchain commands use the `${var}` syntax:
+A tool's command is a template that buildy splits into words when it loads the toolchain, and
+runs as an argument list, **without a shell**:
 
 ```yaml
-command: "gcc -c ${input} -o ${output} ${flags} ${defines}"
+command: "g++ ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
 ```
+
+- Words are separated by spaces, tabs and newlines.
+- `'...'` keeps its text as written, `$` and `${...}` included. `"..."` keeps spaces in a word
+  and fills placeholders in. A backslash is an ordinary character.
+- **A placeholder that is a word of its own** (`${includes}`) becomes the placeholder's values,
+  each one argument: none when it is empty, several for a list. A path with spaces stays one
+  argument.
+- **A placeholder inside a word** (`-std=${std}`, `/Fo${output}`, `/OUT:${output}`, `"${x}"`) is
+  replaced by its value, and the word stays one argument. It must have exactly one value: an
+  empty one, or a list of several, there is an error. Write it as a word of its own to pass any
+  number of arguments.
+- `$` not followed by `{` is an ordinary character: `-Wl,-rpath,$ORIGIN` reaches the linker as
+  written.
+
+| Placeholder | Arguments |
+|---|---|
+| `${input}`, `${source}`, `${output}`, `${dep_file}`, `${implib}` | one path |
+| `${flags}` | the tool's `flags` for `common` and the configuration, then the target's |
+| `${defines}`, `${includes}`, `${lib_dirs}`, `${libs}`, `${frameworks}` | one per value, with the tool's `*_flag` |
+| `${objects}` | one per object file |
+| `${pic}` | `pic_flag` for a shared library's sources, else none |
+| `${dep_flags}` | `supports.dependencies` with `${dep_file}` filled in |
+| `${std}` and other `tool_params` | one, or one per item of a list |
+| `${args}` (transform, generate) | one per item of the artifact's `args` |
+| anything else (transform, generate, build) | a variable (toolchain `variables`, `${output_dir}`, ...), one argument |
+
+A placeholder with no value at all is an error naming the tool.
+
+The cache key and `.buildy_cache/tasks_*.json` record the argument list; logs show it as one
+line quoted for the host's shell, and `compile_commands.json` has it as `arguments`. `go build`
+and `cargo build` run in the target's directory.
+
+### Shell Tools
+
+A tool whose command needs a shell (pipes, redirection, `&&`) says so:
+
+```yaml
+tools:
+  embed:
+    action: generate
+    shell: true
+    command: "xxd -i ${input} > ${output} && touch ${output}"
+```
+
+Its command is shell text. Buildy replaces each placeholder with its values, each quoted for the
+shell, and runs it with `sh -c` (Linux and macOS hosts, and always in Docker) or `cmd.exe /c`
+(Windows hosts). A placeholder in a shell tool goes outside quotes (buildy quotes its values;
+one inside `"..."` is an error), and as in other commands one inside a word must have exactly
+one value. cmd.exe can't quote `"`, `%`, `!` or a line break inside quotes, so a value holding
+one is an error there. A shell tool takes no response file. No built-in toolchain uses a shell.
+
+### Response Files
+
+When a command's arguments are over what the host lets a program start with (Linux: about ¾ of
+a quarter of the stack limit for arguments and environment, usually 1.5 MiB, and 128 KiB for one
+argument; macOS: ¾ of `kern.argmax`; Windows: 32000 characters of command line), buildy writes
+the arguments after the program to a response file in `.buildy_cache/response_files/` and runs
+`program @file`. The tool declares the file's syntax:
+
+| `response_file` | Tools | Syntax |
+|---|---|---|
+| `gnu` | GCC, Clang, GNU `ar` and `ld`, `llvm-ar` | one argument per line; whitespace, quotes and backslashes escaped with a backslash |
+| `msvc` | `cl`, `link`, `lib` | one argument per line, quoted as on a Windows command line; UTF-16 with a byte order mark when not ASCII |
+
+A command over the limit whose tool declares no `response_file` fails, saying so. The built-in
+GCC, Clang, MinGW, ARM, Emscripten and Docker toolchains declare `gnu` for their compile and link
+tools and MSVC declares `msvc`; the macOS `ar` reads no response files.
 
 ### Data-Driven Command Parameters
 
@@ -1659,22 +1742,26 @@ tools:
         optional: true
       gcflags:
         sources: ["tool_params.gcflags", "tool.flags.${config}"]
-        format: "${value}"
-        quote_if_spaces: true
+        format: "-gcflags=${value}"
         optional: true
 ```
+
+A parameter gives its placeholder arguments: its `format` is a [command template](#command-syntax)
+whose only placeholder is `${value}`, the values joined with `join`. `"-tags ${value}"` is two
+arguments, `-tags` and `a,b`; `-ldflags "${value}"` is `-ldflags` and the joined value as one
+argument, spaces and all. Without a `format` the value is one argument; without a value, the
+parameter gives none.
 
 #### Command Parameter Fields
 
 | Field | Description |
 |-------|-------------|
 | `sources` | List of locations to search for the value (first match wins) |
-| `format` | Output format with `${value}` placeholder |
-| `join` | Separator for array values (default: space) |
+| `format` | The arguments, a command template with `${value}` |
+| `join` | Separator for array values (default: space); the joined value is one argument |
 | `optional` | If true, empty values produce empty string (not an error) |
 | `match` | Only use value if it matches this string |
 | `default` | Value when no source gives one, or `match` matches nothing (used as is) |
-| `quote_if_spaces` | Wrap value in quotes if it contains spaces |
 | `resolve_variables` | Resolve `${var}` references in the value |
 
 #### Source Paths
@@ -1746,8 +1833,10 @@ execution:
 Every task runs where the toolchain that produced it says: a compile or link with its target's
 toolchain, a transform or generate with the named tool's toolchain. Copy, staging and install
 tasks run natively. A Docker task runs `docker run --rm` with the workspace root, and the cache
-directory if it lies elsewhere, mounted **at their host paths**, and `-w <workspace root>`, so
-the absolute host paths in its command are valid in the container. The execution settings and
+directory if it lies elsewhere, mounted **at their host paths**, and `-w <workspace root>` (or the
+command's own directory), so the absolute host paths in its command are valid in the container.
+The command's arguments are arguments of `docker run`, after the image; a shell tool's command
+runs as `sh -c` in the container. The execution settings and
 the toolchain's content are part of every task's cache key: switching a toolchain to another
 image rebuilds.
 
@@ -2168,7 +2257,7 @@ build_system:
 
 | Field | Description |
 |-------|-------------|
-| `command` | Command template with variable substitution |
+| `command` | [Command template](#command-syntax), run without a shell |
 | `working_dir` | Working directory (default: `{source_dir}`) |
 | `default_args` | Default arguments (merged with `build_args`) |
 | `required` | Whether this phase is required |
@@ -2196,7 +2285,7 @@ Available in command templates:
 | `${build_dir}` | Build output directory (usually `${source_dir}/_build`) |
 | `${install_dir}` | Installation prefix directory |
 | `${jobs}` | Number of parallel jobs (auto-detected from CPU count) |
-| `${args}` | Combined default_args and build_args |
+| `${args}` | `default_args`, then the dependency's `build.args`: each item one argument |
 
 A build system has a `build` phase; its phases are `configure`, `build`, `test`, `install` and
 `clean`, and any other is an error.
