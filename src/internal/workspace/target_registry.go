@@ -171,6 +171,7 @@ func (tr *TargetRegistry) resolveScoped(depString string) (*TargetReference, err
 	for name := range moduleTargets {
 		available = append(available, name)
 	}
+	sort.Strings(available)
 	return nil, fmt.Errorf(
 		"target '%s' not found in module '%s' (available targets: %v)",
 		targetName, modulePath, available,

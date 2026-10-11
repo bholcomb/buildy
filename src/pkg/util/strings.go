@@ -52,15 +52,9 @@ func toStringSliceInternal(value any, opts ToStringSliceOptions) []string {
 }
 
 // ExtractStringList extracts a string slice from various input types.
-// It skips empty/whitespace-only strings. For including empty strings, use ExtractStringSlice.
+// It skips empty/whitespace-only strings.
 func ExtractStringList(value any) []string {
 	return ToStringSlice(value, ToStringSliceOptions{SkipEmpty: true, Recursive: false})
-}
-
-// ExtractStringSlice extracts a string slice from an interface.
-// Unlike ExtractStringList, this includes empty strings.
-func ExtractStringSlice(value any) []string {
-	return ToStringSlice(value, ToStringSliceOptions{SkipEmpty: false, Recursive: false})
 }
 
 // FlattenStringSlice converts value to []string with recursive flattening of nested slices.

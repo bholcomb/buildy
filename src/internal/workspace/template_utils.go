@@ -2,68 +2,11 @@ package workspace
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"buildy/internal/config"
 	"buildy/pkg/util"
 )
-
-// topologicalSortLibs topologically sorts libraries in reverse dependency order
-func (bte *BuildTemplateEngine) topologicalSortLibs(libDeps map[string][]string) []string {
-	// Build in-degree map (how many libraries depend on each library)
-	inDegree := make(map[string]int)
-	for lib := range libDeps {
-		inDegree[lib] = 0
-	}
-
-	for _, deps := range libDeps {
-		for _, dep := range deps {
-			if _, exists := inDegree[dep]; exists {
-				inDegree[dep]++
-			}
-		}
-	}
-
-	// Start with libraries that have no dependents (highest in dependency tree)
-	queue := []string{}
-	for lib, degree := range inDegree {
-		if degree == 0 {
-			queue = append(queue, lib)
-		}
-	}
-
-	result := []string{}
-
-	for len(queue) > 0 {
-		// Sort for deterministic output
-		sort.Strings(queue)
-		lib := queue[0]
-		queue = queue[1:]
-		result = append(result, lib)
-
-		// Remove this library from the graph
-		for _, dep := range libDeps[lib] {
-			if _, exists := inDegree[dep]; exists {
-				inDegree[dep]--
-				if inDegree[dep] == 0 {
-					queue = append(queue, dep)
-				}
-			}
-		}
-	}
-
-	// Check for cycles
-	if len(result) != len(libDeps) {
-		util.LogWarning("Circular dependency detected in libraries, using original order")
-		result = []string{}
-		for lib := range libDeps {
-			result = append(result, lib)
-		}
-	}
-
-	return result
-}
 
 // resolveReference resolves a reference to previous step results
 func (bte *BuildTemplateEngine) resolveReference(ref string, stepResults map[string]map[string]any) any {
@@ -139,10 +82,7 @@ func resolveStrict(env *util.VariableEnvironment, text, what string) (string, er
 // resolveToolParams resolves tool parameters using VarEnv for variable resolution
 // and context map for structural references (like ${item.includes} arrays)
 func (bte *BuildTemplateEngine) resolveToolParams(stepParams config.Ordered[config.Param], context map[string]any, varEnv *util.VariableEnvironment) (map[string]any, error) {
-	params := make(map[string]any, stepParams.Len())
-	for _, key := range stepParams.Keys {
-		params[key] = stepParams.Values[key].Value
-	}
+
 	resolved := map[string]any{
 		"defines":      []string{},
 		"include_dirs": []string{},
@@ -152,8 +92,8 @@ func (bte *BuildTemplateEngine) resolveToolParams(stepParams config.Ordered[conf
 		"kwargs":       make(map[string]any),
 	}
 
-	for key, value := range params {
-		switch v := value.(type) {
+	for _, key := range stepParams.Keys {
+		switch v := stepParams.Values[key].Value.(type) {
 		case string:
 			// Check if this is a reference to a context value (like ${item.includes})
 			if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {

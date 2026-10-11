@@ -277,9 +277,6 @@ func (ws *Workspace) DiscoverModules(ctx BuildContext) (map[string]*ModuleInfo, 
 func (ws *Workspace) loadExplicitModules(ctx BuildContext) (map[string]*ModuleInfo, error) {
 	modulesToLoad := resolveModuleEntries(ws.Config.Modules, ctx)
 
-	// Track modules currently being loaded to detect cycles
-	loadingStack := make(map[string]bool)
-
 	// Load each module
 	for _, entry := range modulesToLoad {
 		moduleDir := filepath.Clean(entry.Path)
@@ -300,7 +297,7 @@ func (ws *Workspace) loadExplicitModules(ctx BuildContext) (map[string]*ModuleIn
 
 		// Recursively load child modules if this module has workspace.modules
 		// Pass loading stack to detect circular dependencies
-		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, loadingStack); err != nil {
+		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -321,7 +318,7 @@ func (ws *Workspace) configFile() string {
 }
 
 // loadChildModulesWithCycleDetection recursively loads child modules with circular dependency detection
-func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent *ModuleInfo, ctx BuildContext, loadingStack map[string]bool) error {
+func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent *ModuleInfo, ctx BuildContext, loadingStack []string) error {
 	if parent.File.Workspace == nil {
 		return nil // No workspace section, this is a leaf module
 	}
@@ -336,13 +333,8 @@ func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent
 		configFile := filepath.Join(ws.RootDir, moduleDir, entry.Config)
 
 		// Check for circular dependency
-		if loadingStack[moduleDir] {
-			// Build the cycle path for error message
-			cyclePath := []string{}
-			for path := range loadingStack {
-				cyclePath = append(cyclePath, path)
-			}
-			cyclePath = append(cyclePath, moduleDir)
+		if hasString(loadingStack, moduleDir) {
+			cyclePath := append(append([]string{}, loadingStack...), moduleDir)
 			return fmt.Errorf("circular module dependency detected: %s", strings.Join(cyclePath, " -> "))
 		}
 
@@ -356,9 +348,6 @@ func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent
 			continue
 		}
 
-		// Mark as currently loading
-		loadingStack[moduleDir] = true
-
 		moduleInfo, err := ws.loadModule(configFile, moduleDir)
 		if err != nil {
 			return fmt.Errorf("failed to load child module %s: %w", moduleDir, err)
@@ -368,12 +357,9 @@ func (ws *Workspace) loadChildModulesWithCycleDetection(parentDir string, parent
 		util.LogDebug("Loaded child module: %s (%d targets)", moduleDir, len(moduleInfo.Targets))
 
 		// Recursively load grandchild modules
-		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, loadingStack); err != nil {
+		if err := ws.loadChildModulesWithCycleDetection(moduleDir, moduleInfo, ctx, append(append([]string{}, loadingStack...), moduleDir)); err != nil {
 			return err
 		}
-
-		// Remove from loading stack after successful load
-		delete(loadingStack, moduleDir)
 	}
 
 	return nil

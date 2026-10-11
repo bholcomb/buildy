@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"sort"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -228,6 +229,7 @@ func (r *TaskIDRegistry) GetAllTargets() []string {
 	for name := range r.targetToLinkTask {
 		targets = append(targets, name)
 	}
+	sort.Strings(targets)
 	return targets
 }
 

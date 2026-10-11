@@ -183,8 +183,10 @@ func (tg *TaskGraph) BuildExecutionStages() ([][]string, error) {
 			for taskID := range remainingTasks {
 				remaining = append(remaining, taskID)
 			}
+			sort.Strings(remaining)
 			return nil, fmt.Errorf("circular dependency detected in tasks: %v", remaining)
 		}
+		sort.Strings(readyTasks)
 
 		stages = append(stages, readyTasks)
 
