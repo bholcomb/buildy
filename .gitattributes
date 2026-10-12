@@ -1,0 +1,4 @@
+# Text files are checked out with LF line endings on every platform, Windows included (where Git
+# would otherwise convert them to CRLF): buildy embeds data/ in its binary, and a release built on
+# Windows must hold the same toolchains, templates and build systems as the others.
+* text=auto eol=lf
