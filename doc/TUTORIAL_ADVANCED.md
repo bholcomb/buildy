@@ -8,7 +8,7 @@ This tutorial covers advanced buildy features: fetching external dependencies fr
 - Downloading and extracting URL archives
 - Configuring build systems (CMake, Meson, etc.)
 - Using Docker for dependency builds
-- Managing lockfiles for reproducibility
+- Keeping fetched dependencies reproducible, and updating them
 - Header-only library handling
 
 ## The Example Project
@@ -66,7 +66,7 @@ targets:
       language: cpp
       sources: ["src/*.cpp"]
       include_dirs: ["src"]
-      packages:
+      deps:
         - sdl2
         - nlohmann_json
       defines:
@@ -110,85 +110,76 @@ so in its own `execution` section (Step 2).
 
 ## Step 2: Fetch Dependencies
 
-The `buildy_config/dependencies.yaml` defines what to fetch:
+The `buildy_config/dependencies.yaml` defines what to fetch. Each top-level key is a dependency:
 
 ```yaml
-dependencies:
-  fetch:
-    - name: sdl2
-      git: "https://github.com/libsdl-org/SDL.git"
-      ref: "release-2.28.5"
-      build_system: cmake
-      build_phases: [configure, build, install]
-      build_args:
+sdl2:
+  description: "Simple DirectMedia Layer"
+  version: "2.28.5"
+  common:
+    git: "https://github.com/libsdl-org/SDL.git"
+    ref: "release-2.28.5"
+    build:
+      system: cmake
+      args:
         - "-DSDL_SHARED=OFF"
         - "-DSDL_STATIC=ON"
         - "-DSDL_TEST=OFF"
-      execution:
-        type: docker
-        image: "gcc:13"
-        user: "${UID}:${GID}"
+    include_dirs: ["${dep_install_dir}/include"]
+    lib_dirs: ["${dep_install_dir}/lib"]
+    libs: ["SDL2"]
+    execution:
+      type: docker
+      image: "gcc:13"
+      user: "${UID}:${GID}"
 
-    - name: nlohmann_json
-      url: "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-      checksum: "sha256:d6c65aca6b1ed68e7a182f4757f0f7c6c9e4c1b2d69d2f5e2e6b3e8f1a2b3c4d5"
-      type: header_only
-      include_dirs:
-        - "${dest}/include"
+nlohmann_json:
+  description: "JSON for Modern C++"
+  version: "3.11.3"
+  common:
+    url: "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
+    checksum: "sha256:d6c65aca6b1ed68e7a182f4757f0f7c6c9e4c1b2d69d2f5e2e6b3e8f1a2b3c4d5"
+    include_dirs: ["${dep_dir}/include"]
 ```
+
+A dependency with `git:` or `url:` is fetched into `.buildy_cache/deps/<name>/`, which is
+`${dep_dir}`.
 
 ### Git Dependencies
 
-```yaml
-- name: sdl2
-  git: "https://github.com/libsdl-org/SDL.git"
-  ref: "release-2.28.5"
-  build_system: cmake
-  build_phases: [configure, build, install]
-  build_args:
-    - "-DSDL_SHARED=OFF"
-    - "-DSDL_STATIC=ON"
-```
-
 | Field | Description |
 |-------|-------------|
-| `name` | Identifier used in packages/depends_on |
 | `git` | Repository URL |
-| `ref` | Tag, branch, or commit hash |
-| `build_system` | `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, or `auto` |
-| `build_phases` | Phases to run: `configure`, `build`, `test`, `install`, `clean` |
-| `build_args` | Extra arguments for the build system |
+| `ref` | A branch, a tag, or a full or abbreviated commit ID (default: the default branch) |
+| `build.system` | `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, `buildy`, `auto` or `none` |
+| `build.args` | Extra arguments for the build system, each one argument; `${config}` and the other dependency variables are resolved |
+| `build.configurations` | Which of the build system's configurations a buildy configuration it doesn't know is |
+
+The repository is fetched the first time, and checked out at the commit `ref` names. After that the
+clone is used as it is, without the network, until the `git` URL or the `ref` changes: builds are
+reproducible and work offline.
 
 ### URL Dependencies
 
-```yaml
-- name: nlohmann_json
-  url: "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-  checksum: "sha256:d6c65aca..."
-  type: header_only
-  include_dirs:
-    - "${dest}/include"
-```
-
 | Field | Description |
 |-------|-------------|
-| `url` | Archive URL (`.tar.gz`, `.tar.xz`, `.zip`, `.tar`) |
-| `checksum` | SHA256 checksum for verification |
-| `type` | `source` (build it) or `header_only` (just extract) |
-| `include_dirs` | Include paths (`${dest}` = extraction directory) |
+| `url` | Archive URL (`.tar.gz`, `.tgz`, `.tar`, `.zip`) |
+| `checksum` | `sha256:<hash>` of the archive; recommended |
+| `include_dirs` | Include paths (`${dep_dir}` = extraction directory) |
+
+The archive is downloaded once (`.buildy_cache/downloads/`) and extracted once. A download fails
+when the server can't be reached within 30 s or sends nothing for 60 s.
 
 ### Header-Only Libraries
 
-For header-only libraries, use `type: header_only`:
+A dependency without a `build` section is only fetched:
 
 ```yaml
-- name: stb
-  url: "https://github.com/nothings/stb/archive/master.tar.gz"
-  type: header_only
-  include_dirs: ["${dest}"]
+stb:
+  common:
+    url: "https://github.com/nothings/stb/archive/master.tar.gz"
+    include_dirs: ["${dep_dir}"]
 ```
-
-No build step is needed - the library is just extracted and made available.
 
 ## Step 3: Build Systems
 
@@ -202,37 +193,48 @@ Buildy supports multiple build systems for fetched dependencies:
 | `autoconf` | configure, configure.ac | GNU projects |
 | `cargo` | Cargo.toml | Rust crates |
 | `go_mod` | go.mod | Go modules |
-| `auto` | Detects automatically | Default |
+| `buildy` | buildy.yaml | Buildy itself, with an override config |
+| `auto` | Detects automatically | |
 
-### Build Phases
+### One Configuration at a Time
 
-Each build system supports these phases:
+A dependency is built for the configuration you build: `buildy` builds SDL2 as cmake's `Debug`,
+`buildy -c release` as `Release`, each in its own directory:
 
-| Phase | Description |
-|-------|-------------|
-| `configure` | Configure/setup the build |
-| `build` | Compile the project |
-| `test` | Run tests |
-| `install` | Install to prefix |
-| `clean` | Clean build artifacts |
+- `${dep_build_dir}`: `.buildy_cache/deps/sdl2/_build/<platform>-<arch>-<config>/`
+- `${dep_install_dir}`: `.buildy_cache/deps/sdl2/_install/<platform>-<arch>-<config>/`
 
-Default phases are `configure` and `build`. Add `install` if you need headers/libraries installed to a prefix:
+cmake, meson and autoconf install into `${dep_install_dir}`, and its `include/` and `lib/` are added
+to the dependency's dirs anyway. A configuration of your own needs a mapping for a build system
+that has configurations:
 
 ```yaml
-build_phases: [configure, build, install]
+    build:
+      system: cmake
+      configurations: {portable: Release}
 ```
+
+### Rebuilds
+
+Each finished build is recorded. The next build skips the dependency while its commit or archive,
+build settings, the programs its build system runs and the environment variables it reads are the
+same. Change an argument and the dependency is built again, from empty build directories.
+`buildy --force` rebuilds every dependency.
 
 ### Build Arguments
 
 Pass arguments to the build system:
 
 ```yaml
-build_args:
-  - "-DBUILD_SHARED_LIBS=OFF"
-  - "-DBUILD_TESTING=OFF"
+    build:
+      system: cmake
+      args:
+        - "-DBUILD_SHARED_LIBS=OFF"
+        - "-DBUILD_TESTING=OFF"
 ```
 
-For CMake, these become `-D` flags. For other build systems, they're passed appropriately.
+For CMake, these are added to the configure command. For make, they are added to the `make`
+command line (`CFLAGS=-O2`).
 
 ## Step 4: Docker Execution
 
@@ -241,10 +243,11 @@ For CMake, these become `-D` flags. For other build systems, they're passed appr
 A dependency builds in Docker when its definition has an `execution` section:
 
 ```yaml
-fetch:
-  - name: complex_lib
+complex_lib:
+  common:
     git: "https://github.com/example/lib.git"
-    build_system: cmake
+    build:
+      system: cmake
     execution:
       type: docker
       image: "ubuntu:22.04"
@@ -284,54 +287,25 @@ buildy
 The build process:
 
 1. **Fetch SDL2** from git (clones to cache directory)
-2. **Build SDL2** with CMake in Docker
+2. **Build SDL2** with CMake in Docker, for the debug configuration, and install it
 3. **Download nlohmann_json** archive
 4. **Extract** the header-only library
 5. **Compile** the application linking against SDL2
 
-First build downloads and compiles dependencies. Subsequent builds use cached results.
+The first build downloads and builds the dependencies. Later builds fetch and build nothing of
+theirs; `buildy -c release` builds SDL2's release build once.
 
-## Step 6: Lockfiles
+## Step 6: Updating and Pinning
 
-Generate a lockfile for reproducible builds:
-
-```bash
-buildy --update-lock
-```
-
-This creates `buildy_config/dependencies.lock`:
-
-```yaml
-version: 1
-generated: "2026-02-20T10:30:00Z"
-platform: linux-x86_64
-
-dependencies:
-  sdl2:
-    git: "https://github.com/libsdl-org/SDL.git"
-    ref: "release-2.28.5"
-    commit: "abc123def456789..."
-    fetched_at: "2026-02-20T10:30:00Z"
-
-  nlohmann_json:
-    url: "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-    checksum: "sha256:d6c65aca..."
-```
-
-The lockfile pins:
-- Git commits (even for tags/branches)
-- URL checksums
-- Fetch timestamps
-
-### Using Lockfiles
+A fetched dependency stays at the commit or archive first fetched. To move a branch or a tag to
+what it names now, and to download archives without a checksum again:
 
 ```bash
-buildy --require-lock   # Fail if no lockfile exists
-buildy --ignore-lock    # Ignore existing lockfile
-buildy --update-lock    # Regenerate lockfile
+buildy --update-deps
 ```
 
-In CI, use `--require-lock` to ensure reproducible builds.
+With `-n 3`, buildy logs the commit each git dependency is at. To pin a dependency across
+machines, give a full commit ID as `ref`, or a `checksum` for an archive. There is no lockfile yet.
 
 ## Step 7: Native vs Docker Execution
 
@@ -360,50 +334,25 @@ Built-in Docker toolchains:
 - `docker-c-linux` - GCC C compiler in Docker
 - `docker-cpp-linux` - GCC C++ compiler in Docker
 
-## Step 8: Custom Build Systems
+## Step 8: Build System Definitions
 
-For projects with non-standard build systems, create custom definitions:
-
-```yaml
-# buildy_config/build_systems/ninja.yaml
-build_system:
-  name: ninja
-  description: "Ninja build system"
-
-  detection:
-    marker_files: ["build.ninja"]
-    priority: 10
-
-  phases:
-    build:
-      command: "ninja -j {jobs}"
-      working_dir: "{source_dir}"
-      required: true
-
-    clean:
-      command: "ninja clean"
-      working_dir: "{source_dir}"
-```
-
-### Phase Variables
-
-| Variable | Description |
-|----------|-------------|
-| `{source_dir}` | Source directory |
-| `{build_dir}` | Build output directory |
-| `{install_dir}` | Installation prefix |
-| `{jobs}` | Parallel job count |
-| `{args}` | Combined build arguments |
+Each build system is a YAML definition built into buildy: its detection files, how buildy's
+configurations map to its own, the environment variables it reads, its phases (`clean` for an
+in-source build system, `configure`, `build`, `install`) and where its output lands. See
+[DSL Spec, Build Systems](DSL_SPEC.md#12-build-systems). Definitions of your own in
+`buildy_config/build_systems/` are not loaded yet.
 
 ## Step 9: Troubleshooting
 
 ### Dependency Build Failures
 
-Check the build output in the cache:
+A failed phase shows its command and output. The build directory is kept for a look:
 
 ```bash
-ls .buildy_cache/deps/sdl2/
+ls .buildy_cache/deps/sdl2/_build/
 ```
+
+The next build builds the dependency again from scratch.
 
 ### Docker Issues
 
@@ -417,10 +366,9 @@ Ensure your user can run Docker without sudo.
 
 ### Cache Problems
 
-Force a clean rebuild:
+Force a rebuild of everything, dependencies included:
 
 ```bash
-buildy --clean
 buildy --force
 ```
 
@@ -437,18 +385,22 @@ If a URL archive's checksum doesn't match:
 ## Complete Fetch Dependency Reference
 
 ```yaml
-fetch:
-  - name: mylib                     # Required: identifier
+mylib:
+  description: "My library"
+  version: "1.0.0"
+  common:                           # or a platform: linux, windows, macos, linux-arm64, ...
     git: "https://..."              # Git URL (or use url:)
+    ref: "v1.0.0"                   # Branch, tag, or full or abbreviated commit ID
     url: "https://..."              # Archive URL (or use git:)
-    ref: "v1.0.0"                   # Git ref: tag, branch, commit
     checksum: "sha256:..."          # SHA256 for URL downloads
-    dest: "${cache_dir}/custom"     # Custom destination
-    type: source                    # source | header_only
-    build_system: cmake             # auto | cmake | meson | make | ...
-    build_phases: [configure, build]
-    build_args: ["-DFOO=ON"]
-    include_dirs: ["${dest}/include"]
+    build:
+      system: cmake                 # auto | cmake | meson | make | autoconf | cargo | go_mod | buildy | none
+      args: ["-DFOO=ON"]            # Variables resolved: ${config}, ${dep_dir}, ...
+      configurations: {portable: Release}
+      override: mylib_build.yaml    # system buildy: a config in buildy_config/dependencies/
+    include_dirs: ["${dep_install_dir}/include"]
+    lib_dirs: ["${dep_install_dir}/lib"]
+    libs: ["mylib"]
     execution:                      # Per-dependency Docker config
       type: docker
       image: "gcc:13"
@@ -457,12 +409,12 @@ fetch:
 
 ## Key Takeaways
 
-- **Git dependencies**: Specify `git:` and `ref:` for version control
-- **URL dependencies**: Use `url:` with `checksum:` for verification
-- **Header-only**: Set `type: header_only` to skip building
-- **Build systems**: Buildy auto-detects or specify explicitly
-- **Docker execution**: Configure per dependency, or use a Docker toolchain for the project
-- **Lockfiles**: Use `--update-lock` for reproducibility
+- **Git dependencies**: `git:` and `ref:`; fetched once, then offline
+- **URL dependencies**: `url:` with `checksum:` for verification
+- **Header-only**: no `build` section
+- **Build systems**: built for the configuration you build, once, and again only when something changed
+- **Docker execution**: configure per dependency, or use a Docker toolchain for the project
+- **Updating**: `--update-deps` moves branches and tags; a full commit ID pins
 
 ## Next Steps
 

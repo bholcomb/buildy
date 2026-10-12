@@ -188,7 +188,19 @@ glfw3:
     url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
     checksum: "sha256:abc123..."  # Recommended for reproducibility
     include_dirs: ["${dep_dir}/include"]
+
+sdl2:
+  common:
+    git: "https://github.com/libsdl-org/SDL.git"
+    ref: "release-2.28.5"
+    build: {system: cmake, args: ["-DSDL_TEST=OFF"]}
+    libs: ["SDL2"]
 ```
+
+Fetched dependencies are fetched once and then used offline, at the commit or archive first
+fetched, until `--update-deps`. A dependency with a `build.system` is built for the configuration
+being built only (`-c release` links its release build), and again only when its source, build
+settings or tools change. See [the design note](doc/design/dependencies.md).
 
 ## Command-Line Options
 
@@ -205,7 +217,8 @@ Options:
   -j, --workers <n>     Number of tasks run at once
   -d, --dry-run         Plan: show what would be fetched, built and run
   --clean               Clean build outputs
-  -f, --force           Ignore cache, rebuild all
+  -f, --force           Ignore the cache and dependency build records, rebuild all
+  --update-deps         Fetch git branches and tags, and archives without a checksum, again
   --compile-commands    Generate compile_commands.json
   -n, --notify <level>  Log level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug
   --timeout <duration>  Kill a task or dependency build step that runs longer (e.g. 30m; default: no limit)
@@ -225,7 +238,6 @@ my-project/
 │   ├── dependencies.yaml    # External dependencies (optional)
 │   ├── dependencies/        # Per-dependency configs (optional)
 │   │   └── glfw3.yaml
-│   ├── dependencies.lock    # Lockfile (auto-generated)
 │   └── toolchains/          # Custom toolchains (optional)
 │       └── custom-gcc.yaml
 ├── src/                     # Source files
@@ -235,7 +247,7 @@ my-project/
     ├── cache_index.json     # What each task last produced
     ├── cache_journal.jsonl  # Entries of the tasks of a run, until it ends
     ├── file_hashes.json     # File hashes, by size, times and inode
-    ├── deps/                # Fetched dependencies
+    ├── deps/                # Fetched dependencies: <name>/ with its _build/ and _install/
     └── downloads/           # Cached archives
 ```
 

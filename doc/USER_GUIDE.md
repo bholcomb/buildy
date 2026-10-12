@@ -79,7 +79,6 @@ myproject/
 ├── buildy.yaml                 # Root workspace
 ├── buildy_config/
 │   ├── dependencies.yaml       # External dependencies
-│   ├── dependencies.lock       # Lockfile (auto-generated)
 │   └── packages/
 │       └── sdl2.yaml           # Package definitions
 ├── core/
@@ -602,14 +601,51 @@ targets:
       deps: ["glfw3"]
 ```
 
+pkg-config's flags are kept whole and in order: `--cflags` (`-I`, `-D`, `-pthread`, `-isystem`,
+...) go ahead of the target's compile flags, and `--libs` (`-L`, `-l`, `-Wl,...`, `-pthread`,
+library paths) where the libraries go in the link command.
+
 ### Fetched Dependencies
 
 Dependencies can be fetched from Git repositories or URLs. They are stored locally in `.buildy_cache/deps/<name>/` within your project - **not** installed system-wide.
 
 For dependencies that need to be built:
-- **Source**: `.buildy_cache/deps/<name>/`
-- **Build**: `.buildy_cache/deps/<name>/_build/`
-- **Install**: `.buildy_cache/deps/<name>/_install/`
+- **Source**: `.buildy_cache/deps/<name>/` (`${dep_dir}`)
+- **Build**: `.buildy_cache/deps/<name>/_build/<platform>-<arch>-<config>/` (`${dep_build_dir}`)
+- **Install**: `.buildy_cache/deps/<name>/_install/<platform>-<arch>-<config>/` (`${dep_install_dir}`)
+
+A dependency is fetched once and built once per configuration:
+
+- **Only the configuration being built.** `buildy -c release` builds a dependency's release build
+  and links it; debug is built when you build debug. The build system's output directories for
+  that configuration (cmake: `${dep_install_dir}/include` and `/lib`) are added to the
+  dependency's include and lib dirs.
+- **Only when something changed.** A finished build is recorded next to its build directory; the
+  next build skips it while the fetched commit or archive, the build system, the configuration,
+  `build.args`, the override config, the programs it runs and the environment variables its build
+  system reads are the same. A failed or interrupted build is built again. `buildy --force`
+  rebuilds every dependency.
+- **Offline once fetched.** A git dependency is fetched again only when its `git` URL or `ref`
+  changes. A branch or tag stays at the commit first fetched until you run
+  `buildy --update-deps`, which also downloads archives that have no `checksum` again.
+- **Any ref.** `ref` may be a branch, a tag, or a full or abbreviated commit ID; the clone is
+  checked out at that commit (`-n 3` logs it).
+- **Configurations.** cmake, meson and cargo build `debug` and `release` as their own. For any
+  other configuration, say which of theirs it is:
+
+  ```yaml
+  mylib:
+    git: "https://github.com/example/mylib.git"
+    build:
+      system: cmake
+      configurations: {portable: Release}   # buildy -c portable builds it as Release
+  ```
+
+  buildy dependencies build any configuration by name. make, autoconf and go_mod have no
+  configurations: pass settings in `build.args`, which can use `${config}`.
+
+See [the design note](design/dependencies.md) for the details: what a build's record holds, the
+git policy, and the timeouts.
 
 **Git repository:**
 
@@ -624,8 +660,8 @@ imgui:
     build:
       system: cmake
       args: ["-DIMGUI_DEMO=OFF"]
-    include_dirs: ["${dep_dir}/_install/include"]
-    lib_dirs: ["${dep_dir}/_install/lib"]
+    include_dirs: ["${dep_install_dir}/include"]   # added anyway: cmake installs there
+    lib_dirs: ["${dep_install_dir}/lib"]
     libs: ["imgui"]
 ```
 
@@ -640,7 +676,8 @@ stb:
     include_dirs: ["${dep_dir}"]
 ```
 
-**Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `buildy`, `none`
+**Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, `buildy`,
+`auto` (detected from the fetched files), `none`
 
 ### Building with Buildy Config
 
@@ -665,7 +702,7 @@ When `build.system: buildy` is specified with an `override`:
 1. The dependency source is fetched as usual to `.buildy_cache/deps/<name>/`
 2. Buildy invokes itself recursively in **standalone mode** to build the dependency
 3. The override config file defines targets that compile the dependency source
-4. Both debug and release configurations are built automatically
+4. The configuration being built is built (`--config ${config}`), custom ones included
 5. The library paths use `${config}` to reference the correct build output
 
 **Standalone Mode:** When buildy is invoked with an explicit config file path (instead of a directory), it operates in standalone mode:
@@ -734,21 +771,16 @@ sdl2:
     ref: "release-2.28.5"
     build:
       system: cmake
-    include_dirs: ["${dep_dir}/_install/include"]
-    lib_dirs: ["${dep_dir}/_install/lib"]
+    include_dirs: ["${dep_install_dir}/include"]
+    lib_dirs: ["${dep_install_dir}/lib"]
     libs: ["SDL2"]
 ```
 
-### Lockfiles
+### Pinning
 
-Generate a lockfile for reproducible builds:
-
-```bash
-buildy --update-lock    # Generate/update lockfile
-buildy --require-lock   # Fail if no lockfile exists
-```
-
-The lockfile (`buildy_config/dependencies.lock`) pins git commits and checksums.
+A fetched dependency stays at the commit or archive first fetched until `--update-deps`. To pin
+one across machines, give a git dependency's full commit ID as `ref`, or an archive's `checksum`.
+There is no lockfile yet.
 
 ## Multi-Module Projects
 
@@ -1165,7 +1197,7 @@ all when their size, times and inode say they haven't changed since an earlier r
 
 ```bash
 buildy --cache-stats      # Show cache statistics
-buildy --force            # Ignore cache, rebuild all
+buildy --force            # Ignore the cache and dependency build records, rebuild all
 buildy --cache-dir /path  # Custom cache directory
 ```
 
@@ -1199,10 +1231,12 @@ buildy --cache-stats             # Show cache info
 ### Dependencies
 
 ```bash
-buildy --update-lock             # Update lockfile
-buildy --require-lock            # Require lockfile
-buildy --ignore-lock             # Ignore lockfile
+buildy --update-deps             # Fetch git branches and tags, and archives without a checksum, again
+buildy --force                   # Build every fetched dependency again (and every task)
 ```
+
+A download fails when the server can't be reached within 30 s or sends nothing for 60 s; a slow
+download that keeps arriving is never cut off.
 
 ### Debugging
 
@@ -1238,13 +1272,12 @@ longer, the same way.
 | `--target` | | Build a target and everything it depends on, in any module (repeatable); an unknown name is an error |
 | `--workers` | `-j` | How many tasks run at once; each task starts as soon as its dependencies have finished |
 | `--timeout` | | Kill a task, or a dependency build step, that runs longer than this Go duration (`90s`, `30m`, `2h`); no limit by default |
-| `--force` | `-f` | Ignore cache |
+| `--force` | `-f` | Ignore the cache and the dependency build records: rebuild everything |
+| `--update-deps` | | Fetch the dependencies that can move again: git branches and tags, archives without a checksum |
 | `--clean` | | Clean artifacts |
 | `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for; fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
-| `--update-lock` | | Update lockfile |
-| `--require-lock` | | Require lockfile |
 | `--define` | `-D` | Define variable (VAR=value) |
 | `--list-toolchains` | | List available toolchains |
 | `--cache-dir` | | Cache directory |

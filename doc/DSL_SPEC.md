@@ -14,7 +14,7 @@ Buildy is a multi-language build system designed for:
 
 - **C, C++, Go, and Rust** projects with data-driven task generation
 - **Cross-platform builds** (Linux, Windows, macOS) from a single configuration
-- **Explicit, reproducible builds** with optional lockfiles
+- **Explicit, reproducible builds**: fetched dependencies stay at the commit or archive first fetched
 - **Highly parallel execution** with content-addressable caching
 - **Flexible dependency management** (system, user paths, fetched sources)
 
@@ -25,7 +25,7 @@ Buildy is a multi-language build system designed for:
 3. **Hierarchical configuration** - Workspace → Module → Target with clear override semantics
 4. **Multi-language** - C/C++ primary with Go and Rust support, extensible via templates
 5. **Flexible dependencies** - System, user paths, fetched sources, package managers
-6. **Reproducible by default** - Lockfiles optional but encouraged, warnings for system deps
+6. **Reproducible by default** - Fetched dependencies move only with `--update-deps`
 7. **Configurable cache** - `BUILDY_CACHE_DIR` env var or config, default to project-local
 8. **Cross-platform by design** - Same `buildy.yaml` works on Linux, Windows, macOS
 
@@ -60,7 +60,6 @@ project/
 ├── buildy.yaml                    # Root configuration
 ├── buildy_config/
 │   ├── dependencies.yaml          # External dependencies (optional)
-│   ├── dependencies.lock          # Lockfile (auto-generated)
 │   └── dependencies/              # Per-dependency config files (optional)
 │       ├── glfw3.yaml             # Dependency definition
 │       └── glfw3_build.yaml       # Custom build config for dependency
@@ -377,23 +376,23 @@ dependencies:
 
 ```yaml
 # buildy_config/dependencies.yaml
-system:
+zlib:
   common:
-    - name: zlib
-      pkg_config: zlib
-  linux:
-    - name: pthread
-      libs: ["pthread"]
+    pkg_config: zlib
 
-paths:
-  - name: vulkan_sdk
-    path: "${VULKAN_SDK}"
-    include_dirs: ["${path}/include"]
-    lib_dirs: ["${path}/lib"]
+pthread:
+  linux:
+    libs: ["pthread"]
+
+vulkan_sdk:
+  common:
+    root: "${VULKAN_SDK}"
+    include_dirs: ["${root}/include"]
+    lib_dirs: ["${root}/lib"]
     libs: ["vulkan"]
 
-fetch:
-  - name: imgui
+imgui:
+  common:
     git: "https://github.com/ocornut/imgui.git"
     ref: "v1.90.1"
 ```
@@ -458,8 +457,8 @@ imgui:
     build:
       system: cmake
       args: ["-DIMGUI_DEMO=OFF"]
-    include_dirs: ["${dep_dir}/_install/include"]
-    lib_dirs: ["${dep_dir}/_install/lib"]
+    include_dirs: ["${dep_install_dir}/include"]   # added anyway: cmake installs there
+    lib_dirs: ["${dep_install_dir}/lib"]
     libs: ["imgui"]
 
 # Header-only library
@@ -483,7 +482,8 @@ glfw3:
 ```
 
 **Note:** When `build.system: buildy` is used:
-- Buildy automatically builds **both debug and release** configurations
+- Buildy builds the dependency in the configuration being built (`-c`), custom configurations
+  included: the override config defines them
 - The `${config}` variable in `lib_dirs` resolves to the current build configuration
 - The override config is invoked in **standalone mode** (no dependency resolution, no module discovery)
 
@@ -502,12 +502,31 @@ Dependency types are **inferred** from the fields present in the configuration:
 Dependencies are defined in `buildy_config/dependencies.yaml` or organized into separate files in `buildy_config/dependencies/`. Each top-level key is a dependency name.
 
 **Fetched dependencies** are stored locally:
-- **Source**: `.buildy_cache/deps/<name>/`
-- **Build**: `.buildy_cache/deps/<name>/_build/`
-- **Install**: `.buildy_cache/deps/<name>/_install/`
+- **Source**: `.buildy_cache/deps/<name>/` (`${dep_dir}`)
+- **Build**: `.buildy_cache/deps/<name>/_build/<platform>-<arch>-<config>/` (`${dep_build_dir}`)
+- **Install**: `.buildy_cache/deps/<name>/_install/<platform>-<arch>-<config>/` (`${dep_install_dir}`)
 - **Downloads**: `.buildy_cache/downloads/` (cached archives for URL dependencies)
 
-The `${dep_dir}` variable refers to the fetched source directory.
+**Fetching and building, once.** A dependency is fetched the first time, then used as it is:
+
+- A git dependency's clone is reused, without the network, while the dependency names the same
+  `git` URL and `ref`. Any ref works: a branch, a tag, a full or abbreviated commit ID. The clone is
+  checked out detached at the commit the ref resolved to (`-n 3` logs it), and
+  `deps/<name>.git.json` records it. A changed `ref` is fetched into the clone; a changed URL starts
+  a new clone.
+- `--update-deps` fetches what can move: every git ref that isn't a full commit ID (a branch then
+  moves to its latest commit), and every archive without a `checksum`. Without it, builds are
+  reproducible and work offline.
+- A dependency with a `build.system` is built for the configuration being built (`-c`) only, the
+  first time it is needed. The finished build is recorded in
+  `_build/<platform>-<arch>-<config>.built.json`: the fetched commit or archive hash, the build
+  system, the configuration, `build.args`, the override config's content, where it runs, the
+  programs its phases run and the environment variables its build system reads. While that record
+  matches, the dependency isn't built again; when it doesn't, the build starts again from empty
+  build and install directories. A failed or interrupted build leaves no record. `--force` builds
+  every dependency again.
+
+See [the design note](design/dependencies.md) for what the record covers and doesn't.
 
 **Download caching and validation:**
 
@@ -537,7 +556,7 @@ Example metadata file (`.buildy_cache/downloads/<hash>-glfw-3.4.zip.meta.json`):
 
 The stored SHA256 hash is used for:
 - **Re-extraction validation** - If the extracted directory is deleted but the archive remains, the archive is verified against its stored hash before re-extracting
-- **Lockfile generation** - The hash is included in `dependencies.lock` for reproducible builds
+- **The build record** - The hash identifies the extracted tree in each build's record
 
 **Safe extraction:** an archive is extracted into a new temporary directory next to `deps/<name>/`
 and renamed into place only when every entry was written, so an interrupted extraction is never
@@ -571,8 +590,8 @@ glfw:
     build:
       system: buildy
       override: glfw.buildy.yaml
-    include_dirs: ["${dep_dir}/_install/include"]
-    lib_dirs: ["${dep_dir}/_install/lib"]
+    include_dirs: ["${dep_dir}/include"]
+    lib_dirs: ["${dep_dir}/build/${platform}-${arch}-${config}/lib"]
     libs: ["glfw3"]
     defines: ["GLFW_EXPOSE_NATIVE_WIN32"]
   
@@ -592,11 +611,11 @@ glfw:
 | `url` | Archive URL (.tar.gz, .zip, etc.) | Infers `fetch` type |
 | `ref` | Git ref (tag, branch, commit) | For `git:` dependencies |
 | `checksum` | SHA256 checksum for URL downloads | Format: `sha256:<hash>`. Recommended for reproducibility |
-| `pkg_config` | pkg-config package name | Infers `system` type |
+| `pkg_config` | pkg-config package name | Infers `system` type; every flag of `--cflags` and `--libs` is kept, in order |
 | `root` | Base path for pre-built library | Available as `${root}` |
 | `include_dirs` | Include directories | Can use `${root}`, `${dep_dir}` |
 | `lib_dirs` | Library directories | Can use `${root}`, `${dep_dir}` |
-| `libs` | Libraries to link | e.g., `["glfw3", "pthread"]` |
+| `libs` | Libraries to link | e.g., `["glfw3", "pthread"]`; an item starting with `-` or an absolute path is passed to the linker as written |
 | `frameworks` | macOS frameworks | e.g., `["Cocoa", "IOKit"]` |
 | `defines` | Preprocessor definitions | e.g., `["DEBUG=1"]` |
 | `build` | Build configuration (see below) | For fetch dependencies |
@@ -606,12 +625,19 @@ glfw:
 
 ```yaml
 build:
-  system: cmake         # cmake, meson, make, autoconf, buildy, none
-  override: custom.yaml # Custom build file (for buildy system)
-  args:                 # Arguments passed to build system, each item one argument
-    - "-DFOO=ON"
+  system: cmake         # cmake, meson, make, autoconf, cargo, go_mod, buildy, auto, none
+  override: custom.yaml # A buildy config in buildy_config/dependencies/ (system buildy only)
+  args:                 # Arguments passed to the build system, each item one argument;
+    - "-DFOO=ON"        # the dependency's variables (${config}, ${dep_dir}, ...) are resolved
     - "-DBAR=OFF"
+  configurations:       # buildy configuration: the build system's, for one it doesn't map
+    portable: Release
 ```
+
+A build system with configurations (cmake, meson, cargo) builds `debug` and `release` as its own
+debug and release; any other configuration must be mapped in `build.configurations`, or the build
+fails naming it. buildy builds any configuration by its name. make, autoconf and go_mod have no
+configurations: pass a configuration's settings in `args` with `${config}`.
 
 **Platform Sections:**
 
@@ -634,10 +660,12 @@ neither needed nor accepted.
 | `${version}` | Dependency version |
 | `${platform}` | Current platform (linux, windows, macos) |
 | `${arch}` | Current architecture (x86_64, arm64) |
-| `${config}` | Build configuration (debug, release) |
+| `${config}` | Build configuration (`-c`: debug, release, or a custom one) |
 | `${toolchain}` | Current toolchain name |
 | `${root}` | Value of `root:` field (for system deps) |
 | `${dep_dir}` | Fetched source directory (for fetch deps) |
+| `${dep_build_dir}` | The dependency's build directory for this configuration (with a `build.system`) |
+| `${dep_install_dir}` | The dependency's install directory for this configuration (with a `build.system`) |
 | `${workspace_root}` | Root directory of the workspace |
 
 Environment variables are referenced with uppercase names: `${VULKAN_SDK}`, `${THIRD_PARTY_ROOT}`
@@ -661,7 +689,13 @@ targets:
 Buildy follows an "error immediately" philosophy for dependencies:
 - If `pkg_config:` is specified but pkg-config is unavailable, buildy errors
 - If `root:` path doesn't exist, buildy errors
+- A configuration the build system can't map, an unknown build system, `build.override` for a
+  build system other than buildy, and `build.args` without a `build.system` are errors
 - No warnings or fallbacks - explicit configuration is required
+
+**Downloads** fail when the server can't be connected to within 30 s or sends nothing for 60 s;
+a slow download that keeps arriving is never cut off. Each dependency build phase obeys
+`--timeout` (no limit by default). Ctrl-C stops a fetch or a build.
 
 ---
 
@@ -2130,19 +2164,27 @@ For `action: build`, these parameters are resolved using the toolchain's `comman
 
 ## 12. Build Systems
 
-Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make projects). Buildy includes built-in definitions for common build systems and supports custom definitions.
+Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make projects). Buildy includes built-in definitions for common build systems.
 
 ### Built-in Build Systems
 
-| Name | Detection | Description |
-|------|-----------|-------------|
-| `cmake` | CMakeLists.txt | CMake build system |
-| `meson` | meson.build | Meson build system |
-| `make` | Makefile, GNUmakefile | GNU Make |
-| `autoconf` | configure, configure.ac | GNU Autoconf/Automake |
-| `cargo` | Cargo.toml | Rust Cargo |
-| `go_mod` | go.mod | Go modules |
-| `buildy` | buildy.yaml | Buildy itself (recursive) |
+| Name | Detection | Configurations (`${build_type}`) | Phases |
+|------|-----------|----------------------------------|--------|
+| `cmake` | CMakeLists.txt | debug: `Debug`, release: `Release` | configure, build, install |
+| `meson` | meson.build | debug: `debug`, release: `release` | configure, build, install |
+| `make` | Makefile, GNUmakefile | none | clean, build (in the source tree) |
+| `autoconf` | configure, configure.ac | none | configure, build, install (from the build directory) |
+| `cargo` | Cargo.toml | debug: `dev`, release: `release` | build |
+| `go_mod` | go.mod | none | build |
+| `buildy` | buildy.yaml | any, by name (`${config}`) | build |
+
+`build.system: auto` picks the build system by the files in the fetched tree (the highest
+priority wins).
+
+cmake configures with `-DCMAKE_BUILD_TYPE=${build_type}` (once) and installs into
+`${dep_install_dir}` (`CMAKE_INSTALL_LIBDIR=lib`); its build and install pass `--config
+${build_type}`, which a multi-configuration generator (Visual Studio, the default on Windows, or
+Xcode) needs and a single-configuration one ignores.
 
 ### Buildy as a Build System
 
@@ -2156,15 +2198,18 @@ glfw3:
       system: buildy
       override: glfw3_build.yaml  # Config file in buildy_config/dependencies/
     include_dirs: ["${dep_dir}/include"]
-    lib_dirs: ["${dep_dir}/build/linux-x86_64-${config}/lib"]
+    lib_dirs: ["${dep_dir}/build/${platform}-${arch}-${config}/lib"]
     libs: ["glfw3"]
 ```
 
 **Behavior:**
-- Buildy automatically builds **both debug and release** configurations
+- Buildy builds the configuration being built (`--config ${config}`), whatever its name: the
+  override config defines its configurations
 - The override config file is invoked in **standalone mode** (see CLI Reference)
 - Source paths in the override config are resolved relative to the fetched source directory
-- The `${config}` variable can be used in `lib_dirs` to reference configuration-specific output paths
+- The nested build writes `${dep_dir}/build/<platform>-<arch>-<config>/`, so `${config}` in
+  `lib_dirs` names the right one; its `lib/` and `bin/` are added to the dependency's lib dirs
+- It runs again when the override config, the fetched tree or the buildy executable changes
 
 **Override config example** (`glfw3_build.yaml`):
 
@@ -2182,29 +2227,16 @@ targets:
 
 ### Build Phases
 
-Each build system defines phases that can be selectively executed:
+A build system's phases run in this order, each one it defines:
 
-| Phase | Description | Required |
-|-------|-------------|----------|
-| `configure` | Configure/setup the build | Depends on system |
-| `build` | Compile the project | Yes |
-| `test` | Run tests | No |
-| `install` | Install to prefix | No |
-| `clean` | Clean build artifacts | No |
+| Phase | Runs |
+|-------|------|
+| `clean` | Only for an `in_source` build system (make), before building a tree that was built before |
+| `configure` | If defined |
+| `build` | Always; required |
+| `install` | If defined, into `${install_dir}` |
 
-### Using Build Systems
-
-In the `fetch` section of dependencies:
-
-```yaml
-dependencies:
-  fetch:
-    - name: zlib
-      url: "https://github.com/madler/zlib/archive/v1.3.1.tar.gz"
-      build_system: auto           # Auto-detect (default)
-      build_phases: [configure, build]  # Phases to run
-      build_args: ["-DZLIB_BUILD_EXAMPLES=OFF"]  # Extra args
-```
+A build system doesn't define a phase it doesn't need.
 
 ### Execution Environment
 
@@ -2224,46 +2256,38 @@ complex_lib:
       image: "gcc:13"
 ```
 
-### Custom Build System Definition
+### Build System Definition
 
-Create custom build system definitions in `buildy_config/build_systems/`:
+The built-in definitions are YAML files embedded in buildy
+(`src/internal/resource/data/build_systems/`). Definitions of your own in
+`buildy_config/build_systems/` are **not loaded yet**.
 
 ```yaml
-# buildy_config/build_systems/bazel.yaml
 build_system:
-  name: bazel
-  description: "Google Bazel build system"
-  
+  name: cmake
+  description: "CMake build system"
+
   detection:
-    marker_files: ["WORKSPACE", "BUILD.bazel"]
+    marker_files: ["CMakeLists.txt"]
     priority: 10
-  
+
+  configurations:
+    debug: Debug
+    release: Release
+
+  reads_env: [CC, CXX, CFLAGS, CXXFLAGS, LDFLAGS]
+
   phases:
     configure:
-      command: "true"  # No configure step
-      required: false
-    
+      command: "cmake -S ${source_dir} -B ${build_dir} -DCMAKE_BUILD_TYPE=${build_type} ${args}"
     build:
-      command: "bazel build //... ${args}"
-      working_dir: "${source_dir}"
-      default_args: []
-      required: true
-    
-    test:
-      command: "bazel test //..."
-      working_dir: "${source_dir}"
-      required: false
-    
-    clean:
-      command: "bazel clean"
-      working_dir: "${source_dir}"
-      required: false
-  
+      command: "cmake --build ${build_dir} --config ${build_type} --parallel ${jobs}"
+    install:
+      command: "cmake --install ${build_dir} --config ${build_type} --prefix ${install_dir}"
+
   output:
-    include_patterns:
-      - "${source_dir}"
-    lib_patterns:
-      - "${source_dir}/bazel-bin"
+    include_patterns: ["${install_dir}/include", "${source_dir}/include"]
+    lib_patterns: ["${install_dir}/lib", "${build_dir}"]
 ```
 
 ### Build System Fields
@@ -2274,108 +2298,57 @@ build_system:
 | `description` | Human-readable description |
 | `detection.marker_files` | Files that indicate this build system |
 | `detection.priority` | Detection priority (higher wins) |
+| `configurations` | buildy configuration: the build system's, the phases' `${build_type}`. Without it the build system has no configurations |
+| `in_source` | Builds in the source tree: one configuration at a time, with a `clean` phase run before another is built |
+| `reads_env` | Environment variables its tools read: their values are in each build's record, so a change rebuilds |
+| `phases` | `clean`, `configure`, `build`, `install`; `build` is required, `clean` only with `in_source` |
 
 ### Phase Fields
 
 | Field | Description |
 |-------|-------------|
 | `command` | [Command template](#command-syntax), run without a shell |
-| `working_dir` | Working directory (default: `{source_dir}`) |
-| `default_args` | Default arguments (merged with `build_args`) |
-| `required` | Whether this phase is required |
+| `working_dir` | Working directory (default: `${source_dir}`) |
+| `default_args` | Arguments ahead of the dependency's `build.args` in `${args}` |
 
 ### Output Fields
 
 | Field | Description |
 |-------|-------------|
-| `include_patterns` | Patterns for finding header directories |
-| `lib_patterns` | Patterns for finding library directories |
-
-### Search Order
-
-1. `./buildy_config/build_systems/*.yaml` - Project-specific
-2. `~/.buildy/build_systems/*.yaml` - User-shared
-3. Built-in (embedded in binary)
+| `include_patterns` | Directories added to the dependency's include dirs, when they exist |
+| `lib_patterns` | Directories added to the dependency's lib dirs, when they exist |
 
 ### Phase Variables
 
-Available in command templates:
+Available in command templates and output patterns:
 
 | Variable | Description |
 |----------|-------------|
-| `${source_dir}` | Source directory of the dependency |
-| `${build_dir}` | Build output directory (usually `${source_dir}/_build`) |
-| `${install_dir}` | Installation prefix directory |
+| `${source_dir}` | Source directory of the dependency (`${dep_dir}`) |
+| `${build_dir}` | `${source_dir}/_build/<platform>-<arch>-<config>` |
+| `${install_dir}` | `${source_dir}/_install/<platform>-<arch>-<config>` |
+| `${build_type}` | The build system's name for the configuration (with `configurations`) |
+| `${config}`, `${platform}`, `${arch}` | What is being built |
 | `${jobs}` | Number of parallel jobs (auto-detected from CPU count) |
 | `${args}` | `default_args`, then the dependency's `build.args`: each item one argument |
 
-A build system has a `build` phase; its phases are `configure`, `build`, `test`, `install` and
-`clean`, and any other is an error.
-
 ---
 
-## 13. Lockfile
+## 13. Reproducibility
 
-Optional lockfile for reproducible builds. Located at `buildy_config/dependencies.lock`.
+A fetched dependency is pinned by what its definition names:
 
-### Generation
+| Dependency | Pinned by | Moves |
+|------------|-----------|-------|
+| `git` with a full commit ID | The commit | Never |
+| `git` with a tag or branch | The commit fetched first | With `--update-deps` |
+| `url` with a `checksum` | The checksum | Never (a different download fails) |
+| `url` without a `checksum` | The first download | With `--update-deps` |
+| `pkg_config`, `root`, paths | The system | When the system changes |
 
-```bash
-buildy --update-lock    # Generate/update lockfile
-buildy --require-lock   # Fail if no lockfile exists
-buildy --ignore-lock    # Ignore existing lockfile
-```
-
-### Format
-
-```yaml
-# buildy_config/dependencies.lock (auto-generated)
-version: 1
-generated: "2026-01-22T10:30:00Z"
-platform: linux-x86_64
-
-dependencies:
-  imgui:
-    git: "https://github.com/ocornut/imgui.git"
-    ref: "v1.90.1"
-    commit: "abc123def456..."
-    fetched_at: "2026-01-20T15:00:00Z"
-    
-  stb:
-    url: "https://github.com/nothings/stb/archive/master.tar.gz"
-    checksum: "sha256:789xyz..."
-    fetched_at: "2026-01-20T15:00:00Z"
-
-system_warnings:
-  - "zlib: using system library /usr/lib/libz.so.1"
-```
-
-### Reproducibility Summary
-
-| Dependency Type | Reproducibility | Warning |
-|-----------------|-----------------|---------|
-| `fetch` with lockfile | Full | None |
-| `fetch` without lockfile | Partial (ref may move) | Optional |
-| `paths` | User-controlled | None |
-| `system` | Platform-dependent | Once per build |
-
-### Lockfile Validation
-
-When a lockfile exists, buildy validates dependencies on each build:
-
-- **Git dependencies**: Current commit hash must match the locked commit
-- **URL dependencies**: SHA256 hash (from download metadata) must match the locked checksum
-
-If validation fails, buildy reports which dependency changed and suggests running `buildy --update-lock`.
-
-### Checksum Sources
-
-For URL dependencies, the lockfile checksum comes from:
-
-1. **Config checksum** - If `checksum:` is specified in the dependency config, it's verified during download
-2. **Computed hash** - The SHA256 is always computed and stored in the `.meta.json` metadata file
-
-Even if you don't provide a checksum in your config, the lockfile will capture the SHA256 of what was downloaded, enabling reproducible builds via `--require-lock`.
+There is no lockfile yet: `--update-lock` and `--require-lock` don't exist. To pin a git
+dependency across machines, give its full commit ID as `ref`; to pin an archive, give its
+`checksum`.
 
 ---
 
@@ -2589,10 +2562,8 @@ buildy --toolchain clang-linux
 # Define variables
 buildy --define VERSION=1.2.3 --define BUILD_NUMBER=42
 
-# Lockfile operations
-buildy --update-lock       # Generate/update lockfile
-buildy --require-lock      # Fail if no lockfile
-buildy --ignore-lock       # Ignore lockfile
+# Dependencies
+buildy --update-deps       # Fetch git branches and tags, and archives without a checksum, again
 
 # Build specific targets and everything they depend on (in any module); nothing else.
 # An unknown target name is an error.
@@ -2609,7 +2580,7 @@ buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging
 buildy --dry-run           # Plan: what would be fetched and built, and the tasks in an order they can run in
 buildy --clean             # Clean build outputs
-buildy --force             # Ignore cache, rebuild all
+buildy --force             # Ignore the cache and dependency build records, rebuild all
 ```
 
 ### Workspace Mode vs Standalone Mode
@@ -2625,7 +2596,7 @@ Buildy operates in two modes depending on how it's invoked:
 **Workspace Mode** (default):
 - Discovers all `buildy.yaml` modules in the project
 - Resolves dependencies from `buildy_config/dependencies/`
-- Builds both debug and release versions of fetched dependencies
+- Fetches and builds dependencies that aren't yet, for the configuration being built
 - Generates a full task graph with proper ordering
 
 **Standalone Mode** (explicit config file):
@@ -2673,7 +2644,8 @@ ln -s buildy_config/compile_commands.json compile_commands.json
    (--platform, --architecture, --config) selects, recursively
 2. Prepare: resolve dependencies
    a. System: pkg-config or explicit paths
-   b. Fetch: download or clone, detect the build system, build debug and release
+   b. Fetch: download or clone what isn't fetched yet; build what isn't built yet for the
+      configuration being built (each build's record says), and install it
    (--dry-run plans this step: it reports what it would fetch and build, and uses what is on disk)
 3. Generate: the tasks of every module, all targets first, then copies, staging and install
 4. Validate: one producer per output, every dependency a task, no unresolved ${...};

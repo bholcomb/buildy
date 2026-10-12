@@ -257,7 +257,7 @@ deleted before it runs.
 Before, the signal goroutine called the shutdown, which waited for the running tasks, before it
 could see a second signal; and nothing passed its context on, so Ctrl-C did nothing while a
 dependency was fetched or built. The shutdown manager, its cleanup registry and task tracking are
-gone. The HTTP download still has no timeout of its own (phase 4).
+gone. The HTTP download got a timeout of its own in phase 4 ([dependencies](dependencies.md)).
 
 ## Transform and generate flags
 
@@ -318,11 +318,12 @@ index entries removed), built as their CI does, on Linux x86-64:
 | Monstro library, no-op | 0.03 s | 0.03 s |
 
 Their clean builds are bound by compile time and, for Mobius, by its dependencies' cmake builds,
-which run on every build in both configurations until phase 4.
+which ran on every build in both configurations until phase 4 ([dependencies](dependencies.md)).
 
 ## Left for later phases
 
-- The HTTP download timeout, and fetching and building dependencies incrementally (phase 4).
+- The HTTP download timeout, and fetching and building dependencies incrementally: done in phase 4
+  ([dependencies](dependencies.md)).
 - Windows (`taskkill`, `CREATE_NEW_PROCESS_GROUP`, MSVC environment variables, file hashes without
   a change time) and macOS (`reads_env` values, frameworks) are built and vetted for those targets
   but have not run there.

@@ -14,8 +14,8 @@ sdl2:
         - "-DSDL_SHARED=OFF"
         - "-DSDL_STATIC=ON"
         - "-DSDL_TEST=OFF"
-    include_dirs: ["${dep_dir}/_install/include"]
-    lib_dirs: ["${dep_dir}/_install/lib"]
+    include_dirs: ["${dep_install_dir}/include"]
+    lib_dirs: ["${dep_install_dir}/lib"]
     libs: ["SDL2"]
     execution:
       type: docker

@@ -24,11 +24,11 @@ buildy
 # Release build
 buildy -c release
 
-# Force rebuild (ignore cache)
+# Force rebuild (ignore the cache, build SDL2 again)
 buildy --force
 
-# Generate lockfile
-buildy --update-lock
+# Fetch SDL2's ref again (only a branch or a tag can move)
+buildy --update-deps
 ```
 
 ## Docker Requirements
