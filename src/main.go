@@ -25,7 +25,6 @@ var (
 	BuildConfig = "debug"
 )
 
-
 // detectPlatform returns the platform buildy runs on
 func detectPlatform() string {
 	return config.HostPlatform()
@@ -58,7 +57,7 @@ func main() {
 	// Define CLI flags with auto-detected defaults
 	defaultPlatform := detectPlatform()
 	defaultArch := detectArchitecture()
-	
+
 	platform := flag.StringP("platform", "p", defaultPlatform, "Target platform (auto-detected: "+defaultPlatform+")")
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
@@ -255,7 +254,6 @@ func main() {
 		os.Exit(0)
 	}
 
-
 	// Show cache stats if requested
 	if *cacheStats {
 		buildCache, err := cache.NewBuildCache(workspaceCacheDir)
@@ -331,7 +329,7 @@ func main() {
 		targets,
 		buildOptions,
 	)
-	
+
 	exitIfInterrupted(ctx)
 
 	if err != nil {
@@ -344,10 +342,10 @@ func main() {
 		if err := result.SaveReport(reportPath); err != nil {
 			util.LogWarning("Failed to save build report: %v", err)
 		}
-		
+
 		// Print terminal summary
 		result.PrintSummary()
-		
+
 		// Generate compile_commands.json if requested
 		if *compileCommands && result.Success {
 			compileCommandsPath := filepath.Join(ws.RootDir, "buildy_config", "compile_commands.json")
@@ -365,4 +363,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

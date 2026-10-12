@@ -20,10 +20,10 @@ const (
 
 // Logger is the global logger instance
 var (
-	logMutex     sync.RWMutex
-	notifyLevel  LogLevel = LogLevelWarning // Default to warning level
-	stdLogger    *log.Logger
-	initialized  bool
+	logMutex    sync.RWMutex
+	notifyLevel LogLevel = LogLevelWarning // Default to warning level
+	stdLogger   *log.Logger
+	initialized bool
 )
 
 // InitLogger initializes the logging system with the specified notify level

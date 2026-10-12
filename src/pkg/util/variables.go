@@ -47,15 +47,15 @@ func (ve *VariableEnvironment) SetVariable(name, value, source string) {
 			source = "unknown"
 		}
 	}
-	
+
 	// Verbose logging disabled - uncomment for debugging variable resolution
 	// if oldVal, exists := ve.variables[name]; exists {
-	// 	log.Printf("Variable '%s' overridden: '%s' (%s) -> '%s' (%s)", 
+	// 	log.Printf("Variable '%s' overridden: '%s' (%s) -> '%s' (%s)",
 	//		name, oldVal.Value, oldVal.Source, value, source)
 	// } else {
 	// 	log.Printf("Variable set: %s = %s (%s)", name, value, source)
 	// }
-	
+
 	ve.variables[name] = VariableValue{Value: value, Source: source}
 }
 
@@ -65,12 +65,12 @@ func (ve *VariableEnvironment) GetVariable(name string) (string, bool) {
 	if val, exists := ve.variables[name]; exists {
 		return val.Value, true
 	}
-	
+
 	// Search parent environment if not found locally
 	if ve.parent != nil {
 		return ve.parent.GetVariable(name)
 	}
-	
+
 	return "", false
 }
 
@@ -79,39 +79,39 @@ func (ve *VariableEnvironment) ResolveString(text string, collectedErrors *[]str
 	if maxIterations == 0 {
 		maxIterations = 10
 	}
-	
+
 	// Find all ${variable} patterns
 	pattern := regexp.MustCompile(`\$\{([^}]+)\}`)
-	
+
 	// Resolve iteratively to handle nested variables
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		unresolved := make([]string, 0)
-		
+
 		newText := pattern.ReplaceAllStringFunc(text, func(match string) string {
 			// Extract variable name from ${varname}
 			varName := match[2 : len(match)-1]
-			
+
 			if value, found := ve.GetVariable(varName); found {
 				return value
 			}
-			
+
 			unresolved = append(unresolved, varName)
 			return match // Keep original if not found
 		})
-		
+
 		// If nothing changed, we're done
 		if newText == text {
 			break
 		}
-		
+
 		text = newText
-		
+
 		// If we still have unresolved variables and nothing changed, stop
 		if len(unresolved) > 0 {
 			break
 		}
 	}
-	
+
 	// Collect errors if requested
 	if collectedErrors != nil {
 		// Check for remaining unresolved variables
@@ -119,24 +119,24 @@ func (ve *VariableEnvironment) ResolveString(text string, collectedErrors *[]str
 		if len(matches) > 0 {
 			for _, match := range matches {
 				varName := match[1]
-				*collectedErrors = append(*collectedErrors, 
+				*collectedErrors = append(*collectedErrors,
 					fmt.Sprintf("Unresolved variable '${%s}' in: %s", varName, text))
 			}
 		}
 	}
-	
+
 	return text
 }
 
 // GetAllVariables gets all variables with their values and sources for export
 func (ve *VariableEnvironment) GetAllVariables(includeParent bool) map[string]map[string]string {
 	result := make(map[string]map[string]string)
-	
+
 	// Get parent variables first (so local overrides them)
 	if includeParent && ve.parent != nil {
 		result = ve.parent.GetAllVariables(true)
 	}
-	
+
 	// Add local variables (overriding parent)
 	for name, val := range ve.variables {
 		result[name] = map[string]string{
@@ -144,6 +144,6 @@ func (ve *VariableEnvironment) GetAllVariables(includeParent bool) map[string]ma
 			"source": val.Source,
 		}
 	}
-	
+
 	return result
 }

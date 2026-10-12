@@ -11,6 +11,7 @@ import (
 // Embed the entire data directory
 // Note: embed paths must be relative to the package directory
 // We'll need to copy or symlink the data directory into goBuildy
+//
 //go:embed data
 var embeddedData embed.FS
 
@@ -24,7 +25,7 @@ func GetEmbeddedFile(path string) ([]byte, error) {
 func ListEmbeddedFiles(dir string) ([]string, error) {
 	fullPath := "data/" + dir
 	var files []string
-	
+
 	err := fs.WalkDir(embeddedData, fullPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -36,7 +37,7 @@ func ListEmbeddedFiles(dir string) ([]string, error) {
 		}
 		return nil
 	})
-	
+
 	return files, err
 }
 
@@ -48,38 +49,37 @@ func VerifyEmbeddedData() error {
 		return fmt.Errorf("failed to list templates: %w", err)
 	}
 	util.LogInfo("Found %d template file(s)", len(templates))
-	
+
 	// Check for toolchains
 	toolchains, err := ListEmbeddedFiles("toolchains")
 	if err != nil {
 		return fmt.Errorf("failed to list toolchains: %w", err)
 	}
 	util.LogInfo("Found %d toolchain file(s)", len(toolchains))
-	
+
 	// Check for build systems
 	buildSystems, err := ListEmbeddedFiles("build_systems")
 	if err != nil {
 		return fmt.Errorf("failed to list build systems: %w", err)
 	}
 	util.LogInfo("Found %d build system file(s)", len(buildSystems))
-	
+
 	// Verify we can read at least one template file
 	if len(templates) == 0 {
 		return fmt.Errorf("no template files found in embedded data")
 	}
-	
+
 	// Verify we can read at least one toolchain file
 	if len(toolchains) == 0 {
 		return fmt.Errorf("no toolchain files found in embedded data")
 	}
-	
+
 	// Verify we can read at least one build system file
 	if len(buildSystems) == 0 {
 		return fmt.Errorf("no build system files found in embedded data")
 	}
-	
+
 	util.LogDebug("Successfully verified embedded data access")
-	
+
 	return nil
 }
-

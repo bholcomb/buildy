@@ -60,8 +60,8 @@ func cacheDirOf(root, cacheDir string) string {
 // Workspace manages multi-module workspace with buildy.yaml files
 type Workspace struct {
 	RootDir    string
-	ConfigPath string                  // Explicit config file path (empty for default buildy.yaml discovery)
-	CacheDir   string                  // the cache directory, absolute: discovery never looks in it
+	ConfigPath string // Explicit config file path (empty for default buildy.yaml discovery)
+	CacheDir   string // the cache directory, absolute: discovery never looks in it
 	Config     *WorkspaceConfig
 	Modules    map[string]*ModuleInfo // relative_path -> ModuleInfo
 	discovered bool

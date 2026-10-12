@@ -95,11 +95,11 @@ func TestTaskIDGeneratorSpecialCharacters(t *testing.T) {
 	// Paths with special characters should be sanitized
 	testCases := []string{
 		"src/module",
-		"src\\module",      // Windows path
+		"src\\module", // Windows path
 		"src-module",
 		"src.module",
-		"@fetch:glfw3",     // Special prefix
-		"my module",        // Space
+		"@fetch:glfw3", // Special prefix
+		"my module",    // Space
 	}
 
 	for _, path := range testCases {
@@ -114,4 +114,3 @@ func TestTaskIDGeneratorSpecialCharacters(t *testing.T) {
 		}
 	}
 }
-
