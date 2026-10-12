@@ -134,3 +134,34 @@ targets:
 		{"wasm", "wasm32", "release", cross("wasm32-unknown-unknown", "--release | ")},
 	})
 }
+
+// A target's Go and Rust options take filters, as its other lists do: by platform, by
+// configuration.
+func TestGoAndRustOptionsTakeFilters(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{"buildy.yaml": `project: {name: filters}
+targets:
+  executables:
+    - name: app
+      language: go
+      path: app
+      build_tags: [{linux: [x11]}, {windows: [win32]}, base]
+      ldflags: [{release: ["-s", "-w"]}, "-X main.v=1"]
+      gcflags: [{debug: ["all=-N -l"]}]
+    - {name: rs, language: rust, path: rs, features: [{linux: [alsa]}, {release: [lto]}]}
+`})
+	checkArgv(t, root, []argvCase{
+		{"linux", "x86_64", "debug", map[string]string{
+			"app": "<root>/app: go | build | -o | <out>/bin/app | -tags | x11,base | -ldflags=-X main.v=1 | -gcflags=all=-N -l | .",
+			"rs":  "<root>/rs: cargo | build | --target-dir | <out>/cargo | --features | alsa",
+		}},
+		{"linux", "x86_64", "release", map[string]string{
+			"app": "<root>/app: go | build | -trimpath | -o | <out>/bin/app | -tags | x11,base | -ldflags=-s -w -X main.v=1 | .",
+			"rs":  "<root>/rs: cargo | build | --release | --target-dir | <out>/cargo | --features | alsa,lto",
+		}},
+		{"windows", "x86_64", "debug", map[string]string{
+			"app": "<root>/app: go | build | -o | <out>/bin/app.exe | -tags | win32,base | -ldflags=-X main.v=1 | -gcflags=all=-N -l | .",
+			"rs":  "<root>/rs: cargo | build | --target | x86_64-pc-windows-gnu | --target-dir | <out>/cargo",
+		}},
+	})
+}

@@ -392,3 +392,49 @@ func TestRemovedBuildToolKeysAreErrors(t *testing.T) {
 		}
 	}
 }
+
+// A target key its language doesn't read is an error, not ignored: a Go target takes the Go keys,
+// a Rust target the Rust keys, other targets neither; a Go library's build mode is its type's.
+func TestTargetKeysOfAnotherLanguageAreErrors(t *testing.T) {
+	for _, c := range []struct{ yaml, want string }{
+		{"executables: [{name: a, language: go, path: ., features: [x]}]", "a go target has no 'features' (it takes: name, language, depends_on, path, build_tags, ldflags, gcflags, buildmode)"},
+		{"executables: [{name: a, language: go, path: ., bin: x}]", "a go target has no 'bin'"},
+		{"executables: [{name: a, language: go, path: ., sources: [a.go]}]", "a go target has no 'sources'"},
+		{"executables: [{name: a, language: go, path: ., flags: [-race]}]", "a go target has no 'flags'"},
+		{"executables: [{name: a, language: go, path: ., defines: [A]}]", "a go target has no 'defines'"},
+		{"executables: [{name: a, language: go, path: ., output_prefix: x}]", "a go target has no 'output_prefix'"},
+		{"executables: [{name: a, language: go, path: ., compile: {flags: [-x]}}]", "a go target has no 'compile'"},
+		{"executables: [{name: a, language: rust, path: ., build_tags: [x]}]", "a rust target has no 'build_tags' (it takes: name, language, depends_on, path, features, bin)"},
+		{"executables: [{name: a, language: rust, path: ., libs: [m]}]", "a rust target has no 'libs'"},
+		{"executables: [{name: a, language: cpp, sources: [a.cpp], ldflags: [-s]}]", "'ldflags' is a key of go targets, not of cpp targets"},
+		{"executables: [{name: a, language: c, sources: [a.c], features: [x]}]", "'features' is a key of rust targets, not of c targets"},
+		{"executables: [{name: a, language: go, path: ., buildmode: c-shared}]", "buildmode 'c-shared' is not one of: exe, pie"},
+		{"shared_libraries: [{name: a, language: go, path: ., buildmode: c-archive}]", "a Go shared library's build mode is its type's"},
+		{"static_libraries: [{name: a, language: go, path: ., buildmode: c-archive}]", "a Go static library's build mode is its type's"},
+	} {
+		path := filepath.Join(t.TempDir(), "buildy.yaml")
+		if err := os.WriteFile(path, []byte("targets:\n  "+c.yaml+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadFile(path, false)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s:\n got %v\nwant %s", c.yaml, err, c.want)
+		}
+	}
+
+	// A platform's override of a Go target is checked against Go's keys
+	path := filepath.Join(t.TempDir(), "buildy.yaml")
+	if err := os.WriteFile(path, []byte(`targets:
+  executables: [{name: a, language: go, path: ., build_tags: [x], buildmode: pie}]
+platforms:
+  linux:
+    targets:
+      executables: [{name: a, build_tags: [y], features: [z]}]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path, false)
+	if err == nil || !strings.Contains(err.Error(), "platforms.linux.targets.executables[0] (a): a go target has no 'features'") || strings.Contains(err.Error(), "has no 'build_tags'") {
+		t.Errorf("override: %v", err)
+	}
+}

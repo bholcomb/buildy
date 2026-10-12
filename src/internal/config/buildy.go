@@ -271,14 +271,64 @@ type Target struct {
 	Compile       TargetCompile    `yaml:"compile"`
 	Link          LinkSettings     `yaml:"link"`
 	OutputPrefix  *string          `yaml:"output_prefix"`
-	// Go
-	BuildTags StringList `yaml:"build_tags"`
-	Ldflags   StringList `yaml:"ldflags"`
-	Gcflags   StringList `yaml:"gcflags"`
-	Buildmode string     `yaml:"buildmode"`
-	// Rust
-	Features StringList `yaml:"features"`
-	Bin      string     `yaml:"bin"`
+	// Go (goTargetKeys)
+	BuildTags Filtered[string] `yaml:"build_tags"`
+	Ldflags   Filtered[string] `yaml:"ldflags"`
+	Gcflags   Filtered[string] `yaml:"gcflags"`
+	Buildmode string           `yaml:"buildmode"`
+	// Rust (rustTargetKeys)
+	Features Filtered[string] `yaml:"features"`
+	Bin      string           `yaml:"bin"`
+}
+
+// The keys of a Go and a Rust target, besides name, language and depends_on: the others (C and
+// C++ keys) would be read by nothing. A target of another language takes neither language's own
+// keys.
+var (
+	goTargetKeys   = []string{"path", "build_tags", "ldflags", "gcflags", "buildmode"}
+	rustTargetKeys = []string{"path", "features", "bin"}
+)
+
+// Go build modes: an executable may ask for one of these; a library's is its type's.
+var goExecutableBuildmodes = []string{"exe", "pie"}
+
+// setKeys returns the keys the target sets, in field order.
+func (t *Target) setKeys() []string {
+	var keys []string
+	v := reflect.ValueOf(t).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		key := strings.Split(v.Type().Field(i).Tag.Get("yaml"), ",")[0]
+		if key != "" && key != "-" && !v.Field(i).IsZero() {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// checkLanguageKeys reports each key the target sets that a target of its language and type
+// doesn't take: nothing would read it.
+func (t *Target) checkLanguageKeys(d *decoder, where, language, targetType string) {
+	own := map[string][]string{"go": goTargetKeys, "rust": rustTargetKeys}
+	for _, key := range t.setKeys() {
+		switch {
+		case key == "name" || key == "language" || key == "depends_on":
+		case own[language] != nil && !contains(own[language], key):
+			d.errorAt(t.Pos, "%s: a %s target has no '%s' (it takes: name, language, depends_on, %s)", where, language, key, strings.Join(own[language], ", "))
+		case own[language] == nil && key != "path" && (contains(goTargetKeys, key) || contains(rustTargetKeys, key)):
+			owner := "go"
+			if contains(rustTargetKeys, key) {
+				owner = "rust"
+			}
+			d.errorAt(t.Pos, "%s: '%s' is a key of %s targets, not of %s targets", where, key, owner, language)
+		}
+	}
+	if language == "go" && t.Buildmode != "" {
+		if targetType != "executable" {
+			d.errorAt(t.Pos, "%s: a Go %s's build mode is its type's (c-shared for shared_libraries, c-archive for static_libraries): remove 'buildmode'", where, strings.ReplaceAll(targetType, "_", " "))
+		} else if !contains(goExecutableBuildmodes, t.Buildmode) {
+			d.errorAt(t.Pos, "%s: buildmode '%s' is not one of: %s (a library is a shared_libraries or static_libraries target)", where, t.Buildmode, strings.Join(goExecutableBuildmodes, ", "))
+		}
+	}
 }
 
 // TargetCompile is a target's compile: section.
@@ -543,14 +593,23 @@ func (f *File) validate(d *decoder, root bool) {
 					d.errorAt(t.Pos, "%s is missing required 'path'", where)
 				}
 			}
+			t.checkLanguageKeys(d, where, t.Language, s.Type)
 		}
 	}
 	for _, platform := range sortedNames(f.Platforms) {
 		for _, s := range f.Platforms[platform].Targets.Sections() {
 			for i, o := range s.Targets {
-				if f.target(s.Key, o.Name) == nil {
+				base := f.target(s.Key, o.Name)
+				if base == nil {
 					d.errorAt(o.Pos, "platforms.%s.targets.%s[%d] overrides '%s', which is not one of the config's targets.%s", platform, s.Key, i, o.Name, s.Key)
+					continue
 				}
+				where := fmt.Sprintf("platforms.%s.targets.%s[%d] (%s)", platform, s.Key, i, o.Name)
+				language := base.Language
+				if o.Language != "" {
+					language = o.Language
+				}
+				o.checkLanguageKeys(d, where, language, s.Type)
 			}
 		}
 	}

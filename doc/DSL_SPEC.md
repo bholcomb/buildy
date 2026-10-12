@@ -1039,7 +1039,7 @@ Either form can sit under a filter key: `- linux: [{pattern: "src/linux/*.c", op
 
 Many list fields support **filtering** based on four dimensions: **platform**, **architecture**, **configuration**, and **toolchain**. Filtering allows conditional inclusion of items without duplicating entire target definitions.
 
-**Filterable fields:** `sources`, `defines`, `libs`, `include_dirs`, `flags`
+**Filterable fields:** `sources`, `defines`, `libs`, `include_dirs`, `flags`, and the Go and Rust targets' `build_tags`, `ldflags`, `gcflags` and `features`
 
 **Syntax:**
 
@@ -1153,37 +1153,63 @@ targets:
       runtime_deps: ["game_assets", "shaders"]  # Artifacts needed at runtime
 ```
 
-### Go Executables
+### Go and Rust Target Keys
 
-Go projects typically only need `executables` since dependencies are managed by Go modules:
+A Go or Rust target names a directory, `path` (the Go package with `main`, or the crate with its
+`Cargo.toml`), and the options its tool takes. These are all the keys it has; any other key (a
+C/C++ key such as `sources`, `flags`, `defines`, `libs`, `deps` or `output_prefix`, or the other
+language's) is an error, as a misspelt key is. A C or C++ target can't have the Go or Rust keys.
+
+| Key | Language | What it gives the tool |
+|-----|----------|------------------------|
+| `name` | both | The target's name; the executable's or library's file name |
+| `language` | both | `go` or `rust` |
+| `path` | both | The directory the tool runs in (required) |
+| `depends_on` | both | Build order only, as for any target |
+| `build_tags` | go | `-tags a,b`: one argument, the tags joined with commas |
+| `ldflags` | go | `-ldflags=<value>`: one argument, the items joined with spaces |
+| `gcflags` | go | `-gcflags=<value>`: one argument, the items joined with spaces |
+| `buildmode` | go | `-buildmode=<mode>` for an executable: `exe` or `pie`. A library's is its type's: `c-shared` for `shared_libraries`, `c-archive` for `static_libraries` |
+| `features` | rust | `--features a,b`: one argument, the features joined with commas |
+| `bin` | rust | `--bin <name>`: an executable that builds one of its crate's binaries; also its file name |
+
+`build_tags`, `ldflags`, `gcflags` and `features` are lists that take
+[filters](#filtered-lists) like any other: `build_tags: [{linux: [x11]}, netgo]`,
+`ldflags: [{release: ["-s", "-w"]}]`. Variables are resolved in every value:
+`"-X main.version=${project_version}"`.
+
+`go build` splits its `-ldflags` and `-gcflags` value into words itself, honouring quotes, so an
+item is one or more words as go reads them: `"-X main.version=1.2"` is two words for the linker,
+and a value with a space needs go's quotes inside the item, `"-X 'main.msg=hello world'"`.
+
+The configuration decides the rest, from the toolchain's `flags`: `release` adds `-trimpath` to
+`go build` and `--release` to `cargo build` (and Cargo's output directory is then `release`);
+`debug` adds nothing. A cross-compiling Rust toolchain passes its target triple
+(`--target x86_64-pc-windows-gnu`, `--target wasm32-unknown-unknown`); the Go Windows toolchain
+sets `GOOS` and `GOARCH`.
 
 ```yaml
 targets:
   executables:
     - name: myapp
       language: go
-      path: "cmd/myapp"       # Directory containing go.mod or main package
-      build_tags: []
-      ldflags: ["-s", "-w"]   # For release builds
-```
-
-### Rust Executables
-
-Rust projects typically only need `executables` since dependencies are managed by Cargo:
-
-```yaml
-targets:
-  executables:
-    - name: myapp
+      path: "cmd/myapp"
+      build_tags: [netgo, {linux: [x11]}]
+      ldflags: ["-X main.version=${project_version}", {release: ["-s", "-w"]}]
+      gcflags: [{debug: ["all=-N -l"]}]
+      buildmode: pie
+    - name: tool
       language: rust
       path: "."               # Directory containing Cargo.toml
-      features: ["feature1"]
-      bin: "myapp"            # Binary name if multiple binaries in crate
+      features: [cli, {linux: [alsa]}]
+      bin: "tool"             # One binary of a crate that has several
 ```
 
-The binary is built to `build/<platform>-<arch>-<config>/cargo/<profile>/myapp` (`debug`, or
-`release` for configurations whose flags pass `--release`). Go and Rust builds run their own tool on
-every build; see [Tool-Cached Builds](#tool-cached-builds-go-and-rust).
+Go and Rust projects typically only need `executables`: Go modules and Cargo handle their
+dependencies. The binary of a Rust executable is built to
+`build/<platform>-<arch>-<config>/cargo/<profile>/<name>` (`bin` if set; `debug`, or `release` for
+configurations whose flags pass `--release`). Go and Rust builds run their own tool on every build;
+see [Tool-Cached Builds](#tool-cached-builds-go-and-rust).
 
 ### deps vs libs vs depends_on
 

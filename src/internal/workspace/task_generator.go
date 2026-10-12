@@ -317,7 +317,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 	for _, l := range []struct {
 		key    string
 		values []string
-	}{{"build_tags", target.BuildTags}, {"ldflags", target.Ldflags}, {"gcflags", target.Gcflags}, {"features", target.Features}} {
+	}{{"build_tags", target.BuildTags.Resolve(ctx)}, {"ldflags", target.Ldflags.Resolve(ctx)}, {"gcflags", target.Gcflags.Resolve(ctx)}, {"features", target.Features.Resolve(ctx)}} {
 		if len(l.values) > 0 {
 			if item[l.key], err = tg.resolve(l.values, "the "+l.key+" of "+where); err != nil {
 				return nil, err
