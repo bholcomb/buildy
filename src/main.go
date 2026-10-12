@@ -22,7 +22,7 @@ import (
 
 // Version is buildy's version. Bump it in the commit a release tag names: CI fails a tag v<x>
 // whose source says another version (doc/RELEASING.md).
-var Version = "0.2.0"
+var Version = "0.2.1"
 
 // Build information, set with -ldflags -X at build time
 var (
