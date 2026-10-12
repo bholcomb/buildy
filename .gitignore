@@ -1,3 +1,4 @@
 .buildy_cache
+/bin/
 /build/
 /examples/*/build/

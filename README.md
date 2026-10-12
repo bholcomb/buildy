@@ -19,11 +19,7 @@ Buildy needs Go 1.25 or later (`src/go.mod`). With `GOTOOLCHAIN=auto`, the Go de
 older `go` downloads it.
 
 ```bash
-# Bootstrap build (first time)
-./bootstrap.sh
-
-# Subsequent builds
-./bin/buildy
+cd src && go build -o ../bin/buildy .
 ```
 
 Or download a release (see [Releases](#releases)) and put `buildy` on your `PATH`.

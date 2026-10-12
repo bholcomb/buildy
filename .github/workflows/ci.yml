@@ -1,7 +1,7 @@
 # Vet, test and build buildy on Linux, Windows and macOS. A v* tag also
 # publishes a GitHub release of each platform's binary.
 #
-# Each platform builds natively with the ldflags of bootstrap.sh. A tag's
+# Each platform builds natively, with the build's time and commit. A tag's
 # build also sets main.Version to the tag without its "v" (v0.2.0 -> 0.2.0)
 # and is packaged as buildy-<version>-<rid>.tar.gz (.zip on Windows), with
 # the binary, buildy or buildy.exe, at the archive's root.

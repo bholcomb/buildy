@@ -37,5 +37,6 @@ targets:
         - -X main.BuildConfig=${config}
         - release: [-s, -w]
 
-# Note: artifacts.copy is handled by bootstrap.sh to avoid "text file busy"
-# when buildy builds itself
+# buildy builds itself into build/<platform>-<arch>-<config>/bin/ and copies it nowhere:
+# replacing the running executable fails ("text file busy"). Build the first one with
+#   cd src && go build -o ../bin/buildy .
