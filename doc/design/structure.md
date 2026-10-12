@@ -115,7 +115,7 @@ and the path resolver's workspace root. `prependMkdir`, the `ResolveSources*` wr
 
 Kept, undecided: `LoadFilesystemSystems` and the documented `buildy_config/build_systems/` (not
 loaded), and the Go and Rust tools' `supports` flags (`build_tags`, `features`, ...), documented
-and unread.
+and unread. *The `supports` flags are deleted since ([Go and Rust options](commands.md#go-and-rust-options)).*
 
 ## Duplication
 

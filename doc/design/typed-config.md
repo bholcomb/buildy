@@ -126,6 +126,8 @@ and the Go and Rust `supports` keys no code read. The doxygen toolchain keeps on
   (defaults). *Done in [phase 5](layout.md#one-output-layout): the root's `output:` merges into
   every module's.*
 - `supports.build_tags`, `features` and the other Go/Rust supports flags are documented but
-  unread; deleting them changes the documented toolchain format.
+  unread; deleting them changes the documented toolchain format. *Deleted: the toolchains'
+  `command_params` are the one description of a build tool's options
+  ([Go and Rust options](commands.md#go-and-rust-options)).*
 - Tool `flags` keys (`common`, configuration names) are not checked against the workspace's
   configurations.

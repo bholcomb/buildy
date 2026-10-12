@@ -119,6 +119,43 @@ limit. The built-in GCC, Clang, MinGW, ARM, Emscripten and Docker toolchains dec
 compile and link tools, MSVC `msvc`; the macOS `ar` (cctools) reads no response files and
 declares none.
 
+## Go and Rust options
+
+*Added after phase 6.* A Go or Rust target's options (`build_tags`, `ldflags`, `gcflags`,
+`buildmode`; `features`, `bin`) reach `go build` and `cargo build` through one mechanism, the
+build tool's `command_params`: each names where its value comes from (the target, `item.X`, or a
+parameter of the template's step, `tool_params.X`), how a list is joined, and the arguments its
+`format` gives. The `supports` flags that described the same options a second time
+(`build_tags_flag: -tags`, ...) were read by nothing and are deleted, with the parameters' unread
+`optional` and their `resolve_variables` (a target's values are resolved once, when it loads).
+
+Each option is the arguments the tool expects, without a shell: `-tags a,b` (two arguments),
+`-ldflags=<items joined with spaces>` and `-gcflags=<...>` (one each: go splits them into words
+itself, honouring its own quotes, so `-X 'main.msg=hello world'` stays one `-X` value), and
+`--features a,b`, `--bin name`, `--lib`. The configuration's part comes from the tool's `flags`,
+as for every tool: `release` gives `-trimpath` and `--release`, and Cargo's profile directory
+follows. The target's lists take filters (`{linux: [x11]}`, `{release: ["-s", "-w"]}`).
+
+A key the target's language doesn't read is a load error naming the keys it takes: a Go target
+with `features` or `sources`, a C target with `ldflags`. A Go library's build mode is its type's
+(`c-shared`, or `c-archive` for the new `go_static_library` template); an executable's may be
+`exe` or `pie`. The Go libraries are named by the toolchain (`c_shared_name`, `c_archive_name`:
+`libx.so`, `libx.dylib`, `x.dll`, `libx.a`), as the Rust ones are; they were `lib/x` (and
+`lib/x.exe` on Windows). A `go-macos-arm64` toolchain was added.
+
+What was broken before: the argument lists of phase 2 were already right for go and cargo
+(`-tags` and its value, the joined ldflags as one argument). What wasn't: Go libraries' names, a
+library's `buildmode` silently replaced by `c-shared`, no Go static library, filters on these
+lists (a type error), keys of another language silently ignored, cargo getting only `--release`
+of the configuration's flags, `rust-wasm` without `--bin`, no Go toolchain on Apple Silicon, and
+buildy's own `buildy.yaml`, whose ldflags held `$(date ...)` for a shell that no longer runs.
+
+Tests: the argv of every built-in Go and Rust toolchain in debug and release, filters, and the
+removed keys (`go_rust_options_test.go`, `config_test.go`); end to end (`e2e_options_test.go`),
+programs that print what each option gave them, in debug, in release and after each option
+changes, a C program linked against a Go c-archive, and the exports of a Go c-shared and a Rust
+cdylib library.
+
 ## Tests
 
 - Unit: template tokenizing and expansion and their errors (`internal/config/command_test.go`),
@@ -142,3 +179,7 @@ declares none.
   built and vetted for those targets but have not run there.
 - Whether a staging symlink is made is decided by the target platform, not the host. *The host
   decides since [phase 5](layout.md#symlinks).*
+- Go and Rust options on Windows and macOS are tested as argument lists only; the end-to-end
+  tests run there (and in CI) but have run on Linux. A C target that includes the header a Go
+  library writes must be built after it (`--target lib` first): `depends_on.targets` orders a
+  target's link, not its compiles, and the header is no declared output.

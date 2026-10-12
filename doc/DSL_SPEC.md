@@ -2094,6 +2094,7 @@ Templates are automatically selected based on `language` and target type:
 | c | static_library | `c_static_library` |
 | c | shared_library | `c_shared_library` |
 | go | executable | `go_executable` |
+| go | static_library | `go_static_library` |
 | go | shared_library | `go_shared_library` |
 | rust | executable | `rust_executable` |
 | rust | static_library | `rust_static_library` |
