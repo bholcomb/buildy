@@ -181,17 +181,8 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		values["frameworks"] = flagged(orDefault(tool.Supports.FrameworkFlag, "-framework "), frameworks)
 	}
 
-	// The import library of a DLL (MSVC) goes in lib/ when the DLL goes in bin/
-	implib := ""
+	implib := ImportLibrary(tool, output)
 	if tool.Supports.Implib {
-		if strings.HasSuffix(output, ".dll") {
-			outputDir := filepath.Dir(output)
-			if filepath.Base(outputDir) == "bin" {
-				implib = filepath.Join(filepath.Dir(outputDir), "lib", strings.TrimSuffix(filepath.Base(output), ".dll")+".lib")
-			} else {
-				implib = strings.TrimSuffix(output, ".dll") + ".lib"
-			}
-		}
 		values["implib"] = []string{implib}
 	}
 
@@ -200,6 +191,27 @@ func (cb *CommandBuilder) BuildLinkCommand(
 		return util.Command{}, "", fmt.Errorf("linking %s: %w", output, err)
 	}
 	return command, implib, nil
+}
+
+// ImportLibrary returns the import library a tool's link of the DLL output writes (MSVC), or ""
+// when the tool writes none: what a link of that library links, while the DLL is what runs.
+func ImportLibrary(tool *Tool, output string) string {
+	if !tool.Supports.Implib || !strings.HasSuffix(output, ".dll") {
+		return ""
+	}
+	return filepath.Join(ImportLibraryDir(tool, filepath.Dir(output)), strings.TrimSuffix(filepath.Base(output), ".dll")+".lib")
+}
+
+// ImportLibraryDir returns the directory of the import libraries a tool's links of DLLs in dllDir
+// write, or "" when the tool writes none: lib/ when the DLLs go in bin/, else dllDir.
+func ImportLibraryDir(tool *Tool, dllDir string) string {
+	if !tool.Supports.Implib {
+		return ""
+	}
+	if filepath.Base(dllDir) == "bin" {
+		return filepath.Join(filepath.Dir(dllDir), "lib")
+	}
+	return dllDir
 }
 
 // ExecSpecFromToolchain returns where the toolchain's commands run, from its execution section
