@@ -84,7 +84,9 @@ func newDependencyBuild(name string, system *BuildSystemConfig, definition, sour
 		"config":      {configuration},
 		"platform":    {platform},
 		"arch":        {arch},
-		"config_file": nil,
+		// buildy builds the source tree as a workspace of its own (a directory argument), never
+		// as a module of a workspace above it
+		"config_file": {b.sourceDir},
 	}
 	if buildType != "" {
 		b.values["build_type"] = []string{buildType}

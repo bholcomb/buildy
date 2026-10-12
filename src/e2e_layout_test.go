@@ -156,3 +156,22 @@ func TestE2EStagingSymlinksFollowTheHost(t *testing.T) {
 		}
 	}
 }
+
+// Finding 5.3: buildy run inside a module, or below one, builds the workspace that includes it:
+// the root's variables and settings, the other modules' targets, one cache at the root.
+func TestE2EBuildFromInsideAModule(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc", "ar")
+	dir := fixture(t, "module_dir")
+	for _, start := range []string{"app", filepath.Join("app", "src")} {
+		mustBuildy(t, filepath.Join(dir, start))
+		if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "42" {
+			t.Errorf("built from %s, app printed %q, want 42", start, got)
+		}
+		for _, stray := range []string{".buildy_cache", "build"} {
+			if exists(filepath.Join(dir, "app", stray)) {
+				t.Errorf("built from %s: app/%s exists, the module was built as a workspace of its own", start, stray)
+			}
+		}
+	}
+}

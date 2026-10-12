@@ -76,6 +76,21 @@ func (f Filtered[T]) Resolve(ctx Context) []T {
 	return result
 }
 
+// All returns every item, whatever its filter keys: everything some build may select.
+func (f Filtered[T]) All() []T {
+	result := []T{}
+	for _, item := range f {
+		if item.Value != nil {
+			result = append(result, *item.Value)
+			continue
+		}
+		for _, b := range item.Branches {
+			result = append(result, b.Items.All()...)
+		}
+	}
+	return result
+}
+
 func (f *Filtered[T]) decodeNode(d *decoder, n *yaml.Node, path string) {
 	switch {
 	case isNull(n):

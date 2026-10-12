@@ -2646,9 +2646,20 @@ Buildy operates in two modes depending on how it's invoked:
 
 | Invocation | Mode | Behavior |
 |------------|------|----------|
-| `buildy` | Workspace | Discover modules, resolve dependencies, build workspace |
-| `buildy path/to/dir/` | Workspace | Same as above, using specified directory |
+| `buildy` | Workspace | Find the workspace the current directory belongs to (below), discover modules, resolve dependencies, build the workspace |
+| `buildy path/to/dir/` | Workspace | The same, with that directory as the workspace root |
 | `buildy path/to/config.yaml` | Standalone | Build only what's in that config file |
+
+**Which workspace.** Without a path, buildy takes the nearest directory at or above the current one
+that has a `buildy.yaml` (a module, or a root), then looks further up, like Cargo: the root is the
+**outermost** directory whose `buildy.yaml` includes that module, by listing it in
+`workspace.modules` (directly or through child modules, under any filter key) or, without
+`workspace.modules`, by discovering it. A `buildy.yaml` that nothing above includes is a workspace
+of its own. So `buildy` run in `src/core/` of a workspace that lists `src/core` builds that
+**whole workspace**, exactly as `buildy` at its root would: the root's variables, settings and
+dependencies apply, the other modules' targets exist, and there is one cache, at the root. Use
+`--target` to build part of it. `-n 3` logs the root chosen and why. A `buildy.yaml` above that
+can't be read is an error.
 
 **Workspace Mode** (default):
 - Discovers all `buildy.yaml` modules in the project

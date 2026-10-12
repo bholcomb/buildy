@@ -290,7 +290,6 @@ func main() {
 		if err != nil {
 			util.LogFatal("Failed to load the workspace: %v", err)
 		}
-		util.LogVerbose("Discovered workspace at: %s", ws.RootDir)
 	} else {
 		if len(configFiles) > 1 {
 			util.LogFatal("Only one path may be given, got %d: %v", len(configFiles), configFiles)

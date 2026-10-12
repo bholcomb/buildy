@@ -263,3 +263,54 @@ targets:
 		}
 	}
 }
+
+// From inside a module the workspace root is the outermost buildy.yaml that includes it: listed,
+// through child modules, under any filter key, or discovered. A buildy.yaml nothing above includes
+// is its own workspace.
+func TestFindWorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":                            "project: {name: outer}\nworkspace:\n  modules: [app, nested, {windows: [winmod]}]\n",
+		"app/buildy.yaml":                        "targets: {}\n",
+		"app/src/main.c":                         "",
+		"nested/buildy.yaml":                     "project: {name: nested}\nworkspace:\n  modules: [inner]\n",
+		"nested/inner/buildy.yaml":               "targets: {}\n",
+		"winmod/buildy.yaml":                     "targets: {}\n",
+		"other/buildy.yaml":                      "project: {name: other}\n",
+		"other/sub/buildy.yaml":                  "targets: {}\n",
+		"other/.buildy_cache/deps/d/buildy.yaml": "project: {name: d}\n",
+	})
+	for start, want := range map[string]string{
+		".":                          ".",
+		"app":                        ".",
+		"app/src":                    ".",
+		"nested/inner":               ".", // through nested's child modules
+		"winmod":                     ".", // under a filter key
+		"other":                      "other",
+		"other/sub":                  "other", // discovery mode
+		"other/.buildy_cache/deps/d": "other/.buildy_cache/deps/d",
+	} {
+		got, _, err := findWorkspaceRoot(filepath.Join(root, start))
+		if err != nil {
+			t.Fatalf("%s: %v", start, err)
+		}
+		if got != filepath.Join(root, want) {
+			t.Errorf("from %s the root is %s, want %s", start, got, filepath.Join(root, want))
+		}
+	}
+	if _, _, err := findWorkspaceRoot(filepath.Dir(root)); err == nil {
+		t.Error("a directory without any buildy.yaml at or above it has a workspace")
+	}
+}
+
+// A broken config above the current directory is an error, not something to skip.
+func TestFindWorkspaceRootBrokenParent(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":     "workspace:\n  modulez: [app]\n",
+		"app/buildy.yaml": "targets: {}\n",
+	})
+	if _, _, err := findWorkspaceRoot(filepath.Join(root, "app")); err == nil || !strings.Contains(err.Error(), "modulez") {
+		t.Errorf("got %v", err)
+	}
+}

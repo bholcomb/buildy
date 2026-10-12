@@ -56,12 +56,7 @@ type Workspace struct {
 // NewWorkspace creates a new Workspace
 func NewWorkspace(rootDir string) (*Workspace, error) {
 	if rootDir == "" {
-		// Find workspace root by walking up directory tree
-		foundRoot, err := findWorkspaceRoot("")
-		if err != nil {
-			return nil, err
-		}
-		rootDir = foundRoot
+		return nil, fmt.Errorf("internal error: NewWorkspace needs a directory (DiscoverWorkspace finds one)")
 	}
 	rootDir, err := filepath.Abs(rootDir)
 	if err != nil {
@@ -110,40 +105,127 @@ func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, erro
 	return ws, nil
 }
 
-// findWorkspaceRoot finds workspace root by walking up directory tree
-func findWorkspaceRoot(startDir string) (string, error) {
-	if startDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get current directory: %w", err)
-		}
-		startDir = cwd
-	}
-
-	current, err := filepath.Abs(startDir)
+// findWorkspaceRoot finds the workspace that start (a directory) belongs to, as Cargo does: the
+// nearest directory at or above start with a buildy.yaml is a module, and its workspace root is
+// the outermost directory above it whose buildy.yaml includes it as a module (listed in
+// workspace.modules, directly or through child modules, under any filter key; or, in discovery
+// mode, discovered). A buildy.yaml that no config above includes is its own workspace. The second
+// result says why the root was chosen.
+func findWorkspaceRoot(start string) (string, string, error) {
+	start, err := filepath.Abs(start)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return "", "", fmt.Errorf("failed to resolve path: %w", err)
 	}
-
-	// Walk up directory tree
-	for {
-		candidate := filepath.Join(current, "buildy.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			util.LogDebug("Found workspace root: %s", current)
-			return current, nil
+	var candidates []string // directories with a buildy.yaml, nearest first
+	for dir := start; ; dir = filepath.Dir(dir) {
+		if IsWorkspaceRoot(dir) {
+			candidates = append(candidates, dir)
 		}
-
-		// Check if we've reached filesystem root
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", fmt.Errorf(
-				"no buildy.yaml found in current directory or any parent directory. " +
-					"Please create a buildy.yaml file in your project root",
-			)
+		if filepath.Dir(dir) == dir {
+			break
 		}
-
-		current = parent
 	}
+	if len(candidates) == 0 {
+		return "", "", fmt.Errorf("no buildy.yaml in %s or any directory above it", start)
+	}
+	nearest := candidates[0]
+	for i := len(candidates) - 1; i > 0; i-- {
+		included, err := includesModule(candidates[i], nearest)
+		if err != nil {
+			return "", "", err
+		}
+		if included {
+			return candidates[i], fmt.Sprintf("its buildy.yaml includes %s as a module", nearest), nil
+		}
+	}
+	if len(candidates) > 1 {
+		return nearest, fmt.Sprintf("no buildy.yaml above it includes it as a module (%s)", strings.Join(candidates[1:], ", ")), nil
+	}
+	return nearest, "the only buildy.yaml at or above " + start, nil
+}
+
+// includesModule reports whether the workspace whose root config is in root includes dir as a
+// module, for any build: explicit modules are followed through their child modules, whatever
+// their filter keys.
+func includesModule(root, dir string) (bool, error) {
+	section, err := config.LoadWorkspaceSection(filepath.Join(root, "buildy.yaml"))
+	if err != nil {
+		return false, err
+	}
+	if section == nil || section.Modules == nil {
+		var discover, exclude []string
+		if section != nil {
+			discover, exclude = section.Discover, section.Exclude
+		}
+		return discovers(root, dir, discover, exclude), nil
+	}
+	return listsModule(root, section.Modules, dir, map[string]bool{})
+}
+
+// listsModule reports whether modules (a config's workspace.modules, in parent) or their child
+// modules include dir.
+func listsModule(parent string, modules *config.ModuleList, dir string, seen map[string]bool) (bool, error) {
+	for _, entry := range modules.Entries.All() {
+		module := filepath.Join(parent, entry.Path)
+		if util.NormalizePath(module) == util.NormalizePath(dir) {
+			return true, nil
+		}
+		configPath := filepath.Join(module, entry.Config)
+		if seen[configPath] {
+			continue
+		}
+		seen[configPath] = true
+		if _, err := os.Stat(configPath); err != nil {
+			continue // loading the workspace reports it
+		}
+		children, err := config.LoadWorkspaceSection(configPath)
+		if err != nil {
+			return false, err
+		}
+		if children != nil && children.Modules != nil {
+			if found, err := listsModule(module, children.Modules, dir, seen); found || err != nil {
+				return found, err
+			}
+		}
+	}
+	return false, nil
+}
+
+// defaultExcludes are the directories discovery never looks in.
+var defaultExcludes = []string{".buildy_cache/**", "venv/**", ".git/**", "**/.git/**"}
+
+// discovers reports whether a workspace at root in discovery mode, with these discover and exclude
+// patterns, finds dir's buildy.yaml.
+func discovers(root, dir string, discover, exclude []string) bool {
+	rel, err := filepath.Rel(root, filepath.Join(dir, "buildy.yaml"))
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	excludes := append(append([]string{}, defaultExcludes...), exclude...)
+	for d := filepath.Dir(rel); d != "."; d = filepath.Dir(d) {
+		if excludedDir(d, excludes) {
+			return false
+		}
+	}
+	if len(discover) == 0 {
+		discover = []string{"**/buildy.yaml"}
+	}
+	for _, pattern := range discover {
+		if pattern = strings.TrimSpace(pattern); pattern != "" && matchPattern(rel, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// excludedDir reports whether discovery skips the directory rel (relative to the root).
+func excludedDir(rel string, excludes []string) bool {
+	for _, pattern := range excludes {
+		if pattern = strings.TrimSpace(pattern); pattern != "" && matchPattern(rel, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // loadWorkspaceConfig loads workspace configuration from buildy.yaml
@@ -174,7 +256,7 @@ func (ws *Workspace) loadWorkspaceConfig(configPath string) (*WorkspaceConfig, e
 	hasExplicitModules := modules != nil
 
 	discoverPatterns := []string{}
-	excludePatterns := []string{".buildy_cache/**", "venv/**", ".git/**", "**/.git/**"}
+	excludePatterns := append([]string{}, defaultExcludes...)
 	if !hasExplicitModules {
 		discoverPatterns = []string{"**/buildy.yaml"}
 		if len(discover) > 0 {
@@ -382,14 +464,8 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 
 		// Check if this directory should be excluded
 		if info.IsDir() {
-			for _, excludePattern := range ws.Config.ExcludePatterns {
-				pattern := strings.TrimSpace(excludePattern)
-				if pattern == "" {
-					continue
-				}
-				if matchPattern(relPath, pattern) {
-					return filepath.SkipDir
-				}
+			if excludedDir(relPath, ws.Config.ExcludePatterns) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -466,11 +542,13 @@ func IsWorkspaceRoot(directory string) bool {
 	return err == nil
 }
 
-// DiscoverWorkspace discovers workspace starting from a directory
+// DiscoverWorkspace loads the workspace startDir belongs to (findWorkspaceRoot): from inside a
+// module, the whole workspace that includes it.
 func DiscoverWorkspace(startDir string) (*Workspace, error) {
-	root, err := findWorkspaceRoot(startDir)
+	root, why, err := findWorkspaceRoot(startDir)
 	if err != nil {
 		return nil, err
 	}
+	util.LogInfo("Workspace root: %s (%s)", root, why)
 	return NewWorkspace(root)
 }

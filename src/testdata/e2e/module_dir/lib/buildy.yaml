@@ -1,0 +1,6 @@
+targets:
+  static_libraries:
+    - name: calc
+      language: c
+      sources: ["calc.c"]
+      defines: ["ANSWER=${ANSWER}"]

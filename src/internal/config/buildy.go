@@ -444,6 +444,35 @@ func LoadFile(path string, root bool) (*File, error) {
 	return f, nil
 }
 
+// LoadWorkspaceSection reads only the workspace section of a buildy.yaml (nil if it has none): what
+// finding the workspace root needs to know of the configs above the current directory, which
+// needn't be valid roots themselves.
+func LoadWorkspaceSection(path string) (*WorkspaceSection, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+	node, err := parse(data, path)
+	if err != nil {
+		return nil, err
+	}
+	d := newDecoder(path)
+	if node.Kind != yaml.MappingNode {
+		d.errorf(node, "a buildy config is a mapping, not %s", kindName(node))
+		return nil, d.err("buildy config")
+	}
+	var section *WorkspaceSection
+	for _, e := range d.entries(node, "") {
+		if e.key.Value == "workspace" {
+			d.decode(e.value, reflect.ValueOf(&section).Elem(), "workspace")
+		}
+	}
+	if err := d.err("buildy config"); err != nil {
+		return nil, err
+	}
+	return section, nil
+}
+
 func (f *File) validate(d *decoder, root bool) {
 	if root && (f.Project == nil || strings.TrimSpace(f.Project.Name) == "") {
 		d.errorf(nil, "project.name is required in the workspace's root config")

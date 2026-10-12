@@ -57,6 +57,10 @@ buildy --clean            # Clean build artifacts
 buildy --dry-run          # Show what would be built
 ```
 
+buildy can run anywhere inside a workspace: from a module's directory (or below it) it builds the
+whole workspace that lists the module, the same as from the root. See
+[Which workspace](DSL_SPEC.md#workspace-mode-vs-standalone-mode).
+
 ## Project Structure
 
 ### Single-Module Project

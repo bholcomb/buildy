@@ -1,0 +1,6 @@
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["src/main.c"]
+      libs: [calc]

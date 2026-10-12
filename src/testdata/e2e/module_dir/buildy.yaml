@@ -1,0 +1,14 @@
+# Running buildy inside a module builds the workspace that includes it (finding 5.3), with the
+# root's settings and variables and the other modules' targets.
+project:
+  name: module_dir
+
+variables:
+  ANSWER: "42"
+
+environment:
+  compile:
+    c_standard: "c11"
+
+workspace:
+  modules: [lib, app]
