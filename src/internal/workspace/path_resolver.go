@@ -52,23 +52,29 @@ func (pr *PathResolver) ResolveSources(sources []config.Source) ([]string, error
 	return all, nil
 }
 
-// expandGlob expands a glob pattern, relative to the config file directory, to a sorted list of
-// absolute paths. Returns an error if the pattern matches no files and optional is false.
-// Also includes virtual files (from artifact outputs) that match the pattern.
+// expandGlob expands a pattern, relative to the config file directory, to a sorted list of
+// absolute files (util.Glob: ** is recursive). Returns an error if the pattern matches no files
+// and optional is false. Also includes virtual files (from artifact outputs) that match the pattern.
 func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, error) {
-	searchPattern := pr.absolute(pattern)
-	util.LogInfo("Expanding pattern '%s' as '%s'", pattern, searchPattern)
-
-	results, err := filepath.Glob(searchPattern)
+	if !filepath.IsAbs(pr.ConfigFileDir) {
+		panic(fmt.Sprintf("internal error: path resolver needs an absolute config directory, has %q", pr.ConfigFileDir))
+	}
+	glob, err := util.ParseGlob(pr.ConfigFileDir, pattern)
 	if err != nil {
-		return nil, fmt.Errorf("error expanding glob '%s': %w", pattern, err)
+		return nil, err
+	}
+	util.LogInfo("Expanding pattern '%s' as '%s'", pattern, glob)
+
+	results, err := glob.Files()
+	if err != nil {
+		return nil, err
 	}
 
 	// Also match virtual files (artifact outputs) against the pattern
-	virtualMatches := pr.matchVirtualFiles(searchPattern)
-	if len(virtualMatches) > 0 {
-		util.LogInfo("Pattern '%s' matched %d virtual files from artifacts", pattern, len(virtualMatches))
-		results = append(results, virtualMatches...)
+	for _, vf := range pr.VirtualFiles {
+		if glob.Match(vf) {
+			results = append(results, vf)
+		}
 	}
 
 	if len(results) == 0 {
@@ -77,7 +83,7 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 			return []string{}, nil
 		}
 		return nil, fmt.Errorf("glob pattern '%s' (resolved to '%s') matched no files. "+
-			"Use {pattern: \"%s\", optional: true} if this is intentional", pattern, searchPattern, pattern)
+			"Use {pattern: \"%s\", optional: true} if this is intentional", pattern, glob, pattern)
 	}
 
 	absResults := []string{}
@@ -105,18 +111,6 @@ func (pr *PathResolver) absolute(p string) string {
 		panic(fmt.Sprintf("internal error: path resolver needs an absolute config directory, has %q", pr.ConfigFileDir))
 	}
 	return filepath.Join(pr.ConfigFileDir, p)
-}
-
-// matchVirtualFiles returns virtual files that match the given glob pattern
-func (pr *PathResolver) matchVirtualFiles(pattern string) []string {
-	var matches []string
-	for _, vf := range pr.VirtualFiles {
-		matched, err := filepath.Match(pattern, vf)
-		if err == nil && matched {
-			matches = append(matches, vf)
-		}
-	}
-	return matches
 }
 
 // ResolveIncludeDirs makes include directories absolute, relative to the config file's directory

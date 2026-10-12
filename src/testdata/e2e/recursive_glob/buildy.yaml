@@ -1,0 +1,26 @@
+# ** in a pattern matches any number of directories, none included (finding 1.7): in sources,
+# copies and staging. src/**/*.c is src/main.c, src/a/mid.c and src/a/b/deep.c.
+project:
+  name: recursive_glob
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["src/**/*.c"]
+
+artifacts:
+  copy:
+    - name: data
+      sources: ["data/**/*.dat"]
+      destination: "${out_dir}/data"
+
+staging:
+  name: pkg
+  contents:
+    - folder: docs
+      files: ["docs/**/*.txt"]

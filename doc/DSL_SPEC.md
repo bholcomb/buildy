@@ -940,6 +940,24 @@ sources:
   - "src/**/*.cpp"        # All .cpp files recursively
 ```
 
+#### File Patterns
+
+Every file pattern buildy reads (`sources`, `artifacts.copy` `sources`, transform and generate
+`inputs`, staging `files`) has the same syntax:
+
+| Syntax | Matches |
+|--------|---------|
+| `*` | Any characters within one path component |
+| `**` (a whole component) | Any number of directories, none included: `src/**/*.c` is `src/a.c`, `src/x/b.c` and `src/x/y/c.c` |
+| `?` | One character |
+| `[abc]`, `[a-z]`, `[!a]` | One character of a class |
+| `{a,b}` | Either alternative: `src/*.{c,h}` |
+
+A pattern is relative to its module's directory (unless absolute) and matches files, never
+directories; its files come sorted by path. On Linux and macOS a backslash escapes the next
+character (`\*`); on Windows it is a path separator. A path without any of these characters names
+one file.
+
 **Optional patterns (may match zero files):**
 
 For patterns that may legitimately match zero files (e.g., platform-specific sources, optional plugin directories), use the object form with `optional: true`:

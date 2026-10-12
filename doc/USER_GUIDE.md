@@ -205,8 +205,13 @@ Use glob patterns to specify source files:
 ```yaml
 sources:
   - "src/*.cpp"           # All .cpp files in src/
-  - "src/**/*.cpp"        # Recursive
+  - "src/**/*.cpp"        # Recursive: src/a.cpp, src/x/b.cpp, src/x/y/c.cpp
+  - "src/*.{c,cpp}"       # Alternatives
 ```
+
+`**` matches any number of directories, none included. Patterns match files, never directories,
+and the same syntax applies to copies, transform and generate inputs and staging files (see
+[File Patterns](DSL_SPEC.md#file-patterns)).
 
 For optional source directories that may not exist:
 

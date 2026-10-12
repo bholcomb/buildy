@@ -680,9 +680,9 @@ func (tg *TaskGenerator) globInputs(patterns []string, what string) ([]string, e
 		if err != nil {
 			return nil, err
 		}
-		matches, err := filepath.Glob(tg.absolute(resolved))
+		matches, err := util.GlobFiles(tg.moduleDir(), resolved)
 		if err != nil {
-			return nil, fmt.Errorf("%s in module %s: invalid glob pattern '%s': %w", what, tg.moduleName(), resolved, err)
+			return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 		}
 		files = append(files, matches...)
 	}
@@ -1065,12 +1065,14 @@ func (tg *TaskGenerator) processStagingContents(
 			if err != nil {
 				return nil, err
 			}
-			sourcePattern := tg.absolute(resolved)
-
-			matches := []string{sourcePattern}
-			if strings.Contains(sourcePattern, "*") {
-				if matches, err = filepath.Glob(sourcePattern); err != nil {
-					return nil, fmt.Errorf("staging folder '%s': invalid glob pattern '%s': %w", folderName, sourcePattern, err)
+			glob, err := util.ParseGlob(tg.moduleDir(), resolved)
+			if err != nil {
+				return nil, fmt.Errorf("staging folder '%s' in module %s: %w", folderName, tg.moduleName(), err)
+			}
+			matches := []string{glob.Base}
+			if !glob.Literal() {
+				if matches, err = glob.Files(); err != nil {
+					return nil, fmt.Errorf("staging folder '%s' in module %s: %w", folderName, tg.moduleName(), err)
 				}
 			}
 			for _, match := range matches {
@@ -1244,9 +1246,9 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 				if err != nil {
 					return nil, err
 				}
-				files, err := filepath.Glob(tg.absolute(pattern))
+				files, err := util.GlobFiles(tg.moduleDir(), pattern)
 				if err != nil {
-					return nil, fmt.Errorf("%s in module %s: invalid glob pattern '%s': %w", what, tg.moduleName(), pattern, err)
+					return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 				}
 				for _, srcFile := range files {
 					srcFile = filepath.Clean(srcFile)
