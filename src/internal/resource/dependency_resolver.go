@@ -438,13 +438,11 @@ func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, 
 
 	b := newDependencyBuild(name, bs, dr.buildSystemManager.definition(bs.Name), source, dest,
 		dr.platform, dr.architecture, dr.configuration, buildType, args, override, execSpec, dr.dockerMounts())
-	if bs.Name == "buildy" {
-		exe, err := os.Executable()
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to find buildy executable: %w", err)
-		}
-		b.values["buildy_exe"] = []string{exe}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find buildy executable: %w", err)
 	}
+	b.values["buildy_exe"] = []string{exe}
 	varEnv.SetVariable("dep_build_dir", b.buildDir, "dependency")
 	varEnv.SetVariable("dep_install_dir", b.installDir, "dependency")
 

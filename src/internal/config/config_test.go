@@ -346,6 +346,45 @@ func TestBuildSystemPhases(t *testing.T) {
 	}
 }
 
+// A definition's placeholders are checked when it loads: an unknown one, ${build_type} without
+// configurations, ${args} in a path and placeholders in default_args are errors naming where.
+func TestBuildSystemPlaceholders(t *testing.T) {
+	for _, c := range []struct{ yaml, want string }{
+		{"phases: {build: {command: \"make ${prefix}\"}}", "'build_system.phases.build.command' has ${prefix}: a build system's placeholders are ${source_dir}"},
+		{"phases: {build: {command: make, working_dir: \"${src_dir}\"}}", "'build_system.phases.build.working_dir' has ${src_dir}"},
+		{"phases: {build: {command: make}}\n  output: {lib_patterns: [\"${dep_dir}/lib\"]}", "'build_system.output.lib_patterns[0]' has ${dep_dir}"},
+		{"phases: {build: {command: \"make BT=${build_type}\"}}", "has ${build_type}, but the build system has no configurations"},
+		{"phases: {build: {command: make, working_dir: \"${args}\"}}", "'build_system.phases.build.working_dir' has ${args}: it is a list"},
+		{"phases: {build: {command: make, default_args: [\"X=${config}\"]}}", "'build_system.phases.build.default_args[0]' is \"X=${config}\": default arguments are passed as written"},
+		{"phases: {build: {command: \"make ${\"}}", "unterminated placeholder"},
+		{"configurations: {}\n  phases: {build: {command: make}}", "build_system.configurations is empty"},
+	} {
+		_, err := LoadBuildSystem([]byte("build_system:\n  name: x\n  "+c.yaml+"\n"), "b.yaml")
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "b.yaml") {
+			t.Errorf("%s: err = %v, want %q", c.yaml, err, c.want)
+		}
+	}
+	for _, name := range []string{"auto", "none", "\"\""} {
+		_, err := LoadBuildSystem([]byte("build_system:\n  name: "+name+"\n  phases: {build: {command: make}}\n"), "b.yaml")
+		if err == nil || !strings.Contains(err.Error(), "build_system.name") {
+			t.Errorf("name %s: err = %v", name, err)
+		}
+	}
+	if _, err := LoadBuildSystem([]byte("build_system:\n  phases: {build: {command: make}}\n"), "b.yaml"); err == nil || !strings.Contains(err.Error(), "missing required 'name'") {
+		t.Errorf("no name: err = %v", err)
+	}
+
+	// Every placeholder, in a command; ${build_type} with configurations
+	all := "${" + strings.Join(BuildSystemPlaceholders, "} ${") + "}"
+	bs, err := LoadBuildSystem([]byte("build_system:\n  name: x\n  configurations: {debug: d}\n  phases: {build: {command: \"tool "+all+"\"}}\n"), "b.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bs.Phases["build"].Command.Placeholders(); len(got) != len(BuildSystemPlaceholders) {
+		t.Errorf("placeholders = %v", got)
+	}
+}
+
 // A filtered list of one item may be written as the item, as before.
 func TestFilteredListOfOne(t *testing.T) {
 	var v struct {

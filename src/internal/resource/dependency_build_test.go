@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"buildy/internal/config"
 	"buildy/pkg/util"
 )
 
@@ -117,5 +118,16 @@ func TestBuildMarker(t *testing.T) {
 	}
 	if b.upToDate() {
 		t.Error("up to date without a marker")
+	}
+}
+
+// Every placeholder a definition may use has a value in a build of a build system with
+// configurations (the resolver adds ${buildy_exe}).
+func TestBuildSystemPlaceholdersHaveValues(t *testing.T) {
+	b := cmakeBuild(t, "release")
+	for _, name := range config.BuildSystemPlaceholders {
+		if _, ok := b.values[name]; !ok && name != "buildy_exe" {
+			t.Errorf("${%s} has no value", name)
+		}
 	}
 }
