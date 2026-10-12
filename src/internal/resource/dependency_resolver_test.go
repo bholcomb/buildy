@@ -125,7 +125,7 @@ ok:
 		t.Fatal(err)
 	}
 	want := []string{"/x/linux-x86_64-release", "/y/ok-1.2", root + "/z", "/root-var"}
-	if got := dr.GetDependency("ok").IncludeDirs; strings.Join(got, " ") != strings.Join(want, " ") {
+	if got := dr.resolved["ok"].IncludeDirs; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("include dirs = %v, want %v", got, want)
 	}
 

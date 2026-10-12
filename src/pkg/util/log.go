@@ -46,27 +46,6 @@ func InitLogger(level int) {
 	initialized = true
 }
 
-// SetNotifyLevel sets the current notify level
-func SetNotifyLevel(level int) {
-	logMutex.Lock()
-	defer logMutex.Unlock()
-
-	if level < 1 {
-		level = 1
-	}
-	if level > 5 {
-		level = 5
-	}
-	notifyLevel = LogLevel(level)
-}
-
-// GetNotifyLevel returns the current notify level
-func GetNotifyLevel() LogLevel {
-	logMutex.RLock()
-	defer logMutex.RUnlock()
-	return notifyLevel
-}
-
 // shouldLog returns true if the given level should be logged
 func shouldLog(level LogLevel) bool {
 	logMutex.RLock()
@@ -141,33 +120,4 @@ func LogFatal(format string, v ...any) {
 	// Fatal always logs regardless of level
 	getLogger().Output(2, fmt.Sprintf("FATAL: "+format, v...))
 	os.Exit(1)
-}
-
-// LogLevelFromInt converts an integer to a LogLevel
-func LogLevelFromInt(level int) LogLevel {
-	if level < 1 {
-		return LogLevelError
-	}
-	if level > 5 {
-		return LogLevelDebug
-	}
-	return LogLevel(level)
-}
-
-// LogLevelString returns the string representation of a log level
-func LogLevelString(level LogLevel) string {
-	switch level {
-	case LogLevelError:
-		return "error"
-	case LogLevelWarning:
-		return "warning"
-	case LogLevelInfo:
-		return "info"
-	case LogLevelVerbose:
-		return "verbose"
-	case LogLevelDebug:
-		return "debug"
-	default:
-		return "unknown"
-	}
 }

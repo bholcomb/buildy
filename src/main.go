@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"buildy/internal/build"
@@ -35,41 +34,6 @@ func detectPlatform() string {
 // detectArchitecture returns the architecture buildy runs on
 func detectArchitecture() string {
 	return config.HostArchitecture()
-}
-
-// getAutoBuildyDirs returns automatic buildy_config/ directory search paths
-func getAutoBuildyDirs(workspaceRoot, buildyDir, subdir string) []string {
-	dirs := []string{}
-	
-	// 1. Workspace buildy_config/<subdir>
-	if workspaceRoot != "" {
-		dirs = append(dirs, filepath.Join(workspaceRoot, "buildy_config", subdir))
-	}
-	
-	// 2. System locations
-	switch runtime.GOOS {
-	case "linux":
-		dirs = append(dirs,
-			filepath.Join("/usr/local/lib/buildy", subdir),
-			filepath.Join("/usr/lib/buildy", subdir),
-			filepath.Join("/opt/buildy", subdir),
-		)
-	case "darwin": // macOS
-		dirs = append(dirs,
-			filepath.Join("/usr/local/lib/buildy", subdir),
-			filepath.Join("/opt/buildy", subdir),
-		)
-	case "windows":
-		dirs = append(dirs,
-			filepath.Join(os.Getenv("ProgramFiles"), "buildy", subdir),
-			filepath.Join("C:\\buildy", subdir),
-		)
-	}
-	
-	// 3. Executable location
-	dirs = append(dirs, filepath.Join(buildyDir, "buildy_config", subdir))
-	
-	return dirs
 }
 
 // exitIfInterrupted exits with 130 if the run was interrupted.

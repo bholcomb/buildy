@@ -48,9 +48,6 @@ func (b *Builder) BuildWorkspace(
 ) (*BuildResult, error) {
 	util.LogProgress("Starting workspace build...")
 
-	// Reset error collector for clean state
-	util.ResetErrorCollector()
-
 	// Initialize build result
 	result := NewBuildResult()
 	result.Platform = configParser.Platform
@@ -148,13 +145,6 @@ func (b *Builder) BuildWorkspace(
 
 	result.ExecDuration = time.Since(execStart).Seconds()
 	util.LogProgress("Task execution completed in %.2fs", result.ExecDuration)
-
-	// Check for collected errors/warnings (warnings are treated as errors)
-	errorCollector := util.GetErrorCollector()
-	if errorCollector.HasErrors() {
-		errorCollector.PrintSummary()
-		success = false
-	}
 
 	// Finalize result
 	result.Finish(success)

@@ -8,7 +8,7 @@ import (
 
 func newEmbeddedToolchainManager(t *testing.T) *ToolchainManager {
 	t.Helper()
-	tm, err := NewToolchainManager(t.TempDir())
+	tm, err := NewToolchainManagerMulti([]string{t.TempDir()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

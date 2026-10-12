@@ -23,11 +23,6 @@ type BuildTemplateEngine struct {
 	byTarget  map[string]*config.Template // by "language:target type"
 }
 
-// NewBuildTemplateEngine creates a new BuildTemplateEngine from a single directory
-func NewBuildTemplateEngine(templatesDir string) (*BuildTemplateEngine, error) {
-	return NewBuildTemplateEngineMulti([]string{templatesDir})
-}
-
 // NewBuildTemplateEngineMulti loads the built-in templates, then the template files of each
 // directory in order; a template with the name of an earlier one replaces it. Every file must
 // load, and each language and target type has one template.
@@ -127,20 +122,6 @@ func (bte *BuildTemplateEngine) index() error {
 // GetTemplate gets a template by name
 func (bte *BuildTemplateEngine) GetTemplate(templateName string) *config.Template {
 	return bte.templates[templateName]
-}
-
-// ListTemplates lists the templates, by name
-func (bte *BuildTemplateEngine) ListTemplates() []*config.Template {
-	names := make([]string, 0, len(bte.templates))
-	for name := range bte.templates {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	result := make([]*config.Template, len(names))
-	for i, name := range names {
-		result[i] = bte.templates[name]
-	}
-	return result
 }
 
 // LookupTemplate finds the template for a language and target type

@@ -38,15 +38,6 @@ func (ve *VariableEnvironment) PushScope(scopeName string) {
 	LogDebug("Entered scope: %s", scopeName)
 }
 
-// PopScope pops the current scope
-func (ve *VariableEnvironment) PopScope() {
-	if len(ve.scopes) > 0 {
-		scope := ve.scopes[len(ve.scopes)-1]
-		ve.scopes = ve.scopes[:len(ve.scopes)-1]
-		LogDebug("Exited scope: %s", scope)
-	}
-}
-
 // SetVariable sets a variable with its source location
 func (ve *VariableEnvironment) SetVariable(name, value, source string) {
 	if source == "" {
@@ -81,34 +72,6 @@ func (ve *VariableEnvironment) GetVariable(name string) (string, bool) {
 	}
 	
 	return "", false
-}
-
-// GetProvenance gets the source/provenance of a variable, searching parent chain
-func (ve *VariableEnvironment) GetProvenance(name string) (string, bool) {
-	if val, exists := ve.variables[name]; exists {
-		return val.Source, true
-	}
-	
-	// Search parent environment if not found locally
-	if ve.parent != nil {
-		return ve.parent.GetProvenance(name)
-	}
-	
-	return "", false
-}
-
-// GetVariableWithSource gets a variable and its source, searching parent chain
-func (ve *VariableEnvironment) GetVariableWithSource(name string) (VariableValue, bool) {
-	if val, exists := ve.variables[name]; exists {
-		return val, true
-	}
-	
-	// Search parent environment if not found locally
-	if ve.parent != nil {
-		return ve.parent.GetVariableWithSource(name)
-	}
-	
-	return VariableValue{}, false
 }
 
 // ResolveString resolves all ${variable} references in a string

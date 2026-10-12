@@ -57,12 +57,6 @@ func ExtractStringList(value any) []string {
 	return ToStringSlice(value, ToStringSliceOptions{SkipEmpty: true, Recursive: false})
 }
 
-// FlattenStringSlice converts value to []string with recursive flattening of nested slices.
-// Skips empty strings.
-func FlattenStringSlice(value any) []string {
-	return ToStringSlice(value, ToStringSliceOptions{SkipEmpty: true, Recursive: true})
-}
-
 // LookupPath traverses a nested map using a path (slice of keys).
 // Returns the value and whether it was found.
 func LookupPath(m map[string]any, path []string) (any, bool) {
@@ -84,24 +78,4 @@ func LookupPath(m map[string]any, path []string) (any, bool) {
 	}
 
 	return current, true
-}
-
-// LookupDottedPath traverses a nested map using a dotted path string (e.g., "item.includes").
-// Returns the value and whether it was found.
-func LookupDottedPath(m map[string]any, dottedPath string) (any, bool) {
-	parts := strings.Split(dottedPath, ".")
-	if len(parts) == 0 {
-		return nil, false
-	}
-	return LookupPath(m, parts)
-}
-
-// SliceContains checks if a string slice contains a value.
-func SliceContains(slice []string, value string) bool {
-	for _, item := range slice {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }

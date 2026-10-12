@@ -235,10 +235,6 @@ buildy --preset ci-release
 **Status:** ✅ Completed  
 **Description:** Automatic response file generation for long command lines.
 
-### Warnings as Errors
-**Status:** ✅ Completed  
-**Description:** All warnings are now treated as errors to ensure build reliability.
-
 ### Circular Module Detection
 **Status:** ✅ Completed  
 **Description:** Detect and report circular dependencies in workspace modules.

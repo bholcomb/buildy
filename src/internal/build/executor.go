@@ -422,10 +422,3 @@ func (te *TaskExecutor) printSummary() {
 		util.LogProgress("Failed tasks: %d", stats.FailedTasks)
 	}
 }
-
-// GetExecutionStats returns the current execution statistics
-func (te *TaskExecutor) GetExecutionStats() ExecutionStats {
-	te.mu.Lock()
-	defer te.mu.Unlock()
-	return te.ExecutionStats
-}

@@ -28,6 +28,15 @@ func abs(root string, names ...string) []string {
 	return result
 }
 
+// globFiles returns the files on disk that pattern, relative to dir unless absolute, names.
+func globFiles(dir, pattern string) ([]string, error) {
+	g, err := ParseGlob(dir, pattern)
+	if err != nil {
+		return nil, err
+	}
+	return g.Files()
+}
+
 func TestGlobFiles(t *testing.T) {
 	root := t.TempDir()
 	touch(t, root, "src/top.c", "src/a/mid.c", "src/a/b/deep.c", "src/a/b/deep.h", "src/z.c", "other/x.c")
@@ -52,7 +61,7 @@ func TestGlobFiles(t *testing.T) {
 		{"nowhere/*.c", nil},
 		{filepath.Join(root, "src", "*.c"), abs(root, "src/top.c", "src/z.c")},
 	} {
-		got, err := GlobFiles(root, tc.pattern)
+		got, err := globFiles(root, tc.pattern)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.pattern, err)
 		}
@@ -61,7 +70,7 @@ func TestGlobFiles(t *testing.T) {
 		}
 	}
 
-	if _, err := GlobFiles(root, "src/[a.c"); err == nil {
+	if _, err := globFiles(root, "src/[a.c"); err == nil {
 		t.Error("an invalid pattern is accepted")
 	}
 }
@@ -70,7 +79,7 @@ func TestGlobFiles(t *testing.T) {
 func TestGlobBaseIsLiteral(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "proj [v1] {x}")
 	touch(t, root, "src/a.c")
-	got, err := GlobFiles(root, "src/*.c")
+	got, err := globFiles(root, "src/*.c")
 	if err != nil {
 		t.Fatal(err)
 	}

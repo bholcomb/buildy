@@ -251,18 +251,3 @@ func (br *BuildResult) GenerateCompileCommands(path string) error {
 	util.LogInfo("Generated compile_commands.json with %d entries", len(br.CompileTasks))
 	return nil
 }
-
-// LoadBuildReport loads a build report from a JSON file
-func LoadBuildReport(path string) (*BuildResult, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read build report: %w", err)
-	}
-
-	var result BuildResult
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse build report: %w", err)
-	}
-
-	return &result, nil
-}

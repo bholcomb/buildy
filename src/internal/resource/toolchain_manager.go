@@ -17,11 +17,6 @@ type ToolchainManager struct {
 	toolchains     map[string]*ToolchainConfig
 }
 
-// NewToolchainManager creates a new ToolchainManager from a single directory
-func NewToolchainManager(toolchainsDir string) (*ToolchainManager, error) {
-	return NewToolchainManagerMulti([]string{toolchainsDir})
-}
-
 // NewToolchainManagerMulti loads the built-in toolchains, then the toolchains of each directory
 // in order (a later file with the same name replaces an earlier toolchain). Every file must load:
 // a toolchain that fails to, built-in or not, is an error.

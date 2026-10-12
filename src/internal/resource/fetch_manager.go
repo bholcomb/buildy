@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -221,17 +220,6 @@ func fetchGitRef(ctx context.Context, dir, ref string) (string, error) {
 		return "", fmt.Errorf("no branch, tag or commit is named %q (%v)", ref, shallowErr)
 	}
 	return strings.TrimSpace(commit), nil
-}
-
-// GetGitCommit returns the current commit hash for a git repo
-func (fm *FetchManager) GetGitCommit(dest string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = dest
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get git commit: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
 }
 
 // FetchURL downloads an archive from a URL, extracts it into dest, and returns the archive's
@@ -626,12 +614,6 @@ func (fm *FetchManager) loadDownloadMetadata(metadataPath string) (*DownloadMeta
 	return &metadata, nil
 }
 
-// GetDownloadMetadata returns the metadata for a cached download by URL
-// This is useful for lockfile generation to get the SHA256 hash
-func (fm *FetchManager) GetDownloadMetadata(url string) (*DownloadMetadata, error) {
-	return fm.loadDownloadMetadata(fm.downloadPath(url) + ".meta.json")
-}
-
 // downloadFile downloads a file from a URL with progress reporting. ctx stops it (an interrupt),
 // and so does the server sending nothing for fm.idleTimeout.
 func (fm *FetchManager) downloadFile(ctx context.Context, url, dest string) error {
@@ -749,20 +731,4 @@ func (fm *FetchManager) verifyChecksum(filePath, expected string) error {
 	}
 
 	return nil
-}
-
-// CalculateChecksum calculates the SHA256 checksum of a file
-func (fm *FetchManager) CalculateChecksum(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }

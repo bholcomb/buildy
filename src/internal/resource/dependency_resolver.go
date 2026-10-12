@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -637,16 +636,6 @@ func DockerMounts(workspaceRoot, cacheDir string) []string {
 	return mounts
 }
 
-// GetDependency returns a resolved dependency by name
-func (dr *DependencyResolver) GetDependency(name string) *ResolvedDependency {
-	return dr.resolved[name]
-}
-
-// GetAllDependencies returns all resolved dependencies
-func (dr *DependencyResolver) GetAllDependencies() map[string]*ResolvedDependency {
-	return dr.resolved
-}
-
 // ResolveDependencies resolves a list of dependency names and returns merged settings
 // This is used by TaskGenerator to get the combined include_dirs, libs, etc.
 func (dr *DependencyResolver) ResolveDependencies(depNames []string) (*ResolvedDependency, error) {
@@ -676,44 +665,4 @@ func (dr *DependencyResolver) ResolveDependencies(depNames []string) (*ResolvedD
 	}
 
 	return merged, nil
-}
-
-// GetDependencySearchPaths returns the search paths for dependency files
-func GetDependencySearchPaths(workspaceRoot string) []string {
-	paths := []string{}
-
-	// 1. Workspace buildy_config/dependencies
-	if workspaceRoot != "" {
-		paths = append(paths, filepath.Join(workspaceRoot, "buildy_config", "dependencies"))
-		paths = append(paths, filepath.Join(workspaceRoot, "buildy_config"))
-	}
-
-	// 2. System locations
-	paths = append(paths, getSystemDependencyDirs()...)
-
-	return paths
-}
-
-// getSystemDependencyDirs returns platform-specific system dependency directories
-func getSystemDependencyDirs() []string {
-	switch runtime.GOOS {
-	case "linux":
-		return []string{
-			"/usr/local/lib/buildy/dependencies",
-			"/usr/lib/buildy/dependencies",
-			"/opt/buildy/dependencies",
-		}
-	case "darwin":
-		return []string{
-			"/usr/local/lib/buildy/dependencies",
-			"/opt/buildy/dependencies",
-		}
-	case "windows":
-		return []string{
-			filepath.Join(os.Getenv("ProgramFiles"), "buildy", "dependencies"),
-			"C:\\buildy\\dependencies",
-		}
-	default:
-		return []string{}
-	}
 }

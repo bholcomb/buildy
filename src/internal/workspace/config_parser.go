@@ -12,7 +12,6 @@ import (
 	"buildy/pkg/util"
 )
 
-// hashConfig hashes a module's (inherited) config, stamped on its tasks.
 // ConfigParser generates the tasks of a workspace from its typed configuration
 type ConfigParser struct {
 	Platform           string

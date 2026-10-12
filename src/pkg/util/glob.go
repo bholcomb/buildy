@@ -108,13 +108,3 @@ func (g Glob) String() string {
 	}
 	return filepath.Join(g.Base, filepath.FromSlash(g.Pattern))
 }
-
-// GlobFiles returns the files on disk that pattern, relative to dir unless absolute, names:
-// absolute, clean and sorted.
-func GlobFiles(dir, pattern string) ([]string, error) {
-	g, err := ParseGlob(dir, pattern)
-	if err != nil {
-		return nil, err
-	}
-	return g.Files()
-}

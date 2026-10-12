@@ -284,8 +284,5 @@ it itself, so that step can go.
 - Build system files in `buildy_config/build_systems/` are documented but not loaded
   (`BuildSystemManager.LoadFilesystemSystems` is never called): load them, or remove the docs (phase
   6, with the dead code).
-- The lockfile (`lockfile_manager.go`, `--update-lock`, `--require-lock`) is not wired either; the
-  docs no longer describe it as a feature. A pinned commit ID or an archive checksum is the way to
-  pin a dependency today.
 - Windows and macOS: the cmake `--config` arguments are tested as argument lists; neither platform
   has run a dependency build in this phase.
