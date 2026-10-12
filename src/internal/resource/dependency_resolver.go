@@ -385,6 +385,10 @@ func (dr *DependencyResolver) resolveFetchDependency(ctx context.Context, name s
 func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, section DependencySection, dest, source string, varEnv *util.VariableEnvironment) (includeDirs, libDirs []string, err error) {
 	build := section.Build
 	if dr.plan && source == "" {
+		// Not fetched yet: the plan names where it would build and install
+		buildDir, installDir := dependencyDirs(dest, dr.platform, dr.architecture, dr.configuration)
+		varEnv.SetVariable("dep_build_dir", buildDir, "dependency")
+		varEnv.SetVariable("dep_install_dir", installDir, "dependency")
 		util.LogProgress("Dry run: would build %s (%s) with %s", name, dr.configuration, build.System)
 		return nil, nil, nil
 	}

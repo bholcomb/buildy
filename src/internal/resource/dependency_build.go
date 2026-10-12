@@ -53,19 +53,27 @@ type buildMarker struct {
 // configuration's build at a time.
 const inSourceKey = "in-source"
 
+// dependencyDirs returns a dependency's build and install directories for a build context:
+// ${dep_build_dir} and ${dep_install_dir}.
+func dependencyDirs(sourceDir, platform, arch, configuration string) (buildDir, installDir string) {
+	key := platform + "-" + arch + "-" + configuration
+	return filepath.Join(sourceDir, "_build", key), filepath.Join(sourceDir, "_install", key)
+}
+
 // newDependencyBuild prepares the build of configuration of the source tree in sourceDir.
 // buildType is the build system's name for the configuration ("" if it has none); args are
 // build.args, resolved.
 func newDependencyBuild(name string, system *BuildSystemConfig, definition, source, sourceDir, platform, arch, configuration, buildType string, args []string, override string, exec util.ExecSpec, mounts []string) *dependencyBuild {
 	key := platform + "-" + arch + "-" + configuration
+	buildDir, installDir := dependencyDirs(sourceDir, platform, arch, configuration)
 	b := &dependencyBuild{
 		name:       name,
 		system:     system,
 		definition: definition,
 		source:     source,
 		sourceDir:  sourceDir,
-		buildDir:   filepath.Join(sourceDir, "_build", key),
-		installDir: filepath.Join(sourceDir, "_install", key),
+		buildDir:   buildDir,
+		installDir: installDir,
 		markerPath: filepath.Join(sourceDir, "_build", key+".built.json"),
 		override:   override,
 		exec:       exec,

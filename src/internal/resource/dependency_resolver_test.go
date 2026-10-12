@@ -239,3 +239,39 @@ unknown_package:
 		t.Errorf("an undefined dependency: %v", err)
 	}
 }
+
+// A dry run of a dependency not fetched yet resolves ${dep_build_dir} and ${dep_install_dir} to
+// where it would build and install, and fetches nothing.
+func TestDryRunOfAnUnfetchedDependency(t *testing.T) {
+	root := t.TempDir()
+	writeDepFiles(t, root, map[string]string{
+		"buildy_config/dependencies.yaml": `
+lib:
+  git: "` + filepath.ToSlash(filepath.Join(root, "no-such-repo")) + `"
+  ref: main
+  build: {system: cmake}
+  include_dirs: ["${dep_install_dir}/include"]
+  lib_dirs: ["${dep_build_dir}/lib"]
+`,
+	})
+	dr := newResolver(root)
+	if err := dr.LoadDependencies(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	dr.Prepare(context.Background(), true)
+	merged, err := dr.ResolveDependencies([]string{"lib"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := filepath.Join(root, ".buildy_cache", "deps", "lib")
+	slashed := func(dirs []string) string { return filepath.ToSlash(strings.Join(dirs, " ")) }
+	if want := filepath.ToSlash(filepath.Join(dep, "_install", "linux-x86_64-debug", "include")); slashed(merged.IncludeDirs) != want {
+		t.Errorf("include dirs %v, want %s", merged.IncludeDirs, want)
+	}
+	if want := filepath.ToSlash(filepath.Join(dep, "_build", "linux-x86_64-debug", "lib")); slashed(merged.LibDirs) != want {
+		t.Errorf("lib dirs %v, want %s", merged.LibDirs, want)
+	}
+	if _, err := os.Stat(dep); !os.IsNotExist(err) {
+		t.Errorf("the dry run fetched: %v", err)
+	}
+}
