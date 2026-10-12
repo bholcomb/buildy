@@ -279,10 +279,13 @@ Buildy includes toolchains for common compilers:
 | `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
 | `go-linux` | Linux | Go | Go compiler |
 | `go-macos` | macOS | Go | Go compiler |
+| `go-macos-arm64` | macOS ARM | Go | Go compiler for Apple Silicon |
 | `go-windows` | Windows | Go | Go compiler |
 | `rust-linux` | Linux | Rust | Cargo/rustc |
 | `rust-macos` | macOS | Rust | Cargo/rustc |
+| `rust-macos-arm64` | macOS ARM | Rust | Cargo/rustc for Apple Silicon |
 | `rust-windows` | Windows | Rust | Cargo/rustc |
+| `rust-wasm` | Any | Rust | Rust to WebAssembly |
 | `emscripten-cpp` | Any | C++ | C++ to WebAssembly |
 | `glslc` | Any | GLSL | GLSL to SPIR-V |
 

@@ -94,6 +94,11 @@ targets:
 			"clib": "<root>/clib: go | build | -buildmode=c-shared | -trimpath | -o | <out>/lib/libclib.dylib | -tags | a | .",
 			"carc": "<root>/clib: go | build | -buildmode=c-archive | -trimpath | -o | <out>/lib/libcarc.a | .",
 		}},
+		{"macos", "arm64", "debug", map[string]string{
+			"app":  "<root>/cmd/app: go | build | -o | <out>/bin/app | " + app,
+			"clib": "<root>/clib: go | build | -buildmode=c-shared | -o | <out>/lib/libclib.dylib | -tags | a | .",
+			"carc": "<root>/clib: go | build | -buildmode=c-archive | -o | <out>/lib/libcarc.a | .",
+		}},
 		{"windows", "x86_64", "debug", map[string]string{
 			"app":      "<root>/cmd/app: go | build | -o | <out>/bin/app.exe | " + app,
 			"hardened": "<root>/cmd/plain: go | build | -buildmode=pie | -o | <out>/bin/hardened.exe | .",

@@ -1087,7 +1087,7 @@ buildy --add-data-dir /opt/company/buildy
 - `docker-c-linux`, `docker-cpp-linux` - Docker-based GCC
 - `emscripten-c`, `emscripten-cpp` - WebAssembly
 
-**Go:** `go-linux`, `go-macos`, `go-windows`
+**Go:** `go-linux`, `go-macos`, `go-macos-arm64`, `go-windows`
 
 **Rust:** `rust-linux`, `rust-macos`, `rust-macos-arm64`, `rust-windows`, `rust-wasm`
 

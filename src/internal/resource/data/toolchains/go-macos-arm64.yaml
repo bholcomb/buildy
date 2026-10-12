@@ -1,0 +1,52 @@
+# Go Toolchain for macOS ARM64 (Apple Silicon)
+
+toolchain:
+  name: "go-macos-arm64"
+  description: "Go compiler for macOS ARM64 (Apple Silicon)"
+  language: "go"
+  
+  target:
+    platform: macos
+    architecture: arm64
+  
+  host:
+    platform: macos
+    architecture: arm64
+  
+  execution:
+    type: native
+
+  output_prefix: ""
+
+  # The C-compatible libraries' file names (the Go library templates' outputs)
+  variables:
+    c_shared_name: "lib${item.name}.dylib"
+    c_archive_name: "lib${item.name}.a"
+
+  tools:
+    go_build:
+      action: build
+      command: "go build ${buildmode} ${flags} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
+      input_extensions: [".go"]
+      output_extension: ""
+      output_pattern: "${name}"
+      flags:
+        common: []
+        debug: []
+        release: ["-trimpath"]
+
+      # The target's options (build_tags, ldflags, gcflags, buildmode), each as go build takes it
+      command_params:
+        buildmode:
+          sources: ["tool_params.buildmode", "item.buildmode"]
+          format: "-buildmode=${value}"
+        build_tags:
+          sources: ["tool_params.build_tags", "item.build_tags"]
+          format: "-tags ${value}"
+          join: ","
+        ldflags:
+          sources: ["tool_params.ldflags", "item.ldflags"]
+          format: "-ldflags=${value}"
+        gcflags:
+          sources: ["tool_params.gcflags", "item.gcflags"]
+          format: "-gcflags=${value}"

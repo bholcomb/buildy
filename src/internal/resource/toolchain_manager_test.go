@@ -77,6 +77,7 @@ func TestDefaultToolchains(t *testing.T) {
 		{"macos", "x86", "docs", "doxygen"},
 		{"macos", "arm64", "c", "clang-c-macos-arm64"},
 		{"macos", "arm64", "cpp", "clang-cpp-macos-arm64"},
+		{"macos", "arm64", "go", "go-macos-arm64"},
 		{"macos", "arm64", "rust", "rust-macos-arm64"},
 		{"macos", "arm64", "glsl", "glslc"},
 		{"macos", "arm64", "docs", "doxygen"},

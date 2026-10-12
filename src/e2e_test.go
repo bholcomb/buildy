@@ -296,9 +296,6 @@ func TestE2EStaticRelink(t *testing.T) {
 // Finding 4 and S6: editing a package imported from outside the target's directory, or a file it
 // embeds, changes the build. Go runs every time and reports "ran", never a cache hit.
 func TestE2EGoOutsideImport(t *testing.T) {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		t.Skip("skipping: there is no built-in Go toolchain for macOS arm64")
-	}
 	needTools(t, "go")
 	dir := fixture(t, "go_outside_import")
 	app := filepath.Join(outDir(dir, "debug"), "bin", "app"+exeSuffix())

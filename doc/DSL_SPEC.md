@@ -1606,6 +1606,7 @@ same toolchain name are an error.
 | `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
 | `go-linux` | Linux | Go | Go compiler |
 | `go-macos` | macOS | Go | Go compiler |
+| `go-macos-arm64` | macOS ARM | Go | Go compiler for Apple Silicon |
 | `go-windows` | Windows | Go | Go compiler |
 | `rust-linux` | Linux | Rust | Cargo/rustc |
 | `rust-macos` | macOS | Rust | Cargo/rustc |
