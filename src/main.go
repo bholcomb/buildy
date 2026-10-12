@@ -110,6 +110,7 @@ func main() {
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
 	timeout := flag.Duration("timeout", 0, "Kill a task, or a dependency build step, that runs longer than this (e.g. 30m; 0: no limit)")
+	updateDeps := flag.Bool("update-deps", false, "Fetch the dependencies that can move again: git branches and tags, and archives without a checksum")
 
 	// Custom flag for multiple defines
 	var defines []string
@@ -396,6 +397,7 @@ func main() {
 		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
 		// builds nothing, and uses what is already on disk.
 		depResolver.Timeout = *timeout
+		depResolver.Update = *updateDeps
 		if err := depResolver.ResolveAll(ctx, *dryRun); err != nil {
 			exitIfInterrupted(ctx)
 			util.LogFatal("Failed to resolve dependencies: %v", err)

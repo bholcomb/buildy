@@ -66,6 +66,9 @@ type DependencyResolver struct {
 
 	// Timeout is how long a dependency build phase may run (0: no limit)
 	Timeout time.Duration
+	// Update fetches the dependencies that can move again: git branches and tags, and archives
+	// without a checksum (--update-deps)
+	Update bool
 }
 
 // NewDependencyResolver creates a new DependencyResolver
@@ -309,33 +312,30 @@ func (dr *DependencyResolver) resolveFetchDependency(ctx context.Context, name s
 	// Determine destination
 	dest := filepath.Join(dr.cacheDir, "deps", name)
 
-	// Fetch the dependency
-	var err error
-	source := section.URL
-	if section.Git != "" {
-		source = section.Git
-		if section.Ref != "" {
-			source += " @ " + section.Ref
-		}
-	}
 	if dr.plan {
-		if fileExists(dest) {
-			util.LogProgress("Dry run: would fetch %s from %s (using what is in %s)", name, source, dest)
+		fetched := false
+		from := section.URL
+		if section.Git != "" {
+			from = section.Git + " @ " + refName(section.Ref)
+			fetched = dr.fetchManager.FetchedGit(section.Git, section.Ref, dest) != "" && (!dr.Update || isCommitID(section.Ref))
 		} else {
-			util.LogProgress("Dry run: would fetch %s from %s into %s (not on disk yet: its include and lib dirs are missing from this plan)", name, source, dest)
+			fetched = dr.fetchManager.ExtractedURL(section.URL, dest) != "" && !(dr.Update && section.Checksum == "")
+		}
+		if !fetched {
+			util.LogProgress("Dry run: would fetch %s from %s into %s", name, from, dest)
 		}
 	} else if section.Git != "" {
-		err = dr.fetchManager.FetchGit(ctx, section.Git, section.Ref, dest)
-	} else if section.URL != "" {
-		err = dr.fetchManager.FetchURL(ctx, section.URL, section.Checksum, dest)
+		commit, err := dr.fetchManager.FetchGit(ctx, section.Git, section.Ref, dest, dr.Update)
+		if err != nil {
+			return fmt.Errorf("failed to fetch '%s': %w", name, err)
+		}
+		util.LogInfo("Dependency %s: %s @ %s is commit %s", name, section.Git, refName(section.Ref), commit)
+	} else if _, err := dr.fetchManager.FetchURL(ctx, section.URL, section.Checksum, dest, dr.Update); err != nil {
+		return fmt.Errorf("failed to fetch '%s': %w", name, err)
 	}
 	resolved.SourceGit = section.Git
 	resolved.SourceRef = section.Ref
 	resolved.SourceURL = section.URL
-
-	if err != nil {
-		return fmt.Errorf("failed to fetch '%s': %w", name, err)
-	}
 
 	resolved.Path = dest
 

@@ -55,61 +55,148 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return result.Output, nil
 }
 
-// FetchGit clones or updates a git repository
-func (fm *FetchManager) FetchGit(ctx context.Context, url, ref, dest string) error {
-	util.LogProgress("Fetching git: %s @ %s -> %s", url, ref, dest)
-
-	// Check if destination already exists
-	if _, err := os.Stat(dest); err == nil {
-		// Directory exists, try to update
-		return fm.updateGitRepo(ctx, dest, ref)
-	}
-
-	// Clone the repository
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return fmt.Errorf("failed to create parent directory: %w", err)
-	}
-
-	cloneArgs := []string{"clone", "--depth", "1"}
-	if ref != "" && !strings.HasPrefix(ref, "v") && len(ref) != 40 {
-		// It's a branch name, not a tag or commit hash
-		cloneArgs = append(cloneArgs, "--branch", ref)
-	}
-	cloneArgs = append(cloneArgs, url, dest)
-	if _, err := git(ctx, filepath.Dir(dest), cloneArgs...); err != nil {
-		return err
-	}
-
-	// If ref is a tag or commit, checkout that ref
-	if ref != "" {
-		if _, err := git(ctx, dest, "checkout", ref); err != nil {
-			if ctx.Err() != nil {
-				return err
-			}
-			// Try fetching if checkout fails (might be a tag not in shallow clone)
-			git(ctx, dest, "fetch", "--tags", "--depth", "1", "origin", ref)
-			if _, err := git(ctx, dest, "checkout", ref); err != nil {
-				return err
-			}
-		}
-	}
-
-	util.LogProgress("Successfully cloned %s", url)
-	return nil
+// gitMarker records what a git checkout under deps/ was fetched for: the repository, the ref the
+// dependency names, and the commit that ref resolved to.
+type gitMarker struct {
+	URL    string `json:"url"`
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
 }
 
-// updateGitRepo updates an existing git repository
-func (fm *FetchManager) updateGitRepo(ctx context.Context, dest, ref string) error {
-	util.LogProgress("Updating git repo: %s", dest)
-	if _, err := git(ctx, dest, "fetch", "--tags", "origin"); err != nil {
-		return err
+// gitMarkerPath is the marker file next to a git checkout.
+func gitMarkerPath(dest string) string {
+	return dest + ".git.json"
+}
+
+func readGitMarker(dest string) (gitMarker, bool) {
+	var m gitMarker
+	data, err := os.ReadFile(gitMarkerPath(dest))
+	if err != nil || json.Unmarshal(data, &m) != nil || m.Commit == "" {
+		return gitMarker{}, false
 	}
-	if ref != "" {
-		if _, err := git(ctx, dest, "checkout", ref); err != nil {
-			return err
+	return m, true
+}
+
+// isCommitID reports whether ref is a full commit ID (SHA-1 or SHA-256), which never moves.
+func isCommitID(ref string) bool {
+	if len(ref) != 40 && len(ref) != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+// FetchedGit returns the commit dest holds for url at ref, as recorded when it was fetched, or ""
+// if dest doesn't hold that checkout. It runs nothing.
+func (fm *FetchManager) FetchedGit(url, ref, dest string) string {
+	if m, ok := readGitMarker(dest); ok && m.URL == url && m.Ref == ref {
+		return m.Commit
+	}
+	return ""
+}
+
+// FetchGit makes dest a checkout of ref (a branch, a tag, a full or abbreviated commit ID; empty:
+// the default branch) of the repository at url, and returns its commit. The checkout is
+// detached at the commit the ref resolved to.
+//
+// Once fetched, dest is used as it is, without the network, while the dependency names the same
+// url and ref: a build is reproducible and works offline. update (--update-deps) fetches a ref
+// that can move (a branch or a tag) again. A changed ref is fetched into the existing clone; a
+// changed url starts a new clone.
+func (fm *FetchManager) FetchGit(ctx context.Context, url, ref, dest string, update bool) (string, error) {
+	if strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("the git ref %q starts with '-'", ref)
+	}
+	marker, ok := readGitMarker(dest)
+	if ok && marker.URL == url && marker.Ref == ref && (!update || isCommitID(ref)) {
+		head, err := git(ctx, dest, "rev-parse", "HEAD")
+		if err == nil && strings.TrimSpace(head) == marker.Commit {
+			return marker.Commit, nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		util.LogWarning("%s is not at commit %s any more: checking it out again", dest, marker.Commit)
+	}
+
+	// Drop the marker first: if this run dies part way, dest is not taken for a checkout of ref
+	if err := os.Remove(gitMarkerPath(dest)); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if !ok || marker.URL != url || !fileExists(filepath.Join(dest, ".git")) {
+		// Another repository, or none: start a new clone
+		if err := os.RemoveAll(dest); err != nil {
+			return "", fmt.Errorf("removing the previous checkout %s: %w", dest, err)
+		}
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return "", err
+		}
+		if _, err := git(ctx, dest, "init", "--quiet"); err != nil {
+			return "", err
+		}
+		if _, err := git(ctx, dest, "remote", "add", "origin", url); err != nil {
+			return "", err
+		}
+	}
+
+	util.LogProgress("Fetching git: %s @ %s -> %s", url, refName(ref), dest)
+	commit, err := fetchGitRef(ctx, dest, ref)
+	if err != nil {
+		return "", fmt.Errorf("fetching %s from %s: %w", refName(ref), url, err)
+	}
+	if _, err := git(ctx, dest, "checkout", "--quiet", "--force", "--detach", commit); err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(gitMarker{URL: url, Ref: ref, Commit: commit}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(gitMarkerPath(dest), data, 0o644); err != nil {
+		return "", fmt.Errorf("recording the checkout of %s: %w", dest, err)
+	}
+	return commit, nil
+}
+
+// refName names a ref for messages.
+func refName(ref string) string {
+	if ref == "" {
+		return "the default branch"
+	}
+	return ref
+}
+
+// fetchGitRef fetches ref from origin into the repository in dir and returns its commit. A
+// branch, a tag or a full commit ID is fetched alone, without history; anything else (an
+// abbreviated commit ID) needs the whole history to be found in.
+func fetchGitRef(ctx context.Context, dir, ref string) (string, error) {
+	want := ref
+	if want == "" {
+		want = "HEAD"
+	}
+	_, shallowErr := git(ctx, dir, "fetch", "--quiet", "--depth", "1", "--no-tags", "origin", want)
+	if shallowErr == nil {
+		commit, err := git(ctx, dir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+		return strings.TrimSpace(commit), err
+	}
+	if ctx.Err() != nil || ref == "" {
+		return "", shallowErr
+	}
+	args := []string{"fetch", "--quiet", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*"}
+	if shallow, err := git(ctx, dir, "rev-parse", "--is-shallow-repository"); err == nil && strings.TrimSpace(shallow) == "true" {
+		args = append(args[:2], append([]string{"--unshallow"}, args[2:]...)...)
+	}
+	if _, err := git(ctx, dir, args...); err != nil {
+		return "", fmt.Errorf("%v; then fetching the whole history: %w", shallowErr, err)
+	}
+	commit, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("no branch, tag or commit is named %q (%v)", ref, shallowErr)
+	}
+	return strings.TrimSpace(commit), nil
 }
 
 // GetGitCommit returns the current commit hash for a git repo
@@ -123,15 +210,15 @@ func (fm *FetchManager) GetGitCommit(dest string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// FetchURL downloads an archive from a URL and extracts it into dest.
+// FetchURL downloads an archive from a URL, extracts it into dest, and returns the archive's
+// SHA-256.
 //
 // Downloads are cached under downloads/ by a hash of the full URL (plus its basename, for
 // readability), so two URLs with the same file name never share a download. The extraction is
 // recorded in dest's marker file against the URL and the archive's SHA-256; dest is reused only
-// when the marker matches, so a partial or stale extraction is never accepted.
-func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string) error {
-	util.LogProgress("Fetching URL: %s -> %s", url, dest)
-
+// when the marker matches, so a partial or stale extraction is never accepted. update
+// (--update-deps) downloads an archive without a checksum again: its content may have changed.
+func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string, update bool) (string, error) {
 	// Warn about missing checksum - checksums are strongly encouraged for reproducible builds
 	if checksum == "" {
 		util.LogWarning("No checksum provided for %s - consider adding one for reproducible builds", url)
@@ -140,12 +227,20 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 	// Create cache directory for downloads
 	downloadDir := filepath.Join(fm.cacheDir, "downloads")
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
-		return fmt.Errorf("failed to create download directory: %w", err)
+		return "", fmt.Errorf("failed to create download directory: %w", err)
 	}
 
 	filename := urlBasename(url)
 	downloadPath := fm.downloadPath(url)
 	metadataPath := downloadPath + ".meta.json"
+
+	if update && checksum == "" {
+		for _, path := range []string{downloadPath, metadataPath} {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+		}
+	}
 
 	// A cached archive is reused only if it still verifies.
 	if _, err := os.Stat(downloadPath); err == nil {
@@ -178,19 +273,20 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 
 	// Download if not already cached (or was removed due to corruption/checksum mismatch)
 	if _, err := os.Stat(downloadPath); os.IsNotExist(err) {
+		util.LogProgress("Fetching URL: %s -> %s", url, dest)
 		// Download to a temp file first, only move to cache on success
 		tempPath := downloadPath + ".tmp"
 
 		if err := fm.downloadFile(ctx, url, tempPath); err != nil {
 			os.Remove(tempPath)
-			return fmt.Errorf("download failed: %w", err)
+			return "", fmt.Errorf("download failed: %w", err)
 		}
 
 		// Verify checksum if provided
 		if checksum != "" {
 			if err := fm.verifyChecksum(tempPath, checksum); err != nil {
 				os.Remove(tempPath)
-				return fmt.Errorf("checksum verification failed: %w", err)
+				return "", fmt.Errorf("checksum verification failed: %w", err)
 			}
 		}
 
@@ -198,42 +294,42 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 		// Pass the original filename so we know the correct archive format
 		if err := fm.verifyArchiveIntegrity(tempPath, filename); err != nil {
 			os.Remove(tempPath)
-			return fmt.Errorf("archive integrity check failed: %w", err)
+			return "", fmt.Errorf("archive integrity check failed: %w", err)
 		}
 
 		// All checks passed - move temp file to final location
 		if err := os.Rename(tempPath, downloadPath); err != nil {
 			os.Remove(tempPath)
-			return fmt.Errorf("failed to move downloaded file to cache: %w", err)
+			return "", fmt.Errorf("failed to move downloaded file to cache: %w", err)
 		}
 
 		// Save metadata
 		if err := fm.saveDownloadMetadata(metadataPath, url, checksum, downloadPath); err != nil {
-			return fmt.Errorf("failed to save download metadata: %w", err)
+			return "", fmt.Errorf("failed to save download metadata: %w", err)
 		}
 	}
 
 	archiveHash, err := fm.computeFileHash(downloadPath)
 	if err != nil {
-		return fmt.Errorf("failed to hash %s: %w", downloadPath, err)
+		return "", fmt.Errorf("failed to hash %s: %w", downloadPath, err)
 	}
 	marker := extractionMarker{URL: url, SHA256: archiveHash}
 	if fm.hasExtraction(dest, marker) {
-		util.LogProgress("Using cached archive, destination exists: %s", dest)
-		return nil
+		util.LogInfo("Using the extraction of %s in %s", url, dest)
+		return marker.SHA256, nil
 	}
 
 	// Drop the old marker first: if this run dies mid-extraction, dest stays unmarked.
 	os.Remove(extractionMarkerPath(dest))
 	if err := extractArchive(downloadPath, filename, dest); err != nil {
-		return fmt.Errorf("extraction of %s failed: %w", url, err)
+		return "", fmt.Errorf("extraction of %s failed: %w", url, err)
 	}
 	if err := writeExtractionMarker(dest, marker); err != nil {
-		return err
+		return "", err
 	}
 
 	util.LogProgress("Successfully fetched and extracted %s", url)
-	return nil
+	return archiveHash, nil
 }
 
 // urlBasename returns the file name at the end of a URL, for archive format detection and
@@ -273,6 +369,20 @@ type extractionMarker struct {
 // fetched tree stays as the archive made it).
 func extractionMarkerPath(dest string) string {
 	return dest + ".extracted.json"
+}
+
+// ExtractedURL returns the SHA-256 of the archive of url that dest holds, as recorded when it was
+// extracted, or "" if dest doesn't hold an extraction of url. It downloads and checks nothing.
+func (fm *FetchManager) ExtractedURL(url, dest string) string {
+	data, err := os.ReadFile(extractionMarkerPath(dest))
+	if err != nil {
+		return ""
+	}
+	var recorded extractionMarker
+	if json.Unmarshal(data, &recorded) != nil || recorded.URL != url {
+		return ""
+	}
+	return recorded.SHA256
 }
 
 // hasExtraction reports whether dest holds a complete extraction of the archive in marker.

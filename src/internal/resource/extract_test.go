@@ -298,7 +298,7 @@ func TestFetchURLNeverAcceptsPartialExtraction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := fm.FetchURL(context.Background(), server.URL+"/v1/pkg.tar.gz", "", dest); err != nil {
+	if _, err := fm.FetchURL(context.Background(), server.URL+"/v1/pkg.tar.gz", "", dest, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dest, "a.txt")); string(got) != "A" {
@@ -313,7 +313,7 @@ func TestFetchURLNeverAcceptsPartialExtraction(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dest, "local.txt"), []byte("kept"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := fm.FetchURL(context.Background(), server.URL+"/v1/pkg.tar.gz", "", dest); err != nil {
+	if _, err := fm.FetchURL(context.Background(), server.URL+"/v1/pkg.tar.gz", "", dest, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "local.txt")); err != nil {
@@ -348,7 +348,7 @@ func TestFetchURLKeysDownloadsByWholeURL(t *testing.T) {
 	fm := NewFetchManager(cache)
 	for _, who := range []string{"foo", "bar"} {
 		dest := filepath.Join(cache, "deps", who)
-		if err := fm.FetchURL(context.Background(), server.URL+"/"+who+"/v1.0.tar.gz", "", dest); err != nil {
+		if _, err := fm.FetchURL(context.Background(), server.URL+"/"+who+"/v1.0.tar.gz", "", dest, false); err != nil {
 			t.Fatal(err)
 		}
 		got, err := os.ReadFile(filepath.Join(dest, "WHO"))

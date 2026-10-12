@@ -459,17 +459,7 @@ func TestE2EDryRunDependency(t *testing.T) {
 	if err := os.Rename(filepath.Join(dir, "dep"), repo); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main"},
-		{"-c", "user.email=t@example.com", "-c", "user.name=t", "add", "."},
-		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "dep"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	gitRepo(t, repo)
 	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
 		fmt.Sprintf("mydep:\n  git: %q\n  build: {system: make}\n", repo))
 
@@ -1115,17 +1105,7 @@ func TestE2EInterruptADependencyBuild(t *testing.T) {
 	needTools(t, "git", "make", "sh")
 	repo := filepath.Join(t.TempDir(), "dep")
 	writeFile(t, filepath.Join(repo, "Makefile"), "all:\n\tsleep 30 & echo $$! > \"$(CURDIR)/sleep.pid\"; wait\n")
-	for _, args := range [][]string{
-		{"init", "-q", "-b", "main"},
-		{"-c", "user.email=t@example.com", "-c", "user.name=t", "add", "."},
-		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "dep"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	gitRepo(t, repo)
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: depbuild\n")
 	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
