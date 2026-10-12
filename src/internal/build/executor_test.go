@@ -150,7 +150,7 @@ func TestExecutorFailsOnAMissingInputBeforeRunning(t *testing.T) {
 	// With a producer in the graph, the error names it.
 	producer := newTask("generate_config", nil, []string{missing}, helperCommand(t, "nothing"))
 	te = newExecutor(t, dir, false)
-	te.producers[missing] = producer.TaskID
+	te.producers[util.NormalizePath(missing)] = producer.TaskID
 	err := te.checkInputs(task)
 	if err == nil || !strings.Contains(err.Error(), "generate_config") {
 		t.Errorf("error %v doesn't name the producer", err)
@@ -250,6 +250,14 @@ func TestExecutorReportsCommandFailure(t *testing.T) {
 func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 	dir := t.TempDir()
 	te := newExecutor(t, dir, false)
+	// The Docker task's image is not pulled: what runs is the native helper, below
+	native := te.toolIdentity
+	te.toolIdentity = func(ctx context.Context, spec util.ExecSpec, command util.Command, root string) (string, error) {
+		if spec.IsDocker() {
+			return "docker image " + spec.Image + " sha256:test", nil
+		}
+		return native(ctx, spec, command, root)
+	}
 	var mu sync.Mutex // the stage's tasks run in parallel
 	var specs []util.ExecSpec
 	var mounts [][]string
