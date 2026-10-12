@@ -477,14 +477,24 @@ func TestE2EDryRunDependency(t *testing.T) {
 		t.Error("--dry-run built the app")
 	}
 
-	// A real build fetches it and runs its Makefile for debug and release.
+	// A real build fetches it and runs its Makefile, once: for the configuration being built.
 	mustBuildy(t, dir)
 	log, err := os.ReadFile(filepath.Join(cloned, "side_effect.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(log), "built"); got != 2 {
-		t.Errorf("the dependency was built %d times, want 2 (debug and release)", got)
+	if got := strings.Count(string(log), "built"); got != 1 {
+		t.Errorf("the dependency was built %d times, want 1 (debug)", got)
+	}
+	// Now a dry run plans no fetch and no build: the dependency is up to date
+	out = mustBuildy(t, dir, "--dry-run")
+	for _, unwanted := range []string{"would fetch mydep", "would build mydep"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("the plan has %q for a dependency that is up to date:\n%s", unwanted, out)
+		}
+	}
+	if out = mustBuildy(t, dir, "--dry-run", "-c", "release"); !strings.Contains(out, "would build mydep (release)") {
+		t.Errorf("the plan for release lacks the dependency's build:\n%s", out)
 	}
 }
 
@@ -1117,5 +1127,11 @@ func TestE2EInterruptADependencyBuild(t *testing.T) {
 	}
 	if !processGone(t, pidFile) {
 		t.Error("the dependency build's child survived the interrupt")
+	}
+	// The interrupted build is not recorded as done
+	for _, m := range depsMarkers(t, dir, "slowdep") {
+		if data, err := os.ReadFile(m); err != nil || strings.Contains(string(data), `"source"`) {
+			t.Errorf("the interrupted build left the marker %s:\n%s", m, data)
+		}
 	}
 }

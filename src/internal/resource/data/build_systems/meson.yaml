@@ -1,37 +1,31 @@
 build_system:
   name: meson
   description: "Meson build system"
-  
+
   detection:
     marker_files: ["meson.build"]
     priority: 10
-  
+
+  configurations:
+    debug: debug
+    release: release
+
+  reads_env: [CC, CXX, CFLAGS, CXXFLAGS, LDFLAGS, PKG_CONFIG_PATH, SDKROOT, MACOSX_DEPLOYMENT_TARGET]
+
   phases:
     configure:
-      command: "meson setup ${build_dir} ${args}"
-      default_args: ["--buildtype=release"]
-      working_dir: "${source_dir}"
-      required: true
-    
+      command: "meson setup ${build_dir} ${source_dir} --buildtype=${build_type} --prefix=${install_dir} --libdir=lib ${args}"
+
     build:
       command: "meson compile -C ${build_dir} -j ${jobs}"
-      required: true
-    
-    test:
-      command: "meson test -C ${build_dir}"
-      required: false
-    
+
     install:
-      command: "meson install -C ${build_dir} --destdir ${install_dir}"
-      required: false
-    
-    clean:
-      command: "meson compile -C ${build_dir} --clean"
-      required: false
-  
+      command: "meson install -C ${build_dir}"
+
   output:
     include_patterns:
+      - "${install_dir}/include"
       - "${source_dir}/include"
-      - "${source_dir}"
     lib_patterns:
+      - "${install_dir}/lib"
       - "${build_dir}"

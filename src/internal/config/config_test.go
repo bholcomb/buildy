@@ -328,6 +328,22 @@ build_system:
 	}
 }
 
+// An in-source build system needs a clean phase, and only it may have one; a configuration
+// mapping has values.
+func TestBuildSystemPhases(t *testing.T) {
+	for _, c := range []struct{ yaml, want string }{
+		{"in_source: true\n  phases: {build: {command: make}}", "in_source needs a clean phase"},
+		{"phases: {build: {command: make}, clean: {command: make clean}}", "clean is run only for an in_source build system"},
+		{"phases: {build: {command: make}, test: {command: make check}}", "unknown key 'build_system.phases.test'"},
+		{"configurations: {debug: \"\"}\n  phases: {build: {command: make}}", "configurations.debug is empty"},
+	} {
+		_, err := LoadBuildSystem([]byte("build_system:\n  name: x\n  "+c.yaml+"\n"), "b.yaml")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", c.yaml, err, c.want)
+		}
+	}
+}
+
 // A filtered list of one item may be written as the item, as before.
 func TestFilteredListOfOne(t *testing.T) {
 	var v struct {

@@ -48,9 +48,12 @@ type DependencySection struct {
 
 // DependencyBuild is how a fetched dependency is built.
 type DependencyBuild struct {
-	System   string   `yaml:"system"`   // cmake, meson, make, autoconf, buildy, none, auto
-	Override string   `yaml:"override"` // a buildy config in buildy_config/dependencies/
-	Args     []string `yaml:"args"`
+	System   string   `yaml:"system"`   // cmake, meson, make, autoconf, cargo, go_mod, buildy, none, auto
+	Override string   `yaml:"override"` // a buildy config in buildy_config/dependencies/ (system buildy)
+	Args     []string `yaml:"args"`     // variables resolved
+	// Configurations maps a buildy configuration to the build system's, adding to or replacing
+	// the build system's own map (cmake: portable: Release)
+	Configurations map[string]string `yaml:"configurations"`
 }
 
 // SectionName returns the normalised name of a dependency section ("common", a platform, or

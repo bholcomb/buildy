@@ -1,0 +1,13 @@
+project:
+  name: dep_configurations
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["main.c"]
+      deps: [dv]

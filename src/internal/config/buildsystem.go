@@ -6,12 +6,24 @@ import (
 )
 
 // BuildSystem is a build system definition: how to build a fetched dependency (cmake, make, ...).
+// Its phases run in order: configure (if defined), build, install (if defined). See
+// doc/design/dependencies.md.
 type BuildSystem struct {
 	Name        string            `yaml:"name,required"`
 	Description string            `yaml:"description"`
 	Detection   Detection         `yaml:"detection"`
 	Phases      map[string]*Phase `yaml:"phases"`
-	Output      BuildOutput       `yaml:"output"`
+	// Configurations maps a buildy configuration to the build system's (cmake: debug to Debug),
+	// the phases' ${build_type}. Without it the build system has no configurations: its phases
+	// get only ${config}, buildy's name.
+	Configurations map[string]string `yaml:"configurations"`
+	// InSource says the build system builds in the source tree (make): the tree holds one
+	// configuration's build at a time, and the clean phase runs before every build.
+	InSource bool `yaml:"in_source"`
+	// ReadsEnv are the environment variables the build system's tools read (CC, CFLAGS, ...):
+	// their values are in the build's marker, so changing one rebuilds the dependency.
+	ReadsEnv StringList  `yaml:"reads_env"`
+	Output   BuildOutput `yaml:"output"`
 }
 
 // Detection says how to recognise a source tree that uses the build system.
@@ -20,22 +32,23 @@ type Detection struct {
 	Priority    int      `yaml:"priority"`
 }
 
-// Phase is one phase of a build system (configure, build, test, install, clean).
+// Phase is one phase of a build system.
 type Phase struct {
 	Command     CommandTemplate `yaml:"command,required"`
 	DefaultArgs []string        `yaml:"default_args"`
-	Required    bool            `yaml:"required"`
-	WorkingDir  string          `yaml:"working_dir"` // default: the source directory
+	WorkingDir  CommandTemplate `yaml:"working_dir"` // default: the source directory
 }
 
-// BuildOutput says where a built dependency's headers and libraries are.
+// BuildOutput says where a built dependency's headers and libraries are: each pattern that names
+// an existing directory is added to the dependency's include or lib dirs, in order.
 type BuildOutput struct {
-	IncludePatterns []string `yaml:"include_patterns"`
-	LibPatterns     []string `yaml:"lib_patterns"`
+	IncludePatterns []CommandTemplate `yaml:"include_patterns"`
+	LibPatterns     []CommandTemplate `yaml:"lib_patterns"`
 }
 
-// BuildPhases are the phases a build system may define.
-var BuildPhases = []string{"configure", "build", "test", "install", "clean"}
+// BuildPhases are the phases a build system may define, in the order they run. Only build is
+// required; clean runs only before an in-source build, and is required there.
+var BuildPhases = []string{"clean", "configure", "build", "install"}
 
 // LoadBuildSystem reads a build system file.
 func LoadBuildSystem(data []byte, source string) (*BuildSystem, error) {
@@ -58,6 +71,17 @@ func LoadBuildSystem(data []byte, source string) (*BuildSystem, error) {
 		}
 		if bs.Phases["build"] == nil {
 			d.errorf(nil, "build_system.phases has no build phase (phases: %s)", strings.Join(sortedNames(bs.Phases), ", "))
+		}
+		if bs.InSource && bs.Phases["clean"] == nil {
+			d.errorf(nil, "build_system.in_source needs a clean phase: it runs before every build of the source tree")
+		}
+		if !bs.InSource && bs.Phases["clean"] != nil {
+			d.errorf(nil, "build_system.phases.clean is run only for an in_source build system (others build each configuration in a new build directory)")
+		}
+		for name, value := range bs.Configurations {
+			if value == "" {
+				d.errorf(nil, "build_system.configurations.%s is empty", name)
+			}
 		}
 	}
 	if err := d.err("build system"); err != nil {

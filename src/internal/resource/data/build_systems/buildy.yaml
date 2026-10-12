@@ -1,19 +1,22 @@
 build_system:
   name: buildy
   description: "Buildy build system (recursive)"
-  
+
   detection:
     marker_files: ["buildy.yaml"]
     priority: 20
-  
+
+  # buildy builds any configuration by its name (${config}), custom ones included: the
+  # dependency's config (or build.override) defines them. It writes into the source tree's
+  # build/<platform>-<arch>-<config>/, one directory per configuration, and keeps its own cache.
   phases:
     build:
       command: "${buildy_exe} --platform ${platform} --architecture ${arch} --config ${config} ${config_file}"
       working_dir: "${source_dir}"
-      required: true
-  
+
   output:
     include_patterns:
       - "${source_dir}/include"
     lib_patterns:
-      - "${build_dir}/lib"
+      - "${source_dir}/build/${platform}-${arch}-${config}/lib"
+      - "${source_dir}/build/${platform}-${arch}-${config}/bin"

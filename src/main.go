@@ -106,7 +106,7 @@ func main() {
 	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
-	force := flag.BoolP("force", "f", false, "Force full rebuild, ignore cache and build state")
+	force := flag.BoolP("force", "f", false, "Rebuild everything: ignore the cache, and build fetched dependencies again")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
 	timeout := flag.Duration("timeout", 0, "Kill a task, or a dependency build step, that runs longer than this (e.g. 30m; 0: no limit)")
@@ -397,6 +397,7 @@ func main() {
 		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
 		// builds nothing, and uses what is already on disk.
 		depResolver.Timeout = *timeout
+		depResolver.Force = *force
 		depResolver.Update = *updateDeps
 		if err := depResolver.ResolveAll(ctx, *dryRun); err != nil {
 			exitIfInterrupted(ctx)

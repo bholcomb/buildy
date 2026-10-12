@@ -1,14 +1,13 @@
 package resource
 
 import (
-	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"buildy/internal/config"
 	"buildy/pkg/util"
@@ -19,13 +18,15 @@ type BuildSystemConfig = config.BuildSystem
 
 // BuildSystemManager manages build system detection and execution
 type BuildSystemManager struct {
-	systems map[string]*BuildSystemConfig
+	systems     map[string]*BuildSystemConfig
+	definitions map[string]string // name: SHA-256 of the definition, in each build's marker
 }
 
 // NewBuildSystemManager loads the built-in build systems. Every one must load.
 func NewBuildSystemManager() (*BuildSystemManager, error) {
 	bsm := &BuildSystemManager{
-		systems: make(map[string]*BuildSystemConfig),
+		systems:     make(map[string]*BuildSystemConfig),
+		definitions: make(map[string]string),
 	}
 	files, err := ListEmbeddedFiles("build_systems")
 	if err != nil {
@@ -80,6 +81,8 @@ func (bsm *BuildSystemManager) add(data []byte, source string) error {
 		return err
 	}
 	bsm.systems[bs.Name] = bs
+	hash := sha256.Sum256(data)
+	bsm.definitions[bs.Name] = hex.EncodeToString(hash[:])
 	util.LogVerbose("Loaded build system: %s - %s (%s)", bs.Name, bs.Description, source)
 	return nil
 }
@@ -124,147 +127,9 @@ func (bsm *BuildSystemManager) GetBuildSystem(name string) *BuildSystemConfig {
 	return bsm.systems[name]
 }
 
-// ExecuteWithContext runs phases of a build system, with additional variables. ctx stops it (an
-// interrupt), and each phase may run for timeout (0: no limit).
-func (bsm *BuildSystemManager) ExecuteWithContext(
-	ctx context.Context,
-	bsConfig *BuildSystemConfig,
-	sourceDir, buildDir, installDir string,
-	execSpec util.ExecSpec,
-	mounts []string,
-	phases []string,
-	extraArgs []string,
-	variables map[string]string,
-	timeout time.Duration,
-) error {
-	// Get number of parallel jobs
-	jobs := runtime.NumCPU()
-
-	// If no phases specified, run required phases in order
-	if len(phases) == 0 {
-		phases = []string{"configure", "build"}
-	}
-
-	// Execute each phase in order
-	for _, phaseName := range phases {
-		phase := bsConfig.Phases[phaseName]
-		if phase == nil {
-			if phaseName == "configure" || phaseName == "build" {
-				return fmt.Errorf("required phase '%s' not defined for build system '%s'", phaseName, bsConfig.Name)
-			}
-			util.LogInfo("Skipping undefined phase '%s' for build system '%s'", phaseName, bsConfig.Name)
-			continue
-		}
-
-		// "true" is the no-op of a phase a build system doesn't need (make's configure)
-		if phase.Command.Text == "true" {
-			continue
-		}
-
-		// Determine working directory
-		workDir := sourceDir
-		if phase.WorkingDir != "" {
-			workDir = bsm.substituteVariablesWithContext(phase.WorkingDir, sourceDir, buildDir, installDir, jobs, nil, nil, variables)
-		}
-
-		values := map[string][]string{
-			"source_dir":  {sourceDir},
-			"build_dir":   {buildDir},
-			"install_dir": {installDir},
-			"jobs":        {fmt.Sprint(jobs)},
-			"args":        append(append([]string{}, phase.DefaultArgs...), extraArgs...),
-		}
-		for key, value := range variables {
-			values[key] = []string{value}
-		}
-		args, err := phase.Command.Expand(config.MapValues(values))
-		if err != nil {
-			return fmt.Errorf("the %s phase of build system %s: %w", phaseName, bsConfig.Name, err)
-		}
-		cmd := util.Command{Args: args, Dir: workDir}
-
-		util.LogInfo("Executing %s phase: %s", phaseName, cmd)
-
-		// Execute the command
-		result, err := util.Run(ctx, execSpec, cmd, workDir, mounts, timeout)
-		if err != nil {
-			return fmt.Errorf("phase '%s' failed: %w", phaseName, err)
-		}
-
-		if result.ReturnCode != 0 {
-			return fmt.Errorf("phase '%s' failed with exit code %d:\n%s", phaseName, result.ReturnCode, result.Output)
-		}
-
-		util.LogInfo("Phase '%s' completed successfully", phaseName)
-	}
-
-	return nil
-}
-
-// substituteVariables replaces placeholders in a command string
-func (bsm *BuildSystemManager) substituteVariables(
-	template string,
-	sourceDir, buildDir, installDir string,
-	jobs int,
-	extraArgs, defaultArgs []string,
-) string {
-	return bsm.substituteVariablesWithContext(template, sourceDir, buildDir, installDir, jobs, extraArgs, defaultArgs, nil)
-}
-
-// substituteVariablesWithContext replaces placeholders with additional context variables
-func (bsm *BuildSystemManager) substituteVariablesWithContext(
-	template string,
-	sourceDir, buildDir, installDir string,
-	jobs int,
-	extraArgs, defaultArgs []string,
-	context map[string]string,
-) string {
-	// Combine default args with extra args
-	allArgs := append(defaultArgs, extraArgs...)
-	argsStr := strings.Join(allArgs, " ")
-
-	result := template
-	result = strings.ReplaceAll(result, "${source_dir}", sourceDir)
-	result = strings.ReplaceAll(result, "${build_dir}", buildDir)
-	result = strings.ReplaceAll(result, "${install_dir}", installDir)
-	result = strings.ReplaceAll(result, "${jobs}", fmt.Sprintf("%d", jobs))
-	result = strings.ReplaceAll(result, "${args}", argsStr)
-
-	// Apply additional context variables, in name order
-	keys := make([]string, 0, len(context))
-	for key := range context {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		result = strings.ReplaceAll(result, "${"+key+"}", context[key])
-	}
-
-	return result
-}
-
-// GetOutputPaths returns the resolved include and lib directories for a built dependency
-func (bsm *BuildSystemManager) GetOutputPaths(
-	config *BuildSystemConfig,
-	sourceDir, buildDir, installDir string,
-) (includeDirs, libDirs []string) {
-	jobs := 1 // Not used for path substitution
-
-	for _, pattern := range config.Output.IncludePatterns {
-		resolved := bsm.substituteVariables(pattern, sourceDir, buildDir, installDir, jobs, nil, nil)
-		if _, err := os.Stat(resolved); err == nil {
-			includeDirs = append(includeDirs, resolved)
-		}
-	}
-
-	for _, pattern := range config.Output.LibPatterns {
-		resolved := bsm.substituteVariables(pattern, sourceDir, buildDir, installDir, jobs, nil, nil)
-		if _, err := os.Stat(resolved); err == nil {
-			libDirs = append(libDirs, resolved)
-		}
-	}
-
-	return includeDirs, libDirs
+// definition returns the SHA-256 of a build system's definition.
+func (bsm *BuildSystemManager) definition(name string) string {
+	return bsm.definitions[name]
 }
 
 // ListBuildSystems returns all loaded build system names

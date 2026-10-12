@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.10)
+project(dv C)
+include(GNUInstallDirs)
+add_library(dv STATIC dv.c)
+target_include_directories(dv PRIVATE include)
+install(TARGETS dv ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES include/dv.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

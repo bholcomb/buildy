@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -62,10 +63,13 @@ type DependencyResolver struct {
 	buildSystemManager *BuildSystemManager
 	resolved           map[string]*ResolvedDependency
 	configs            map[string]*DependencyConfig
-	plan               bool // Dry run: report fetches and builds instead of doing them
+	tools              *util.ToolIdentities // What each build phase runs, for build markers
+	plan               bool                 // Dry run: report fetches and builds instead of doing them
 
 	// Timeout is how long a dependency build phase may run (0: no limit)
 	Timeout time.Duration
+	// Force builds every fetched dependency again, whatever its marker says (--force)
+	Force bool
 	// Update fetches the dependencies that can move again: git branches and tags, and archives
 	// without a checksum (--update-deps)
 	Update bool
@@ -90,6 +94,7 @@ func NewDependencyResolver(platform, architecture, toolchain, configuration, cac
 		buildSystemManager: bsm,
 		resolved:           make(map[string]*ResolvedDependency),
 		configs:            make(map[string]*DependencyConfig),
+		tools:              util.NewToolIdentities(util.HashFile),
 	}, nil
 }
 
@@ -300,175 +305,187 @@ func (dr *DependencyResolver) resolveProvided(name string, section DependencySec
 		{&resolved.Frameworks, section.Frameworks, "frameworks"},
 		{&resolved.Defines, section.Defines, "defines"},
 	} {
-		if err := dr.resolveAll(l.dst, l.values, varEnv, name, l.field); err != nil {
+		var values []string
+		if err := dr.resolveAll(&values, l.values, varEnv, name, l.field); err != nil {
 			return err
+		}
+		if l.field == "include_dirs" || l.field == "lib_dirs" {
+			*l.dst = appendNew(*l.dst, values...)
+		} else {
+			*l.dst = append(*l.dst, values...)
 		}
 	}
 	return nil
 }
 
-// resolveFetchDependency resolves a fetch dependency
+// resolveFetchDependency fetches a dependency, builds it if it has a build system, and resolves
+// what it provides.
 func (dr *DependencyResolver) resolveFetchDependency(ctx context.Context, name string, dep *DependencyConfig, section DependencySection, varEnv *util.VariableEnvironment, resolved *ResolvedDependency) error {
-	// Determine destination
 	dest := filepath.Join(dr.cacheDir, "deps", name)
+	resolved.SourceGit = section.Git
+	resolved.SourceRef = section.Ref
+	resolved.SourceURL = section.URL
+	resolved.Path = dest
 
-	if dr.plan {
-		fetched := false
+	// The fetched tree's identity, for its build's marker: its commit, or its archive's hash
+	var source string
+	switch {
+	case dr.plan:
 		from := section.URL
 		if section.Git != "" {
 			from = section.Git + " @ " + refName(section.Ref)
-			fetched = dr.fetchManager.FetchedGit(section.Git, section.Ref, dest) != "" && (!dr.Update || isCommitID(section.Ref))
-		} else {
-			fetched = dr.fetchManager.ExtractedURL(section.URL, dest) != "" && !(dr.Update && section.Checksum == "")
+			if commit := dr.fetchManager.FetchedGit(section.Git, section.Ref, dest); commit != "" && (!dr.Update || isCommitID(section.Ref)) {
+				source = "git " + commit
+			}
+		} else if hash := dr.fetchManager.ExtractedURL(section.URL, dest); hash != "" && !(dr.Update && section.Checksum == "") {
+			source = "sha256 " + hash
 		}
-		if !fetched {
+		if source == "" {
 			util.LogProgress("Dry run: would fetch %s from %s into %s", name, from, dest)
 		}
-	} else if section.Git != "" {
+	case section.Git != "":
 		commit, err := dr.fetchManager.FetchGit(ctx, section.Git, section.Ref, dest, dr.Update)
 		if err != nil {
 			return fmt.Errorf("failed to fetch '%s': %w", name, err)
 		}
 		util.LogInfo("Dependency %s: %s @ %s is commit %s", name, section.Git, refName(section.Ref), commit)
-	} else if _, err := dr.fetchManager.FetchURL(ctx, section.URL, section.Checksum, dest, dr.Update); err != nil {
-		return fmt.Errorf("failed to fetch '%s': %w", name, err)
+		source = "git " + commit
+	default:
+		hash, err := dr.fetchManager.FetchURL(ctx, section.URL, section.Checksum, dest, dr.Update)
+		if err != nil {
+			return fmt.Errorf("failed to fetch '%s': %w", name, err)
+		}
+		source = "sha256 " + hash
 	}
-	resolved.SourceGit = section.Git
-	resolved.SourceRef = section.Ref
-	resolved.SourceURL = section.URL
 
-	resolved.Path = dest
-
-	// Set dep_dir variable for path resolution
 	varEnv.SetVariable("dep_dir", dest, "dependency")
-
-	// Handle build configuration
+	var includeDirs, libDirs []string
 	if section.Build != nil && section.Build.System != "" && section.Build.System != "none" {
-		// Build using the specified build system (cmake, make, meson, buildy, etc.)
-		if err := dr.buildFetchedDep(ctx, name, section, dest, resolved); err != nil {
+		var err error
+		if includeDirs, libDirs, err = dr.buildFetchedDep(ctx, name, section, dest, source, varEnv); err != nil {
 			return fmt.Errorf("failed to build '%s': %w", name, err)
 		}
+	} else if section.Build != nil && (section.Build.Override != "" || len(section.Build.Args) > 0 || len(section.Build.Configurations) > 0) {
+		return fmt.Errorf("dependency '%s': build.override, build.args and build.configurations need a build.system", name)
 	}
 
-	return dr.resolveProvided(name, section, varEnv, resolved)
+	// The dirs the definition names, then the build system's output dirs it doesn't name
+	if err := dr.resolveProvided(name, section, varEnv, resolved); err != nil {
+		return err
+	}
+	resolved.IncludeDirs = appendNew(resolved.IncludeDirs, includeDirs...)
+	resolved.LibDirs = appendNew(resolved.LibDirs, libDirs...)
+	return nil
 }
 
-// buildFetchedDep builds a fetched dependency using its build system
-// Builds both debug and release configurations so users can link against either
-func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, section DependencySection, dest string, resolved *ResolvedDependency) error {
-	if dr.buildSystemManager == nil {
-		return fmt.Errorf("BuildSystemManager not initialized")
+// buildFetchedDep builds the configuration being built of a fetched dependency with its build
+// system, unless its marker says that build is done, and returns the build system's output
+// directories that exist. source is the fetched tree's identity ("" in a dry run when it isn't
+// fetched yet).
+func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, section DependencySection, dest, source string, varEnv *util.VariableEnvironment) (includeDirs, libDirs []string, err error) {
+	build := section.Build
+	if dr.plan && source == "" {
+		util.LogProgress("Dry run: would build %s (%s) with %s", name, dr.configuration, build.System)
+		return nil, nil, nil
 	}
 
-	buildSystemName := section.Build.System
-
-	if dr.plan && !fileExists(dest) {
-		util.LogProgress("Dry run: would build %s (debug, release) with %s", name, buildSystemName)
-		return nil
-	}
-
-	var bsConfig *BuildSystemConfig
-	if buildSystemName == "auto" || buildSystemName == "" {
-		bsConfig = dr.buildSystemManager.Detect(dest)
-		if bsConfig == nil {
-			return fmt.Errorf("could not detect the build system of %s in %s; set build.system", name, dest)
+	var bs *BuildSystemConfig
+	if build.System == "auto" {
+		bs = dr.buildSystemManager.Detect(dest)
+		if bs == nil {
+			return nil, nil, fmt.Errorf("could not detect the build system of %s in %s; set build.system", name, dest)
 		}
-		util.LogInfo("Auto-detected build system: %s for %s", bsConfig.Name, name)
-	} else {
-		bsConfig = dr.buildSystemManager.GetBuildSystem(buildSystemName)
-		if bsConfig == nil {
-			return fmt.Errorf("unknown build system '%s' for %s", buildSystemName, name)
+		util.LogInfo("Auto-detected build system: %s for %s", bs.Name, name)
+	} else if bs = dr.buildSystemManager.GetBuildSystem(build.System); bs == nil {
+		return nil, nil, fmt.Errorf("unknown build system '%s' (known: %s)", build.System, strings.Join(dr.buildSystemManager.ListBuildSystems(), ", "))
+	}
+
+	// The build system's name for the configuration being built
+	buildType := ""
+	if bs.Configurations != nil {
+		buildType = build.Configurations[dr.configuration]
+		if buildType == "" {
+			buildType = bs.Configurations[dr.configuration]
+		}
+		if buildType == "" {
+			return nil, nil, fmt.Errorf("build system %s has no configuration for buildy's '%s': map it in the dependency's build.configurations (%s)",
+				bs.Name, dr.configuration, configurationExample(bs, dr.configuration))
+		}
+	} else if len(build.Configurations) > 0 {
+		return nil, nil, fmt.Errorf("build system %s has no configurations, so build.configurations means nothing; pass configuration-dependent settings in build.args with ${config}", bs.Name)
+	}
+
+	override := ""
+	if build.Override != "" {
+		if bs.Name != "buildy" {
+			return nil, nil, fmt.Errorf("build.override is a buildy config, for build system buildy, not %s", bs.Name)
+		}
+		override = filepath.Join(dr.workspaceRoot, "buildy_config", "dependencies", build.Override)
+		if !fileExists(override) {
+			return nil, nil, fmt.Errorf("build.override: %s does not exist", override)
 		}
 	}
-
-	if dr.plan {
-		util.LogProgress("Dry run: would build %s (debug, release) with %s", name, bsConfig.Name)
-		includeDirs, libDirs := dr.buildSystemManager.GetOutputPaths(bsConfig, dest,
-			filepath.Join(dest, "_build", "debug"), filepath.Join(dest, "_install", "debug"))
-		resolved.IncludeDirs = append(resolved.IncludeDirs, includeDirs...)
-		resolved.LibDirs = append(resolved.LibDirs, libDirs...)
-		return nil
+	var args []string
+	if err := dr.resolveAll(&args, build.Args, varEnv, name, "build.args"); err != nil {
+		return nil, nil, err
 	}
-
-	util.LogProgress("=== Building dependency: %s (using %s) ===", name, bsConfig.Name)
-
-	// Determine execution environment: natively, or in Docker with the workspace and the cache
-	// directory mounted at their host paths
 	execSpec := util.ExecSpec{}
 	if section.Execution != nil {
 		execSpec = *section.Execution
 	}
-	mounts := dr.dockerMounts()
 
-	// Build both debug and release configurations
-	configurations := []string{"debug", "release"}
-
-	for _, config := range configurations {
-		// Set up per-configuration directories
-		buildDir := filepath.Join(dest, "_build", config)
-		installDir := filepath.Join(dest, "_install", config)
-		os.MkdirAll(buildDir, 0755)
-		os.MkdirAll(installDir, 0755)
-
-		// The build's additional variables
-		variables := map[string]string{
-			"config":   config,
-			"platform": dr.platform,
-			"arch":     dr.architecture,
+	b := newDependencyBuild(name, bs, dr.buildSystemManager.definition(bs.Name), source, dest,
+		dr.platform, dr.architecture, dr.configuration, buildType, args, override, execSpec, dr.dockerMounts())
+	if bs.Name == "buildy" {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to find buildy executable: %w", err)
 		}
+		b.values["buildy_exe"] = []string{exe}
+	}
+	varEnv.SetVariable("dep_build_dir", b.buildDir, "dependency")
+	varEnv.SetVariable("dep_install_dir", b.installDir, "dependency")
 
-		// For buildy build system, add the executable path and handle override config
-		if bsConfig.Name == "buildy" {
-			buildyExe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("failed to find buildy executable: %w", err)
-			}
-			variables["buildy_exe"] = buildyExe
-
-			// If override config is specified, pass it as the config file argument
-			// The source_dir remains the fetched dependency directory
-			if section.Build.Override != "" {
-				overrideConfig := filepath.Join(dr.workspaceRoot, "buildy_config", "dependencies", section.Build.Override)
-				variables["config_file"] = overrideConfig
-			} else {
-				// No override - use the default buildy.yaml in the source directory
-				variables["config_file"] = ""
-			}
+	if err := b.identify(ctx, dr.tools); err != nil {
+		return nil, nil, err
+	}
+	switch {
+	case !dr.Force && b.upToDate():
+		util.LogInfo("Dependency %s (%s) is up to date", name, dr.configuration)
+	case dr.plan:
+		util.LogProgress("Dry run: would build %s (%s) with %s", name, dr.configuration, bs.Name)
+	default:
+		util.LogProgress("=== Building dependency: %s (%s, using %s) ===", name, dr.configuration, bs.Name)
+		start := time.Now()
+		if err := b.run(ctx, dr.Timeout); err != nil {
+			return nil, nil, err
 		}
-
-		// Determine phases - buildy only has "build", others have "configure" and "build"
-		var phases []string
-		if bsConfig.Name == "buildy" {
-			phases = []string{"build"}
-		} else {
-			phases = []string{"configure", "build"}
-		}
-
-		// Build configuration-specific args
-		extraArgs := append([]string{}, section.Build.Args...)
-		if bsConfig.Name == "cmake" {
-			// Override CMAKE_BUILD_TYPE for each configuration
-			extraArgs = append(extraArgs, fmt.Sprintf("-DCMAKE_BUILD_TYPE=%s", strings.Title(config)))
-		}
-
-		util.LogInfo("Building %s (%s) with %s", name, config, bsConfig.Name)
-		if err := dr.buildSystemManager.ExecuteWithContext(ctx, bsConfig, dest, buildDir, installDir, execSpec, mounts, phases, extraArgs, variables, dr.Timeout); err != nil {
-			return fmt.Errorf("build failed for %s (%s): %w", name, config, err)
-		}
-
-		util.LogInfo("Build completed for %s (%s)", name, config)
+		util.LogProgress("=== Dependency %s built (%.1fs) ===", name, time.Since(start).Seconds())
 	}
 
-	// Get output paths from the debug build (headers are typically the same)
-	// Library paths will be per-configuration in the dependency config
-	debugBuildDir := filepath.Join(dest, "_build", "debug")
-	debugInstallDir := filepath.Join(dest, "_install", "debug")
-	includeDirs, libDirs := dr.buildSystemManager.GetOutputPaths(bsConfig, dest, debugBuildDir, debugInstallDir)
-	resolved.IncludeDirs = append(resolved.IncludeDirs, includeDirs...)
-	resolved.LibDirs = append(resolved.LibDirs, libDirs...)
+	return b.outputs()
+}
 
-	util.LogProgress("=== Dependency %s built successfully ===", name)
-	return nil
+// configurationExample shows a build.configurations entry for configuration.
+func configurationExample(bs *BuildSystemConfig, configuration string) string {
+	value := bs.Configurations["release"]
+	if value == "" {
+		for _, v := range bs.Configurations {
+			value = v
+			break
+		}
+	}
+	return fmt.Sprintf("build: {configurations: {%s: %s}}", configuration, value)
+}
+
+// appendNew appends the values that dst doesn't have yet.
+func appendNew(dst []string, values ...string) []string {
+	for _, v := range values {
+		if !slices.Contains(dst, v) {
+			dst = append(dst, v)
+		}
+	}
+	return dst
 }
 
 // resolvePkgConfig uses pkg-config to get include dirs, lib dirs, and libs
@@ -515,7 +532,7 @@ func (dr *DependencyResolver) resolveVariables(text string, varEnv *util.Variabl
 	var errors []string
 	resolved := varEnv.ResolveString(text, &errors, 10)
 	if len(errors) > 0 {
-		return "", fmt.Errorf("dependency '%s': %s of %q (a dependency sees ${name}, ${version}, ${platform}, ${arch}, ${config}, ${toolchain}, ${root}, ${dep_dir}, ${workspace_root} and the workspace's variables)",
+		return "", fmt.Errorf("dependency '%s': %s of %q (a dependency sees ${name}, ${version}, ${platform}, ${arch}, ${config}, ${toolchain}, ${root}, ${dep_dir}, ${dep_build_dir}, ${dep_install_dir}, ${workspace_root} and the workspace's variables)",
 			name, strings.Join(errors, "; "), field)
 	}
 	return resolved, nil
