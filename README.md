@@ -98,9 +98,9 @@ executable it holds on your `PATH`:
 
 | Platform | Archive |
 |----------|---------|
-| Linux x86-64 | `buildy-0.2.0-linux-x64.tar.gz` |
-| Windows x64 | `buildy-0.2.0-win-x64.zip` |
-| macOS on Apple Silicon | `buildy-0.2.0-osx-arm64.tar.gz` |
+| Linux x86-64 | `buildy-<version>-linux-x64.tar.gz` |
+| Windows x64 | `buildy-<version>-win-x64.zip` |
+| macOS on Apple Silicon | `buildy-<version>-osx-arm64.tar.gz` |
 
 `SHA256SUMS` in the release has each archive's checksum. The Linux binary is static and runs on any
 distribution. The macOS binary isn't notarized: if you downloaded it with a browser, run
@@ -145,7 +145,7 @@ for another platform and architecture. `--list-toolchains` lists the compilers i
 
 ## Status
 
-Buildy is at version 0.2.0. Not there yet:
+Buildy is young: expect it to change before 1.0. Not there yet:
 
 - A target can't choose its own toolchain: each module has one, and a target of another language
   gets that language's default.
