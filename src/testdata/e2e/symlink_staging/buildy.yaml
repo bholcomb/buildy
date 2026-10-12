@@ -1,0 +1,10 @@
+# Whether staging links or copies depends on the host, not on the platform being built for.
+project:
+  name: symlink_staging
+
+staging:
+  name: pkg
+  use_symlinks: true
+  contents:
+    - folder: docs
+      files: ["readme.txt"]

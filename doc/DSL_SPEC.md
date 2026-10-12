@@ -1450,8 +1450,13 @@ Symlinks provide fast developer iteration:
 | `use_symlink: true/false` (per item) | Override the staging default |
 
 **Platform Notes:**
-- **Linux/macOS**: Symlinks work as expected
-- **Windows**: Always uses copy (symlinks require admin or Developer Mode)
+- The machine buildy runs on decides, not the platform being built for: on a Linux or macOS host
+  symlinks work as expected (building for Windows too), and a **Windows host** always copies
+  (symlinks there need administrator rights or Developer Mode).
+- A staging symlink points at the absolute path of what it stages. An install stores what links
+  point to (`follow_symlinks: true`, the default); `follow_symlinks: false` stores the links
+  themselves, which only make sense on the machine that built them, and is an error for a Windows
+  package.
 
 ### Cache Integration
 
@@ -1500,7 +1505,8 @@ Entries are the staged files' paths relative to the staging directory, with forw
 no `./` prefix, in name order, each directory before its contents. Every entry has the modification time
 2000-01-01 00:00:00 UTC and owner 0, and keeps its permission bits, so the same staging area
 always gives the same archive. With `follow_symlinks: true` (the default) a symlink is stored as
-the file or directory it points to; with `false`, as a link.
+the file or directory it points to; with `false`, as a link (an error when building for
+Windows).
 
 ### Filename Variables
 

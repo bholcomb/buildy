@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -110,10 +111,10 @@ func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 	return nil
 }
 
-// isWindows reports whether the target platform is Windows
-func (tg *TaskGenerator) isWindows() bool {
-	return tg.Platform == config.Windows
-}
+// hostCanSymlink reports whether staging can make symlinks: not on a Windows host, where a
+// symlink needs administrator rights or developer mode. The host decides, not the target: a
+// Windows package staged on Linux may use symlinks (its install stores what they point to).
+var hostCanSymlink = runtime.GOOS != "windows"
 
 // getBuildContext returns the context filtered lists are resolved against
 func (tg *TaskGenerator) getBuildContext() BuildContext {
@@ -988,8 +989,7 @@ func (tg *TaskGenerator) generateStagingTasks(staging *config.Staging, outputDir
 		destination = tg.absolute(resolved)
 	}
 
-	// Windows always copies (symlinks require admin or developer mode)
-	defaultUseSymlinks := staging.UseSymlinks && !tg.isWindows()
+	defaultUseSymlinks := staging.UseSymlinks
 
 	tasks, err := tg.processStagingContents(staging.Contents, destination, "", defaultUseSymlinks, stagingVarEnv)
 	if err != nil {
@@ -1006,10 +1006,10 @@ func (tg *TaskGenerator) generateStagingTasks(staging *config.Staging, outputDir
 	return tasks, nil
 }
 
-// useSymlink is an item's choice of symlink or copy: its own, else the staging area's. Windows
-// always copies.
+// useSymlink is an item's choice of symlink or copy: its own, else the staging area's. A Windows
+// host always copies.
 func (tg *TaskGenerator) useSymlink(own *bool, def bool) bool {
-	if tg.isWindows() {
+	if !hostCanSymlink {
 		return false
 	}
 	if own != nil {
@@ -1195,6 +1195,10 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 			format = "tar.gz"
 		}
 		followSymlinks := inst.FollowSymlinks == nil || *inst.FollowSymlinks
+		if !followSymlinks && tg.Platform == config.Windows {
+			return nil, fmt.Errorf("install '%s' in module %s: follow_symlinks: false would put symlinks in a package for windows, "+
+				"which doesn't use them; leave follow_symlinks out (the archive stores what a link points to)", name, tg.moduleName())
+		}
 
 		filename := name
 		if inst.Filename != "" {

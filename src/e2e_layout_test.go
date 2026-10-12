@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -133,5 +134,25 @@ func TestE2EInstallShipsOnlyWhatIsStaged(t *testing.T) {
 	}
 	if out := mustBuildy(t, dir); !strings.Contains(out, "0 executed") {
 		t.Errorf("a no-op build executed tasks:\n%s", out)
+	}
+}
+
+// Staging links on a host that can, whatever the platform being built for: building for Windows on
+// Linux or macOS links too. (On a Windows host it always copies.)
+func TestE2EStagingSymlinksFollowTheHost(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: a Windows host copies")
+	}
+	dir := fixture(t, "symlink_staging")
+	for _, platform := range []string{"linux", "windows"} {
+		mustBuildy(t, dir, "--platform", platform)
+		staged := filepath.Join(dir, "build", platform+"-"+detectArchitecture()+"-debug", "staging", "docs", "readme.txt")
+		info, err := os.Lstat(staged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("building for %s staged a copy, want a symlink", platform)
+		}
 	}
 }
