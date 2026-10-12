@@ -1,0 +1,5 @@
+artifacts:
+  copy:
+    - name: data
+      sources: ["data/*.dat"]
+      destination: "${out_dir}/data"

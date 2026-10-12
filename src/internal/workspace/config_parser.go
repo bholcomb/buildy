@@ -502,17 +502,65 @@ func Variables(file *config.File, ctx BuildContext, workspaceRoot string, cliDef
 // getOutputDir resolves the module's output directory: output.pattern, by default
 // ${base_dir}/<platform>-<arch>-<config>
 func (cp *ConfigParser) getOutputDir(file *config.File) (string, error) {
-	pattern := fmt.Sprintf("${base_dir}/%s-%s-%s", cp.Platform, cp.Architecture, cp.Configuration)
+	root := ""
+	if cp.Workspace != nil {
+		root = cp.Workspace.RootDir
+	}
+	return outputDir(file, cp.buildContext(), cp.VarEnv, root)
+}
+
+// outputDir resolves a config's output directory for a build with its variables: output.pattern,
+// by default ${base_dir}/<platform>-<arch>-<config>, relative to the workspace root.
+func outputDir(file *config.File, ctx BuildContext, env *util.VariableEnvironment, root string) (string, error) {
+	pattern := fmt.Sprintf("${base_dir}/%s-%s-%s", ctx.Platform, ctx.Architecture, ctx.Configuration)
 	if file.Output.Pattern != "" {
 		pattern = file.Output.Pattern
 	}
-	resolved, err := resolveStrict(cp.VarEnv, pattern, "output.pattern")
+	resolved, err := resolveStrict(env, pattern, "output.pattern")
 	if err != nil {
 		return "", err
 	}
-	if cp.Workspace != nil && !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(cp.Workspace.RootDir, resolved)
+	if root != "" && !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(root, resolved)
 	}
 	util.LogInfo("Output directory pattern '%s' resolved to '%s'", pattern, resolved)
-	return resolved, nil
+	return filepath.Clean(resolved), nil
+}
+
+// OutputRoots returns the directories that hold the workspace's build outputs, for --clean: for the
+// root config and each module (whose output is the root's unless it sets its own), the output base
+// directory (output.base_dir, build/) when its output directory lies in it, as in the default
+// layout, so every configuration's; otherwise its output directory for ctx. Load the modules first.
+func (ws *Workspace) OutputRoots(ctx BuildContext, cliDefines map[string]string) ([]string, error) {
+	files := []*config.File{ws.Config.File}
+	paths := make([]string, 0, len(ws.Modules))
+	for path := range ws.Modules {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		files = append(files, config.Inherit(ws.Config.File, ws.Modules[path].File))
+	}
+	var roots []string
+	for _, file := range files {
+		env, err := Variables(file, ctx, ws.RootDir, cliDefines)
+		if err != nil {
+			return nil, err
+		}
+		dir, err := outputDir(file, ctx, env, ws.RootDir)
+		if err != nil {
+			return nil, err
+		}
+		base := "build"
+		if file.Output.BaseDir != "" {
+			base = file.Output.BaseDir
+		}
+		if base = filepath.Join(ws.RootDir, base); dir == base || strings.HasPrefix(dir, base+string(filepath.Separator)) {
+			dir = base
+		}
+		if !hasString(roots, dir) {
+			roots = append(roots, dir)
+		}
+	}
+	return roots, nil
 }

@@ -1,0 +1,20 @@
+# --clean removes what buildy produced, under the workspace root, and nothing else (finding 5.2).
+# The test adds directories named build, dist and staging that buildy never configured.
+project:
+  name: clean_layout
+
+workspace:
+  modules: [app]
+
+staging:
+  name: pkg
+  destination: "dist"
+  contents:
+    - folder: docs
+      files: ["docs/*.txt"]
+
+install:
+  - name: pkg
+    staging: pkg
+    destination: "dist"
+    format: tar.gz

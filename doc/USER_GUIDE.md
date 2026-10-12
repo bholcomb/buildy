@@ -53,7 +53,7 @@ buildy -n 3               # Info level logging (default is 2=warning)
 buildy -n 4               # Verbose level logging
 buildy -n 5               # Debug level logging
 buildy --force            # Ignore cache, rebuild everything
-buildy --clean            # Clean build artifacts
+buildy --clean            # Remove what buildy built (output directory, staged and installed files)
 buildy --dry-run          # Show what would be built
 ```
 
@@ -1207,13 +1207,8 @@ buildy --force            # Ignore the cache and dependency build records, rebui
 buildy --cache-dir /path  # Custom cache directory
 ```
 
-Set cache directory via environment:
-
-```bash
-export BUILDY_CACHE_DIR=/path/to/cache
-```
-
-Default cache location: `.buildy_cache/` in the project root.
+The cache directory is `.buildy_cache/` in the workspace root by default. A relative `--cache-dir`
+is relative to the workspace root (not the current directory), an absolute one is used as it is.
 
 ## CLI Reference
 
@@ -1229,10 +1224,25 @@ buildy --platform linux --arch x86_64  # Specify platform/arch
 ### Cache and Clean
 
 ```bash
-buildy --clean                   # Clean build artifacts
+buildy --clean                   # Remove what buildy built in the workspace
+buildy --clean-all               # The same, and the cache directory (fetched dependencies too)
 buildy --force                   # Force rebuild
 buildy --cache-stats             # Show cache info
 ```
+
+`--clean` works from anywhere in the workspace and removes only what buildy produced, inside the
+workspace root:
+
+- the output directory: `build/` (`output.base_dir`) with every configuration's outputs, or, for an
+  `output.pattern` outside it, the output directory of the build context given (`-c`, `-p`, `-a`);
+- every other file the cache records a task producing: what staging, installs and copies put
+  outside the output directory (`dist/`, `${workspace}/bin`), and the directories that leaves
+  empty. Files of yours in those directories stay.
+
+It never removes a directory buildy didn't configure (a `build/`, `dist/` or `staging/` of your
+own), anything outside the workspace root, or an output directory holding a module's config.
+Outside any workspace it refuses and removes nothing. `--clean-all` also removes the cache
+directory, if it is inside the workspace root.
 
 ### Dependencies
 
@@ -1280,13 +1290,14 @@ longer, the same way.
 | `--timeout` | | Kill a task, or a dependency build step, that runs longer than this Go duration (`90s`, `30m`, `2h`); no limit by default |
 | `--force` | `-f` | Ignore the cache and the dependency build records: rebuild everything |
 | `--update-deps` | | Fetch the dependencies that can move again: git branches and tags, archives without a checksum |
-| `--clean` | | Clean artifacts |
+| `--clean` | | Remove what buildy built in the workspace (below), and nothing else |
+| `--clean-all` | | `--clean`, and the cache directory: fetched dependencies, their builds, the cache records |
 | `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for; fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
 | `--define` | `-D` | Define variable (VAR=value) |
 | `--list-toolchains` | | List available toolchains |
-| `--cache-dir` | | Cache directory |
+| `--cache-dir` | | Cache directory: relative to the workspace root, or absolute (default `.buildy_cache`) |
 | `--cache-stats` | | Show cache statistics |
 | `--add-data-dir` | | Additional data directory |
 

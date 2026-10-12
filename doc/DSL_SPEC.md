@@ -2636,7 +2636,8 @@ buildy --timeout 30m       # Kill a task or dependency build step that runs long
 buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging
 buildy --dry-run           # Plan: what would be fetched and built, and the tasks in an order they can run in
-buildy --clean             # Clean build outputs
+buildy --clean             # Remove what buildy built in the workspace (output directory, staged and installed files)
+buildy --clean-all         # The same, and the cache directory (fetched dependencies too)
 buildy --force             # Ignore the cache and dependency build records, rebuild all
 ```
 

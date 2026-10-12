@@ -175,3 +175,82 @@ func TestE2EBuildFromInsideAModule(t *testing.T) {
 		}
 	}
 }
+
+// Finding 5.2: --clean, run anywhere in the workspace, removes the output directory and the files
+// buildy staged, installed or copied elsewhere, and nothing it didn't produce: directories named
+// build, dist or staging that buildy never configured stay, and so do files of the user's in a
+// directory buildy stages into. With no workspace it refuses. --clean-all removes the cache too.
+func TestE2ECleanRemovesOnlyWhatBuildyMade(t *testing.T) {
+	dir := fixture(t, "clean_layout")
+	theirs := []string{
+		"app/build/keep.txt", "app/dist/keep.txt", "app/staging/keep.txt",
+		"staging/keep.txt", "dist/mine.txt", "docs/build/keep.txt",
+	}
+	for _, f := range theirs {
+		writeFile(t, filepath.Join(dir, f), "not buildy's")
+	}
+	mustBuildy(t, dir)
+	made := []string{"dist/docs/readme.txt", "dist/pkg.tar.gz", "build/" + filepath.Base(outDir(dir, "debug")) + "/data/a.dat"}
+	for _, f := range made {
+		if !exists(filepath.Join(dir, f)) {
+			t.Fatalf("the build didn't make %s", f)
+		}
+	}
+
+	mustBuildy(t, filepath.Join(dir, "app"), "--clean")
+	for _, f := range theirs {
+		if !exists(filepath.Join(dir, f)) {
+			t.Errorf("--clean removed %s, which buildy didn't make", f)
+		}
+	}
+	for _, f := range append(made, "build", "dist/docs") {
+		if exists(filepath.Join(dir, f)) {
+			t.Errorf("--clean left %s", f)
+		}
+	}
+	if !exists(filepath.Join(dir, ".buildy_cache")) {
+		t.Error("--clean removed the cache directory")
+	}
+	if exists(filepath.Join(dir, "app", ".buildy_cache")) {
+		t.Error("--clean made a cache directory in the module")
+	}
+
+	mustBuildy(t, dir, "--clean-all")
+	if exists(filepath.Join(dir, ".buildy_cache")) {
+		t.Error("--clean-all left the cache directory")
+	}
+
+	// Outside any workspace: refuse, remove nothing
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "build", "keep.txt"), "not buildy's")
+	writeFile(t, filepath.Join(elsewhere, "dist", "keep.txt"), "not buildy's")
+	if out := mustFailBuildy(t, elsewhere, "--clean"); !strings.Contains(out, "Nothing to clean") {
+		t.Errorf("--clean outside a workspace:\n%s", out)
+	}
+	for _, f := range []string{"build/keep.txt", "dist/keep.txt"} {
+		if !exists(filepath.Join(elsewhere, f)) {
+			t.Errorf("--clean outside a workspace removed %s", f)
+		}
+	}
+}
+
+// --cache-dir: a relative directory is relative to the workspace root, an absolute one is used as
+// it is.
+func TestE2ECacheDir(t *testing.T) {
+	dir := fixture(t, "stale_staging")
+	abs := filepath.Join(t.TempDir(), "cache")
+	mustBuildy(t, dir, "--cache-dir", abs)
+	if !exists(filepath.Join(abs, "cache_index.json")) {
+		t.Errorf("an absolute --cache-dir wasn't used as it is")
+	}
+	if exists(filepath.Join(dir, strings.TrimPrefix(abs, filepath.VolumeName(abs)))) {
+		t.Errorf("an absolute --cache-dir was joined onto the workspace root")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "files", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustBuildy(t, filepath.Join(dir, "files"), "--cache-dir", "rel-cache")
+	if !exists(filepath.Join(dir, "rel-cache", "cache_index.json")) {
+		t.Errorf("a relative --cache-dir isn't relative to the workspace root")
+	}
+}

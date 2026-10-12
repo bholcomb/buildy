@@ -388,6 +388,25 @@ func absPath(path, workDir string) string {
 	return filepath.Join(workDir, path)
 }
 
+// RecordedOutputs returns, sorted, every output the cache has an entry for: the files buildy's
+// tasks produced (normalized paths: lower case on Windows).
+func (bc *BuildCache) RecordedOutputs() []string {
+	bc.mutex.Lock()
+	defer bc.mutex.Unlock()
+	seen := map[string]bool{}
+	var outputs []string
+	for _, entry := range bc.entries {
+		for output := range entry.Outputs {
+			if !seen[output] {
+				seen[output] = true
+				outputs = append(outputs, output)
+			}
+		}
+	}
+	sort.Strings(outputs)
+	return outputs
+}
+
 // Entries returns how many tasks have an entry: the newest of each task and context.
 func (bc *BuildCache) Entries() int {
 	bc.mutex.Lock()

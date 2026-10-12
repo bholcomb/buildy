@@ -99,11 +99,12 @@ func main() {
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
 	release := flag.BoolP("release", "r", false, "Build in release mode (shortcut for --config=release)")
-	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory")
+	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory: relative to the workspace root, or absolute")
 	dryRun := flag.BoolP("dry-run", "d", false, "Plan the build: list what would be fetched, built and run, without doing any of it")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
-	clean := flag.Bool("clean", false, "Clean build artifacts (removes cache and build directories)")
+	clean := flag.Bool("clean", false, "Remove what buildy built in the workspace: the output directory, and what it staged, installed or copied elsewhere")
+	cleanAll := flag.Bool("clean-all", false, "--clean, and the cache directory too (fetched dependencies and their builds)")
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
 	force := flag.BoolP("force", "f", false, "Rebuild everything: ignore the cache, and build fetched dependencies again")
@@ -168,94 +169,6 @@ func main() {
 		util.LogVerbose("CLI define: %s=%s", varName, value)
 	}
 
-	// Handle --clean flag
-	if *clean {
-		// Determine workspace root
-		var workspaceRoot string
-		configFiles := flag.Args()
-		
-		if len(configFiles) == 0 {
-			// No config files specified - use current directory
-			workspaceRoot, err = os.Getwd()
-			if err != nil {
-				util.LogFatal("Failed to get current directory: %v", err)
-			}
-		} else {
-			// Use directory of first config file
-			configPath := configFiles[0]
-			absPath, err := filepath.Abs(configPath)
-			if err != nil {
-				util.LogFatal("Failed to resolve config path: %v", err)
-			}
-			
-			// If it's a file, use its directory; if it's a directory, use it
-			info, err := os.Stat(absPath)
-			if err != nil {
-				util.LogFatal("Failed to stat config path: %v", err)
-			}
-			
-			if info.IsDir() {
-				workspaceRoot = absPath
-			} else {
-				workspaceRoot = filepath.Dir(absPath)
-			}
-		}
-		
-		// Clean cache directory
-		cachePath := filepath.Join(workspaceRoot, *cacheDir)
-		if _, err := os.Stat(cachePath); err == nil {
-			util.LogProgress("Removing cache directory: %s", cachePath)
-			if err := os.RemoveAll(cachePath); err != nil {
-				util.LogFatal("Failed to remove cache directory: %v", err)
-			}
-			util.LogProgress("✓ Cache directory removed")
-		} else {
-			util.LogVerbose("Cache directory not found: %s", cachePath)
-		}
-		
-		// Clean build directory
-		buildPath := filepath.Join(workspaceRoot, "build")
-		if _, err := os.Stat(buildPath); err == nil {
-			util.LogProgress("Removing build directory: %s", buildPath)
-			if err := os.RemoveAll(buildPath); err != nil {
-				util.LogFatal("Failed to remove build directory: %v", err)
-			}
-			util.LogProgress("✓ Build directory removed")
-		} else {
-			util.LogVerbose("Build directory not found: %s", buildPath)
-		}
-
-		// Clean staging directories (check common locations)
-		stagingPaths := []string{
-			filepath.Join(workspaceRoot, "staging"),
-			filepath.Join(buildPath, "staging"),
-		}
-		for _, stagingPath := range stagingPaths {
-			if _, err := os.Stat(stagingPath); err == nil {
-				util.LogProgress("Removing staging directory: %s", stagingPath)
-				if err := os.RemoveAll(stagingPath); err != nil {
-					util.LogWarning("Failed to remove staging directory: %v", err)
-				} else {
-					util.LogProgress("✓ Staging directory removed: %s", stagingPath)
-				}
-			}
-		}
-
-		// Clean dist directory (install outputs)
-		distPath := filepath.Join(workspaceRoot, "dist")
-		if _, err := os.Stat(distPath); err == nil {
-			util.LogProgress("Removing dist directory: %s", distPath)
-			if err := os.RemoveAll(distPath); err != nil {
-				util.LogWarning("Failed to remove dist directory: %v", err)
-			} else {
-				util.LogProgress("✓ Dist directory removed")
-			}
-		}
-		
-		util.LogProgress("✓ Clean complete")
-		os.Exit(0)
-	}
-
 	// Verify embedded data
 	if err := resource.VerifyEmbeddedData(); err != nil {
 		util.LogFatal("Failed to verify embedded data: %v", err)
@@ -288,6 +201,9 @@ func main() {
 		}
 		ws, err = workspace.DiscoverWorkspace(cwd)
 		if err != nil {
+			if *clean || *cleanAll {
+				util.LogFatal("Nothing to clean, nothing removed: %v", err)
+			}
 			util.LogFatal("Failed to load the workspace: %v", err)
 		}
 	} else {
@@ -334,6 +250,22 @@ func main() {
 	}
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
+	// The cache directory: relative to the workspace root, or absolute
+	workspaceCacheDir := *cacheDir
+	if !filepath.IsAbs(workspaceCacheDir) {
+		workspaceCacheDir = filepath.Join(ws.RootDir, workspaceCacheDir)
+	}
+	workspaceCacheDir = filepath.Clean(workspaceCacheDir)
+
+	// --clean removes what buildy produced in the workspace, and nothing else
+	if *clean || *cleanAll {
+		if err := build.Clean(ws, buildContext, cliDefines, workspaceCacheDir, *cleanAll); err != nil {
+			util.LogFatal("Clean: %v", err)
+		}
+		util.LogProgress("Clean complete")
+		os.Exit(0)
+	}
+
 	// The workspace root's variables, for the dependency definitions: its variables and imported
 	// environment variables, the built-in variables and --define
 	rootVarEnv, err := workspace.Variables(ws.Config.File, buildContext, ws.RootDir, cliDefines)
@@ -363,7 +295,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	workspaceCacheDir := filepath.Join(ws.RootDir, *cacheDir)
 
 	// Show cache stats if requested
 	if *cacheStats {
