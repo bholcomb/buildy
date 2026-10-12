@@ -3,6 +3,7 @@ package resource
 import (
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -163,6 +164,11 @@ func (cb *CommandBuilder) BuildLinkCommand(
 	if tool.Supports.Libs {
 		libFlag := orDefault(tool.Supports.LibFlag, "-l")
 		for _, lib := range libs {
+			// A flag (-pthread, -Wl,...) or a library's path is passed as written
+			if strings.HasPrefix(lib, "-") || filepath.IsAbs(lib) || path.IsAbs(lib) {
+				values["libs"] = append(values["libs"], lib)
+				continue
+			}
 			// A library with an extension is used as named
 			if tool.Supports.LibSuffix != "" && !strings.Contains(lib, ".") {
 				lib += tool.Supports.LibSuffix

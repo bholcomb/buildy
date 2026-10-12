@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -34,11 +35,13 @@ type ResolvedDependency struct {
 	Frameworks  []string
 	Defines     []string
 	Sources     []string
-	Path        string // For fetch deps, the resolved path
-	Resolved    bool
-	SourceURL   string // For URL fetch deps: the original URL
-	SourceGit   string // For git fetch deps: the git URL
-	SourceRef   string // For git fetch deps: the ref (tag/branch)
+	// CompileFlags are compile flags as given (pkg-config --cflags), ahead of the target's
+	CompileFlags []string
+	Path         string // For fetch deps, the resolved path
+	Resolved     bool
+	SourceURL    string // For URL fetch deps: the original URL
+	SourceGit    string // For git fetch deps: the git URL
+	SourceRef    string // For git fetch deps: the ref (tag/branch)
 }
 
 // BuildConfig is a fetched dependency's build section.
@@ -488,43 +491,112 @@ func appendNew(dst []string, values ...string) []string {
 	return dst
 }
 
-// resolvePkgConfig uses pkg-config to get include dirs, lib dirs, and libs
+// resolvePkgConfig adds a pkg-config package's flags to dep, every one, in pkg-config's order:
+// --cflags as compile flags, --libs as libraries (each flag is passed to the linker as written;
+// -framework X is a framework).
 func (dr *DependencyResolver) resolvePkgConfig(ctx context.Context, pkgName string, dep *ResolvedDependency) error {
-	// Get cflags
-	cflagsCmd := exec.CommandContext(ctx, "pkg-config", "--cflags", pkgName)
-	cflagsOut, err := cflagsCmd.Output()
+	cflags, err := pkgConfig(ctx, "--cflags", pkgName)
 	if err != nil {
-		return fmt.Errorf("pkg-config --cflags failed: %w", err)
+		return err
 	}
+	dep.CompileFlags = append(dep.CompileFlags, cflags...)
 
-	// Parse cflags for include dirs
-	cflags := strings.Fields(string(cflagsOut))
-	for _, flag := range cflags {
-		if strings.HasPrefix(flag, "-I") {
-			dep.IncludeDirs = append(dep.IncludeDirs, strings.TrimPrefix(flag, "-I"))
-		} else if strings.HasPrefix(flag, "-D") {
-			dep.Defines = append(dep.Defines, strings.TrimPrefix(flag, "-D"))
+	libs, err := pkgConfig(ctx, "--libs", pkgName)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(libs); i++ {
+		switch arg := libs[i]; {
+		case arg == "-framework" && i+1 < len(libs):
+			dep.Frameworks = append(dep.Frameworks, libs[i+1])
+			i++
+		case strings.HasPrefix(arg, "-") || filepath.IsAbs(arg) || path.IsAbs(arg):
+			dep.Libs = append(dep.Libs, arg)
+		default:
+			return fmt.Errorf("pkg-config --libs %s gave %q, which is neither a flag nor a library's path (after %q)", pkgName, arg, libs[:i])
 		}
 	}
-
-	// Get libs
-	libsCmd := exec.CommandContext(ctx, "pkg-config", "--libs", pkgName)
-	libsOut, err := libsCmd.Output()
-	if err != nil {
-		return fmt.Errorf("pkg-config --libs failed: %w", err)
-	}
-
-	// Parse libs for lib dirs and library names
-	libs := strings.Fields(string(libsOut))
-	for _, flag := range libs {
-		if strings.HasPrefix(flag, "-L") {
-			dep.LibDirs = append(dep.LibDirs, strings.TrimPrefix(flag, "-L"))
-		} else if strings.HasPrefix(flag, "-l") {
-			dep.Libs = append(dep.Libs, strings.TrimPrefix(flag, "-l"))
-		}
-	}
-
 	return nil
+}
+
+// pkgConfig runs pkg-config with an option (--cflags, --libs) and returns its output split into
+// arguments the way pkg-config quotes them.
+func pkgConfig(ctx context.Context, option, pkgName string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "pkg-config", option, pkgName)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("pkg-config %s %s: %v %s", option, pkgName, err, strings.TrimSpace(stderr.String()))
+	}
+	args, err := splitShellWords(string(out))
+	if err != nil {
+		return nil, fmt.Errorf("pkg-config %s %s: %w", option, pkgName, err)
+	}
+	return args, nil
+}
+
+// splitShellWords splits text into words the way a POSIX shell does, without expanding anything:
+// blanks separate words, a backslash escapes the next character, single quotes keep everything
+// inside them, and double quotes keep everything but the escapes \\, \", \$ and \`. pkg-config
+// escapes a space in a path with a backslash.
+func splitShellWords(text string) ([]string, error) {
+	var words []string
+	var word strings.Builder
+	inWord := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			if inWord {
+				words = append(words, word.String())
+				word.Reset()
+				inWord = false
+			}
+		case c == '\\':
+			inWord = true
+			if i+1 < len(text) {
+				i++
+				if text[i] != '\n' {
+					word.WriteByte(text[i])
+				}
+			}
+		case c == '\'':
+			inWord = true
+			end := strings.IndexByte(text[i+1:], '\'')
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated ' in %q", text)
+			}
+			word.WriteString(text[i+1 : i+1+end])
+			i += end + 1
+		case c == '"':
+			inWord = true
+			closed := false
+			for i++; i < len(text); i++ {
+				if text[i] == '"' {
+					closed = true
+					break
+				}
+				if text[i] == '\\' && i+1 < len(text) && strings.IndexByte("\\\"$`\n", text[i+1]) >= 0 {
+					i++
+					if text[i] == '\n' {
+						continue
+					}
+				}
+				word.WriteByte(text[i])
+			}
+			if !closed {
+				return nil, fmt.Errorf("unterminated \" in %q", text)
+			}
+		default:
+			inWord = true
+			word.WriteByte(c)
+		}
+	}
+	if inWord {
+		words = append(words, word.String())
+	}
+	return words, nil
 }
 
 // resolveVariables resolves the variables in a dependency's field, or fails naming them.
@@ -599,6 +671,7 @@ func (dr *DependencyResolver) ResolveDependencies(depNames []string) (*ResolvedD
 		merged.Libs = append(merged.Libs, dep.Libs...)
 		merged.Frameworks = append(merged.Frameworks, dep.Frameworks...)
 		merged.Defines = append(merged.Defines, dep.Defines...)
+		merged.CompileFlags = append(merged.CompileFlags, dep.CompileFlags...)
 		merged.Sources = append(merged.Sources, dep.Sources...)
 	}
 

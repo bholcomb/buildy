@@ -52,11 +52,12 @@ func TestBuildCommandGivesArguments(t *testing.T) {
 		}
 	}
 	cmd, _, err = cb.BuildLinkCommand(exe, []string{"/my ws/a.o", "/my ws/b.o"}, "/my ws/bin/app",
-		[]string{"/my ws/lib"}, []string{"calc", "m"}, nil, nil)
+		[]string{"/my ws/lib"}, []string{"calc", "m", "-pthread", "-Wl,--as-needed", "/opt/my lib/libx.a"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = `g++ | -Wl,-rpath,$ORIGIN | /my ws/a.o | /my ws/b.o | -L/my ws/lib | -lcalc | -lm | -o | /my ws/bin/app`
+	// A library that is a flag or a path (pkg-config's) is passed as written, in place
+	want = `g++ | -Wl,-rpath,$ORIGIN | /my ws/a.o | /my ws/b.o | -L/my ws/lib | -lcalc | -lm | -pthread | -Wl,--as-needed | /opt/my lib/libx.a | -o | /my ws/bin/app`
 	if got := argv(cmd.Args); got != want {
 		t.Errorf("link command\n  %s\nwant\n  %s", got, want)
 	}

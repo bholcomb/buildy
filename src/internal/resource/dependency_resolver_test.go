@@ -3,7 +3,9 @@ package resource
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,5 +138,56 @@ ok:
 	}
 	if err := dr.ResolveAll(context.Background(), false); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// pkg-config's output is split the way it quotes it.
+func TestSplitShellWords(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want []string
+	}{
+		{"-I/usr/include/x -pthread\n", []string{"-I/usr/include/x", "-pthread"}},
+		{`-I/my\ dir/include -DA="b c"`, []string{"-I/my dir/include", "-DA=b c"}},
+		{`'-DX=$Y' "a\"b" ""`, []string{"-DX=$Y", `a"b`, ""}},
+		{"  ", nil},
+	} {
+		got, err := splitShellWords(c.in)
+		if err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("splitShellWords(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+	if _, err := splitShellWords(`"open`); err == nil {
+		t.Error("an unterminated quote was accepted")
+	}
+}
+
+// Finding 5.5: a pkg-config dependency keeps every flag pkg-config gives, in order.
+func TestPkgConfigKeepsEveryFlag(t *testing.T) {
+	if _, err := exec.LookPath("pkg-config"); err != nil {
+		t.Skip("skipping: pkg-config is not on the PATH")
+	}
+	dir := t.TempDir()
+	writeDepFiles(t, dir, map[string]string{"demo.pc": `prefix=/opt/my\ demo
+Name: demo
+Description: demo
+Version: 1
+Cflags: -I${prefix}/include -pthread -isystem /opt/sys -DDEMO=1 -fopenmp
+Libs: -L${prefix}/lib -ldemo -Wl,--as-needed -pthread -framework Cocoa /opt/libextra.a
+`})
+	t.Setenv("PKG_CONFIG_PATH", dir)
+	t.Setenv("PKG_CONFIG_LIBDIR", dir)
+	dep := &ResolvedDependency{}
+	if err := newResolver(t.TempDir()).resolvePkgConfig(context.Background(), "demo", dep); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"-I/opt/my demo/include", "-pthread", "-isystem", "/opt/sys", "-DDEMO=1", "-fopenmp"}; !slices.Equal(dep.CompileFlags, want) {
+		t.Errorf("compile flags = %q, want %q", dep.CompileFlags, want)
+	}
+	if want := []string{"-L/opt/my demo/lib", "-ldemo", "-Wl,--as-needed", "-pthread", "/opt/libextra.a"}; !slices.Equal(dep.Libs, want) {
+		t.Errorf("libs = %q, want %q", dep.Libs, want)
+	}
+	if !slices.Equal(dep.Frameworks, []string{"Cocoa"}) {
+		t.Errorf("frameworks = %q", dep.Frameworks)
 	}
 }

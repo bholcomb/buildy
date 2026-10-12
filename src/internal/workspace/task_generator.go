@@ -604,6 +604,7 @@ func (tg *TaskGenerator) resolveDeps(lists *targetLists) ([]string, error) {
 	lists.libs = prepend(dep.Libs, lists.libs)
 	lists.frameworks = prepend(dep.Frameworks, lists.frameworks)
 	lists.defines = prepend(dep.Defines, lists.defines)
+	lists.flags = prepend(dep.CompileFlags, lists.flags)
 	var sources []config.Source
 	for _, s := range dep.Sources {
 		sources = append(sources, config.Source{Pattern: s})
