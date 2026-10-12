@@ -130,7 +130,7 @@ func TestExecutorUsesResponseFiles(t *testing.T) {
 	}
 	huge := strings.Repeat("o", 2<<20)
 	task := newTask("link_big", nil, []string{out}, util.Command{Args: []string{"ar", "rcs", out, huge}, ResponseFile: util.ResponseFileGNU})
-	if !runTasks(te, task) {
+	if !runTasks(t, te, task) {
 		t.Fatal("task failed")
 	}
 	if len(ran.Args) != 2 || !strings.HasPrefix(rspContent, "rcs\n") || !strings.Contains(rspContent, huge) {

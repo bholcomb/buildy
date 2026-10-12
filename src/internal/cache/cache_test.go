@@ -53,6 +53,16 @@ func lookup(t *testing.T, bc *BuildCache, task *workspace.BuildTask) (bool, stri
 	return bc.Lookup(task)
 }
 
+// closeAtEnd closes the cache when the test ends, as every run does: an open journal can't be
+// removed on Windows, nor the temporary directory holding it.
+func closeAtEnd(t *testing.T, bc *BuildCache) {
+	t.Cleanup(func() {
+		if err := bc.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
 func setup(t *testing.T) (*BuildCache, *workspace.BuildTask, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -63,6 +73,7 @@ func setup(t *testing.T) (*BuildCache, *workspace.BuildTask, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, bc)
 	task := compileTask(t, dir)
 	ran(t, bc, task, dir)
 	return bc, task, dir
@@ -132,6 +143,7 @@ func TestLookupMissesWhenAMissingDiscoveredInputAppears(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, bc)
 	task := compileTask(t, dir)
 	ran(t, bc, task, dir) // the depfile lists other.h, which doesn't exist
 	if hit, reason := lookup(t, bc, task); !hit {
@@ -159,6 +171,7 @@ func TestRecordFailsWithoutADeclaredOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, bc)
 	task := compileTask(t, dir)
 	write(t, filepath.Join(dir, "main.d"), "main.o: main.cpp\n")
 	if err := task.HashInputs(util.HashFile); err != nil {
@@ -182,6 +195,7 @@ func TestRecordFailsOnAnUnparsableDepFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, bc)
 	task := compileTask(t, dir)
 	if err := task.HashInputs(util.HashFile); err != nil {
 		t.Fatal(err)

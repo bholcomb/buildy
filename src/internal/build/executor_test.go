@@ -80,12 +80,19 @@ func newExecutor(t *testing.T, dir string, force bool) *TaskExecutor {
 	return NewTaskExecutor(bc, 2, dir, force)
 }
 
-func runTasks(te *TaskExecutor, tasks ...*workspace.BuildTask) bool {
+// runTasks runs the tasks as a build does, which ends by closing the cache (Builder.Build): an
+// open journal can't be removed on Windows, nor the temporary directory that holds it.
+func runTasks(t *testing.T, te *TaskExecutor, tasks ...*workspace.BuildTask) bool {
+	t.Helper()
 	graph := workspace.NewTaskGraph()
 	for _, task := range tasks {
 		graph.AddTask(task)
 	}
-	return te.ExecuteTaskGraph(graph, false)
+	ok := te.ExecuteTaskGraph(graph, false)
+	if err := te.Cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return ok
 }
 
 func newTask(id string, inputs []string, outputs []string, command util.Command) *workspace.BuildTask {
@@ -113,7 +120,7 @@ func TestExecutorFailsWhenADeclaredOutputIsMissing(t *testing.T) {
 	task := newTask("cargo_build_hello", nil, []string{out}, helperCommand(t, "nothing"))
 
 	te := newExecutor(t, dir, false)
-	if runTasks(te, task) {
+	if runTasks(t, te, task) {
 		t.Fatal("the task succeeded without producing its output")
 	}
 	if te.ExecutionStats.FailedTasks != 1 {
@@ -133,7 +140,7 @@ func TestExecutorFailsOnAMissingInputBeforeRunning(t *testing.T) {
 		helperCommand(t, "write", marker, "ran"))
 
 	te := newExecutor(t, dir, false)
-	if runTasks(te, task) {
+	if runTasks(t, te, task) {
 		t.Fatal("the task ran with a missing input")
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -159,7 +166,7 @@ func TestExecutorDeletesOutputsOfCachedTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := newTask("link_calc", nil, []string{out}, helperCommand(t, "append", out, "new"))
-	if !runTasks(newExecutor(t, dir, false), task) {
+	if !runTasks(t, newExecutor(t, dir, false), task) {
 		t.Fatal("task failed")
 	}
 	if got := read(t, out); got != "new" {
@@ -172,7 +179,7 @@ func TestExecutorDeletesOutputsOfCachedTasks(t *testing.T) {
 	}
 	toolTask := newTask("build_app", nil, []string{toolOut}, helperCommand(t, "append", toolOut, "new"))
 	toolTask.ToolCached = true
-	if !runTasks(newExecutor(t, dir, false), toolTask) {
+	if !runTasks(t, newExecutor(t, dir, false), toolTask) {
 		t.Fatal("tool-cached task failed")
 	}
 	if got := read(t, toolOut); got != "previous+new" {
@@ -199,7 +206,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 		if i == 2 {
 			os.Remove(out)
 		}
-		if !runTasks(newExecutor(t, dir, false), mk()) {
+		if !runTasks(t, newExecutor(t, dir, false), mk()) {
 			t.Fatalf("run %d failed", i+1)
 		}
 		if got := read(t, log); got != want {
@@ -208,7 +215,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 	}
 
 	// --force runs it again.
-	if !runTasks(newExecutor(t, dir, true), mk()) {
+	if !runTasks(t, newExecutor(t, dir, true), mk()) {
 		t.Fatal("forced run failed")
 	}
 	if got := read(t, log); got != "xxx" {
@@ -218,7 +225,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 	toolTask := mk()
 	toolTask.ToolCached = true
 	te := newExecutor(t, dir, false)
-	if !runTasks(te, toolTask) {
+	if !runTasks(t, te, toolTask) {
 		t.Fatal("tool-cached run failed")
 	}
 	if got := read(t, log); got != "xxxx" {
@@ -233,7 +240,7 @@ func TestExecutorCacheHitsAndMisses(t *testing.T) {
 func TestExecutorReportsCommandFailure(t *testing.T) {
 	dir := t.TempDir()
 	task := newTask("compile_bad", nil, []string{filepath.Join(dir, "x.o")}, helperCommand(t, "exit", "3"))
-	if runTasks(newExecutor(t, dir, false), task) {
+	if runTasks(t, newExecutor(t, dir, false), task) {
 		t.Fatal("a failing command succeeded")
 	}
 }
@@ -260,7 +267,7 @@ func TestExecutorRunsEachTaskWhereItsExecSays(t *testing.T) {
 	dockerTask := newTask("compile_in_docker", nil, []string{filepath.Join(dir, "a.o")}, helperCommand(t, "write", filepath.Join(dir, "a.o"), "a"))
 	dockerTask.Exec = util.ExecSpec{Type: "docker", Image: "gcc:13"}
 	nativeTask := newTask("compile_native", nil, []string{filepath.Join(dir, "b.o")}, helperCommand(t, "write", filepath.Join(dir, "b.o"), "b"))
-	if !runTasks(te, dockerTask, nativeTask) {
+	if !runTasks(t, te, dockerTask, nativeTask) {
 		t.Fatal("tasks failed")
 	}
 	var sawDocker, sawNative bool
@@ -314,7 +321,7 @@ func TestExecutorRunsNativeOperations(t *testing.T) {
 		tasks[2].Inputs = append(tasks[2].Inputs, workspace.NewTaskInput(filepath.Join(stage, "linked.h")))
 	}
 	te := newExecutor(t, root, false)
-	if !runTasks(te, tasks...) {
+	if !runTasks(t, te, tasks...) {
 		t.Fatal("native tasks failed")
 	}
 	if got := read(t, copied); got != "v1 & 2\n" {
@@ -330,7 +337,7 @@ func TestExecutorRunsNativeOperations(t *testing.T) {
 	}
 
 	te = newExecutor(t, root, false)
-	if !runTasks(te, tasks...) {
+	if !runTasks(t, te, tasks...) {
 		t.Fatal("second run failed")
 	}
 	if te.ExecutionStats.CacheHits != len(tasks) {
@@ -347,7 +354,7 @@ func TestExecutorStartsATaskWhenItsDependenciesFinish(t *testing.T) {
 	first := newTask("first", nil, []string{firstOut}, helperCommand(t, "write", firstOut, "f"))
 	second := newTask("second", []string{firstOut}, []string{secondOut}, helperCommand(t, "write", secondOut, "2"))
 	second.Dependencies = []string{"first"}
-	if !runTasks(newExecutor(t, dir, false), slow, first, second) {
+	if !runTasks(t, newExecutor(t, dir, false), slow, first, second) {
 		t.Fatal("the build failed")
 	}
 	slowInfo, _ := os.Stat(slowOut)
@@ -365,7 +372,7 @@ func TestExecutorStopsStartingTasksAfterAFailure(t *testing.T) {
 	long := newTask("b_long", nil, []string{longOut}, helperCommand(t, "sleep", "500", "&&", "write", longOut, "l"))
 	later := newTask("c_later", nil, []string{laterOut}, helperCommand(t, "write", laterOut, "x"))
 	te := newExecutor(t, dir, false) // two workers: a_fails and b_long start first
-	if runTasks(te, failing, long, later) {
+	if runTasks(t, te, failing, long, later) {
 		t.Fatal("the build succeeded")
 	}
 	if _, err := os.Stat(longOut); err != nil {
@@ -384,7 +391,7 @@ func TestExecutorTimesOutATask(t *testing.T) {
 	te := newExecutor(t, dir, false)
 	te.Timeout = 500 * time.Millisecond
 	start := time.Now()
-	if runTasks(te, task) {
+	if runTasks(t, te, task) {
 		t.Fatal("the task succeeded")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
