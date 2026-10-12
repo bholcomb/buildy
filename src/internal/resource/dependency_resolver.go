@@ -100,6 +100,12 @@ func NewDependencyResolver(platform, architecture, toolchain, configuration, cac
 	}, nil
 }
 
+// LoadBuildSystems loads the build system definitions of directories, lowest priority first
+// (BuildSystemManager.LoadFilesystemSystems).
+func (dr *DependencyResolver) LoadBuildSystems(dirs []string) error {
+	return dr.buildSystemManager.LoadFilesystemSystems(dirs)
+}
+
 // LoadDependencies loads the dependency definitions: file (dependencies.file in buildy.yaml, by
 // default buildy_config/dependencies.yaml) and every buildy_config/dependencies/*.yaml. A file
 // some dependency names as its build.override is a buildy config for building that dependency,
@@ -393,7 +399,10 @@ func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, 
 
 	var bs *BuildSystemConfig
 	if build.System == "auto" {
-		bs = dr.buildSystemManager.Detect(dest)
+		var err error
+		if bs, err = dr.buildSystemManager.Detect(dest); err != nil {
+			return nil, nil, fmt.Errorf("build.system auto: %w", err)
+		}
 		if bs == nil {
 			return nil, nil, fmt.Errorf("could not detect the build system of %s in %s; set build.system", name, dest)
 		}

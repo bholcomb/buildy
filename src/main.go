@@ -86,7 +86,7 @@ func main() {
 
 	// Custom flag for additional data directories
 	var additionalDataDirs []string
-	flag.StringArrayVar(&additionalDataDirs, "add-data-dir", []string{}, "Additional data directory (looks for templates/ and toolchains/ subdirectories)")
+	flag.StringArrayVar(&additionalDataDirs, "add-data-dir", []string{}, "Additional data directory (looks for templates/, toolchains/ and build_systems/ subdirectories)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n", Version)
@@ -137,13 +137,19 @@ func main() {
 		util.LogFatal("Failed to verify embedded data: %v", err)
 	}
 
-	// Initialize template engine with base directory and additional directories
-	templatesDir := filepath.Join(buildyDir, "data", "templates")
-	templateDirs := []string{templatesDir}
-	for _, dataDir := range additionalDataDirs {
-		templateDirs = append(templateDirs, filepath.Join(dataDir, "templates"))
+	// The directories of templates, toolchains and build systems, lowest priority first, after
+	// the built-in ones: data/<kind> next to the executable, then each --add-data-dir's <kind>,
+	// then (toolchains and build systems) the workspace's buildy_config/<kind>. A definition
+	// replaces one of the same name from an earlier place.
+	dataDirs := func(kind string) []string {
+		dirs := []string{filepath.Join(buildyDir, "data", kind)}
+		for _, dataDir := range additionalDataDirs {
+			dirs = append(dirs, filepath.Join(dataDir, kind))
+		}
+		return dirs
 	}
-	templateEngine, err := workspace.NewBuildTemplateEngineMulti(templateDirs)
+
+	templateEngine, err := workspace.NewBuildTemplateEngineMulti(dataDirs("templates"))
 	if err != nil {
 		util.LogFatal("Failed to initialize template engine: %v", err)
 	}
@@ -232,15 +238,7 @@ func main() {
 		util.LogFatal("Failed to read the workspace's variables: %v", err)
 	}
 
-	// The toolchain directories, lowest priority first: a toolchain in a later directory replaces
-	// one of the same name in an earlier one, and the workspace's replace every other
-	toolchainDirs := []string{filepath.Join(buildyDir, "data", "toolchains")}
-	for _, dataDir := range additionalDataDirs {
-		toolchainDirs = append(toolchainDirs, filepath.Join(dataDir, "toolchains"))
-	}
-	toolchainDirs = append(toolchainDirs, filepath.Join(ws.RootDir, "buildy_config", "toolchains"))
-
-	toolchainManager, err := resource.NewToolchainManagerMulti(toolchainDirs)
+	toolchainManager, err := resource.NewToolchainManagerMulti(append(dataDirs("toolchains"), filepath.Join(ws.RootDir, "buildy_config", "toolchains")))
 	if err != nil {
 		util.LogFatal("Failed to initialize toolchain manager: %v", err)
 	}
@@ -277,6 +275,10 @@ func main() {
 	// in that file - no module discovery, no dependency resolution
 	standaloneMode := ws.ConfigPath != ""
 	if !standaloneMode {
+		if err := depResolver.LoadBuildSystems(append(dataDirs("build_systems"), filepath.Join(ws.RootDir, "buildy_config", "build_systems"))); err != nil {
+			util.LogFatal("Failed to load the build systems: %v", err)
+		}
+
 		// Load dependencies from buildy_config/dependencies.yaml or buildy_config/dependencies/
 		if err := depResolver.LoadDependencies(ws.RootDir, ws.Config.DependenciesFile); err != nil {
 			util.LogFatal("Failed to load dependencies: %v", err)
