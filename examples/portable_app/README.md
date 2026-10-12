@@ -1,49 +1,39 @@
-# Portable App Example
+# Portable app example
 
-This example demonstrates buildy's advanced features:
+A C++ program that uses two fetched dependencies, built in Docker:
 
-- **Fetch Dependencies**: Automatically downloads and builds external libraries
-- **Docker Builds**: Uses Docker containers for reproducible builds
-- **Build Systems**: Integrates with CMake to build SDL2
+- **SDL2**, cloned from git at `release-2.28.5` and built with its own `configure` script (the
+  `autoconf` build system) in the `gcc:13` image, as a static library.
+- **nlohmann/json**, a header-only library: a release archive, checked against its SHA-256.
 
-## Dependencies
+The program itself is compiled and linked in the same image (the `docker-cpp-linux` toolchain), so
+the build needs nothing on the host but Docker and git. Each command runs as your user, with the
+workspace mounted at its own path.
 
-- **SDL2**: Fetched from git, built with CMake
-- **nlohmann/json**: Header-only library fetched from URL
+## Needs
 
-## Building
+- Linux on x86-64, with Docker (your user can run `docker`) and git
+- The network, the first time: SDL2 and the JSON archive are fetched once, then used offline
+
+## Build
 
 ```bash
 cd examples/portable_app
 buildy
+./build/linux-x86_64-debug/bin/portable_app
 ```
 
-### Build Options
+The first build clones SDL2 and builds it (about half a minute); the next ones reuse it.
 
 ```bash
-# Release build
-buildy -c release
-
-# Force rebuild (ignore the cache, build SDL2 again)
-buildy --force
-
-# Fetch SDL2's ref again (only a branch or a tag can move)
-buildy --update-deps
+buildy -r              # release: SDL2 is built again for it, once
+buildy --force         # ignore the cache: rebuild the program and SDL2
+buildy --update-deps   # fetch SDL2's ref again (a branch or tag can move)
 ```
 
-## Docker Requirements
+## What a build makes
 
-This example uses Docker for reproducible builds. Ensure Docker is installed
-and your user has permission to run Docker commands.
-
-The Docker configuration:
-- Uses `gcc:13` image
-- Mounts the workspace (and the cache directory) at their host paths
-- Runs as your user (avoids permission issues)
-
-## What Gets Built
-
-1. SDL2 static library (fetched and built via CMake)
-2. The portable_app executable linking against SDL2
-3. Staging area with the executable
-4. Distribution archive (tar.gz)
+1. SDL2 for the configuration, in `.buildy_cache/deps/sdl2/_install/linux-x86_64-<config>/`
+2. The `portable_app` executable, in `build/linux-x86_64-<config>/bin/`
+3. A staging directory with the executable and this README, in `build/linux-x86_64-<config>/staging/`
+4. `portable_app-1.0.0-linux-x86_64.tar.gz` of it, in `build/linux-x86_64-<config>/dist/`

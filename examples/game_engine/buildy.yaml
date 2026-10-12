@@ -49,7 +49,7 @@ staging:
   contents:
     # Root level files
     - folder: "."
-      files: ["LICENSE.txt", "README.md"]
+      files: ["README.md"]
 
     # Binaries - executables and shared libraries together
     - folder: bin

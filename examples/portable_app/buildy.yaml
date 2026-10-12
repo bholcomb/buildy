@@ -10,10 +10,9 @@ dependencies:
   file: buildy_config/dependencies.yaml
 
 environment:
+  # Every compile and link runs in the toolchain's Docker image (gcc:13)
   toolchains:
     default: docker-cpp-linux
-    windows: msvc-cpp-windows
-    macos: clang-cpp-macos
 
   compile:
     cpp_standard: "c++17"

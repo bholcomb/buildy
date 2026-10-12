@@ -106,8 +106,14 @@ func fixture(t *testing.T, name string) string {
 // fixtureUnder copies testdata/e2e/<name> to a directory parent in a temporary directory.
 func fixtureUnder(t *testing.T, name, parent string) string {
 	t.Helper()
-	src := filepath.Join("testdata", "e2e", name)
 	dst := filepath.Join(t.TempDir(), parent, name)
+	copyTree(t, filepath.Join("testdata", "e2e", name), dst)
+	return dst
+}
+
+// copyTree copies the directory src to dst.
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
 	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -131,9 +137,8 @@ func fixtureUnder(t *testing.T, name, parent string) string {
 		return os.WriteFile(target, data, info.Mode().Perm())
 	})
 	if err != nil {
-		t.Fatalf("copying fixture %s: %v", name, err)
+		t.Fatalf("copying %s: %v", src, err)
 	}
-	return dst
 }
 
 // buildyCommand is buildy run in dir as a shell runs it, with extra environment variables (NAME=value).
