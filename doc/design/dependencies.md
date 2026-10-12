@@ -282,7 +282,7 @@ it itself, so that step can go.
 - Dependencies are resolved whatever `--target` selects: a target that needs none still fetches
   and builds them the first time (then the markers make it cheap).
 - Build system files in `buildy_config/build_systems/` are documented but not loaded
-  (`BuildSystemManager.LoadFilesystemSystems` is never called): load them, or remove the docs (phase
-  6, with the dead code).
+  (`BuildSystemManager.LoadFilesystemSystems` is never called): load them, or remove the docs and
+  the function (undecided; phase 6 kept both).
 - Windows and macOS: the cmake `--config` arguments are tested as argument lists; neither platform
   has run a dependency build in this phase.
