@@ -370,6 +370,13 @@ func (te *TaskExecutor) responseFilePath(task *workspace.BuildTask) string {
 
 // runNative carries out a task's native operation on its input and output.
 func runNative(task *workspace.BuildTask) error {
+	if task.Native.Op == workspace.NativeArchive && len(task.Outputs) == 1 {
+		files := make([]string, len(task.Inputs))
+		for i, input := range task.Inputs {
+			files[i] = input.Path
+		}
+		return util.WriteArchive(task.Native.Root, files, task.Outputs[0], task.Native.Format, task.Native.FollowSymlinks)
+	}
 	if len(task.Inputs) != 1 || len(task.Outputs) != 1 {
 		return fmt.Errorf("%s task %s needs exactly one input and one output, has %d and %d",
 			task.Native.Op, task.TaskID, len(task.Inputs), len(task.Outputs))
@@ -382,8 +389,6 @@ func runNative(task *workspace.BuildTask) error {
 		return os.Symlink(in, out)
 	case workspace.NativeTemplate:
 		return util.FillTemplate(in, out, task.Native.Substitutions)
-	case workspace.NativeArchive:
-		return util.WriteArchive(in, out, task.Native.Format, task.Native.FollowSymlinks)
 	}
 	return fmt.Errorf("task %s: unknown native operation %q", task.TaskID, task.Native.Op)
 }

@@ -1,0 +1,15 @@
+# An install archive holds what the config stages this run (finding 1.8), not whatever is in the
+# staging directory.
+project:
+  name: stale_staging
+
+staging:
+  name: pkg
+  contents:
+    - folder: docs
+      files: ["files/*.txt"]
+
+install:
+  - name: pkg
+    staging: pkg
+    format: tar.gz

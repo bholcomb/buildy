@@ -304,13 +304,14 @@ func TestExecutorRunsNativeOperations(t *testing.T) {
 	tasks := []*workspace.BuildTask{
 		native("generate_version", src, gen, workspace.NativeOp{Op: workspace.NativeTemplate, Substitutions: [][2]string{{"V", "1 & 2"}}}),
 		native("stage_copy", gen, copied, workspace.NativeOp{Op: workspace.NativeCopy}, "generate_version"),
-		native("install_pkg", stage, archive, workspace.NativeOp{Op: workspace.NativeArchive, Format: "tar.gz", FollowSymlinks: true}, "stage_copy"),
+		native("install_pkg", copied, archive, workspace.NativeOp{Op: workspace.NativeArchive, Root: stage, Format: "tar.gz", FollowSymlinks: true}, "stage_copy"),
 	}
 	if runtime.GOOS != "windows" {
 		link := native("stage_link", gen, filepath.Join(stage, "linked.h"), workspace.NativeOp{Op: workspace.NativeSymlink}, "generate_version")
 		link.Inputs[0].Hash = "symlink:" + gen
 		tasks = append(tasks, link)
 		tasks[2].Dependencies = append(tasks[2].Dependencies, "stage_link")
+		tasks[2].Inputs = append(tasks[2].Inputs, workspace.NewTaskInput(filepath.Join(stage, "linked.h")))
 	}
 	te := newExecutor(t, root, false)
 	if !runTasks(te, tasks...) {

@@ -109,3 +109,29 @@ func TestE2EPatternsOverOutputs(t *testing.T) {
 		t.Errorf("a pattern into the output directory that names nothing doesn't fail as it should:\n%s", tail(out2, 10))
 	}
 }
+
+// Finding 1.8: an install archive holds exactly what the config stages this run. A file removed
+// from the staged set leaves the archive (and reruns the install), and what else is in the
+// staging directory is never shipped.
+func TestE2EInstallShipsOnlyWhatIsStaged(t *testing.T) {
+	dir := fixture(t, "stale_staging")
+	out := outDir(dir, "debug")
+	archive := filepath.Join(out, "dist", "pkg.tar.gz")
+
+	mustBuildy(t, dir)
+	if got, want := tarNames(t, archive), []string{"docs/", "docs/a.txt", "docs/b.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("the archive holds %v, want %v", got, want)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "files", "b.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(out, "staging", "docs", "mine.txt"), "not staged by buildy")
+	mustBuildy(t, dir)
+	if got, want := tarNames(t, archive), []string{"docs/", "docs/a.txt"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("after b.txt left the staged set the archive holds %v, want %v", got, want)
+	}
+	if out := mustBuildy(t, dir); !strings.Contains(out, "0 executed") {
+		t.Errorf("a no-op build executed tasks:\n%s", out)
+	}
+}

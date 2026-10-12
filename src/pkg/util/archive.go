@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -19,15 +20,23 @@ var ArchiveFormats = []string{"tar", "tar.gz", "zip"}
 // staging copies get a new mtime on every build.
 var archiveTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// WriteArchive packs the tree under dir into out, as a tar, tar.gz or zip archive. Entry names
-// are paths relative to dir with forward slashes, without a "./" prefix; directories end in "/".
-// The archive is deterministic: entries come in the order of their names, directory by directory,
-// with a fixed modification time, owner 0 and the files' permission bits. With followSymlinks a
-// symlink is stored as what it points to (a directory is walked), otherwise as a link.
-func WriteArchive(dir, out, format string, followSymlinks bool) (err error) {
-	if rel, relErr := filepath.Rel(dir, out); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("archive %s would be inside the directory it packs, %s", out, dir)
+// WriteArchive packs files, each under root, into out, as a tar, tar.gz or zip archive: exactly
+// those files, never anything else that happens to be in root. Entry names are paths relative to
+// root with forward slashes, without a "./" prefix; the directories leading to the files come
+// first, ending in "/". The archive is deterministic: entries come in the order of their names,
+// directory by directory, with a fixed modification time, owner 0 and the files' permission bits.
+// With followSymlinks a symlink is stored as what it points to (a directory is walked), otherwise
+// as a link.
+func WriteArchive(root string, files []string, out, format string, followSymlinks bool) (err error) {
+	tree := archiveTree{}
+	for _, file := range files {
+		rel, relErr := filepath.Rel(root, file)
+		if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("internal error: %s is not a file under %s", file, root)
+		}
+		tree.add(strings.Split(filepath.ToSlash(rel), "/"))
 	}
+
 	f, err := os.Create(out)
 	if err != nil {
 		return err
@@ -51,10 +60,60 @@ func WriteArchive(dir, out, format string, followSymlinks bool) (err error) {
 		return fmt.Errorf("unknown archive format %q (one of: %s)", format, strings.Join(ArchiveFormats, ", "))
 	}
 	a := &archiver{w: w, follow: followSymlinks, active: map[string]bool{}}
-	if err := a.addChildren(dir, ""); err != nil {
+	if err := a.addTree(tree, root, ""); err != nil {
 		return err
 	}
 	return w.Close()
+}
+
+// archiveTree is the files of an archive as a tree of names: a directory's children, or nil
+// for a file.
+type archiveTree map[string]archiveTree
+
+func (t archiveTree) add(components []string) {
+	if len(components) == 1 {
+		t[components[0]] = nil
+		return
+	}
+	child := t[components[0]]
+	if child == nil {
+		child = archiveTree{}
+		t[components[0]] = child
+	}
+	child.add(components[1:])
+}
+
+// addTree adds the entries of tree, which is the directory path, whose entry name is name ("" for
+// the root): its directories with their contents, and its files, in name order.
+func (a *archiver) addTree(tree archiveTree, path, name string) error {
+	children := make([]string, 0, len(tree))
+	for child := range tree {
+		children = append(children, child)
+	}
+	sort.Strings(children)
+	for _, child := range children {
+		childPath, childName := filepath.Join(path, child), child
+		if name != "" {
+			childName = name + "/" + child
+		}
+		if tree[child] == nil {
+			if err := a.add(childPath, childName); err != nil {
+				return err
+			}
+			continue
+		}
+		info, err := os.Stat(childPath)
+		if err != nil {
+			return err
+		}
+		if err := a.w.dir(childName+"/", info.Mode().Perm()); err != nil {
+			return err
+		}
+		if err := a.addTree(tree[child], childPath, childName); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // archiveWriter writes the entries of one archive format.
@@ -71,7 +130,8 @@ type archiver struct {
 	active map[string]bool // directories being walked, by real path: a followed link back to one is a loop
 }
 
-// addChildren adds the entries of directory path, whose entry name is name ("" for the root).
+// addChildren adds the entries of directory path, whose entry name is name: a directory a
+// followed symlink leads to.
 func (a *archiver) addChildren(path, name string) error {
 	real, err := filepath.EvalSymlinks(path)
 	if err != nil {

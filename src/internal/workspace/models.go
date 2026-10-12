@@ -37,7 +37,7 @@ const (
 	NativeCopy     = "copy"     // copy Inputs[0] to Outputs[0]
 	NativeSymlink  = "symlink"  // make Outputs[0] a symlink to Inputs[0]
 	NativeTemplate = "template" // fill the template file Inputs[0] in, into Outputs[0]
-	NativeArchive  = "archive"  // pack the directory Inputs[0] into the archive Outputs[0]
+	NativeArchive  = "archive"  // pack the Inputs, files under Root, into the archive Outputs[0]
 )
 
 // NativeOp describes a task's native operation, for its cache key and the tasks file. The paths
@@ -45,6 +45,7 @@ const (
 type NativeOp struct {
 	Op             string      `json:"op"`
 	Substitutions  [][2]string `json:"substitutions,omitempty"`   // template: @KEY@ and ${KEY} -> value, in order
+	Root           string      `json:"root,omitempty"`            // archive: the directory entry names are relative to
 	Format         string      `json:"format,omitempty"`          // archive: tar, tar.gz or zip
 	FollowSymlinks bool        `json:"follow_symlinks,omitempty"` // archive: store what links point to
 }
@@ -168,7 +169,7 @@ func (t *BuildTask) HashInputs(hash func(path string) (string, error)) error {
 		}
 		var h string
 		if info.IsDir() {
-			// Directory inputs (install tasks packaging a staging directory) hash as a tree
+			// A directory input (a Go package, a Cargo crate) hashes as a tree
 			h, err = directoryHash(path, hash)
 		} else {
 			h, err = hash(path)

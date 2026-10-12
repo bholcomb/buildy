@@ -15,7 +15,7 @@ import (
 
 // stagingTree makes a staging directory with a file, an executable in a subdirectory, and (where
 // symlinks work) a symlink to a file outside it.
-func stagingTree(t *testing.T) (dir string, hasLink bool) {
+func stagingTree(t *testing.T) (dir string, files []string, hasLink bool) {
 	t.Helper()
 	root := t.TempDir()
 	dir = filepath.Join(root, "stage dir")
@@ -29,15 +29,23 @@ func stagingTree(t *testing.T) (dir string, hasLink bool) {
 	}
 	write(filepath.Join(dir, "readme.txt"), "hello\n", 0o644)
 	write(filepath.Join(dir, "bin", "app"), "#!/bin/sh\n", 0o755)
+	files = []string{filepath.Join(dir, "readme.txt"), filepath.Join(dir, "bin", "app")}
 	outside := filepath.Join(root, "lib.so")
 	write(outside, "library", 0o644)
 	if runtime.GOOS != "windows" {
 		if err := os.Symlink(outside, filepath.Join(dir, "bin", "lib.so")); err != nil {
 			t.Fatal(err)
 		}
+		files = append(files, filepath.Join(dir, "bin", "lib.so"))
 		hasLink = true
 	}
-	return dir, hasLink
+	// What a previous build staged, and an empty directory: not the archive's files
+	write(filepath.Join(dir, "bin", "stale"), "stale", 0o644)
+	write(filepath.Join(dir, "old", "gone.txt"), "gone", 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir, files, hasLink
 }
 
 type entry struct {
@@ -109,10 +117,11 @@ func names(entries []entry) string {
 	return strings.Join(n, " ")
 }
 
-// Install archives are written by buildy itself: sorted entries without "./", the same bytes for
-// the same tree, executables stay executable, and follow_symlinks decides how a link is stored.
+// Install archives are written by buildy itself: exactly the files given, sorted entries without
+// "./", the same bytes for the same files, executables stay executable, and follow_symlinks decides
+// how a link is stored.
 func TestWriteArchive(t *testing.T) {
-	dir, hasLink := stagingTree(t)
+	dir, files, hasLink := stagingTree(t)
 	out := t.TempDir()
 	for _, format := range ArchiveFormats {
 		for _, follow := range []bool{true, false} {
@@ -120,11 +129,15 @@ func TestWriteArchive(t *testing.T) {
 				continue
 			}
 			path := filepath.Join(out, "pkg."+format)
-			if err := WriteArchive(dir, path, format, follow); err != nil {
+			if err := WriteArchive(dir, files, path, format, follow); err != nil {
 				t.Fatalf("%s: %v", format, err)
 			}
 			first, _ := os.ReadFile(path)
-			if err := WriteArchive(dir, path, format, follow); err != nil {
+			reversed := append([]string{}, files...)
+			for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+				reversed[i], reversed[j] = reversed[j], reversed[i]
+			}
+			if err := WriteArchive(dir, reversed, path, format, follow); err != nil {
 				t.Fatal(err)
 			}
 			if second, _ := os.ReadFile(path); !bytes.Equal(first, second) {
@@ -168,18 +181,18 @@ func TestWriteArchive(t *testing.T) {
 }
 
 func TestWriteArchiveRejects(t *testing.T) {
-	dir, _ := stagingTree(t)
-	if err := WriteArchive(dir, filepath.Join(dir, "pkg.tar"), "tar", true); err == nil {
-		t.Error("an archive inside the directory it packs was accepted")
+	dir, files, _ := stagingTree(t)
+	if err := WriteArchive(dir, append(files, filepath.Join(t.TempDir(), "x")), filepath.Join(t.TempDir(), "pkg.tar"), "tar", true); err == nil {
+		t.Error("a file outside the root was accepted")
 	}
-	if err := WriteArchive(dir, filepath.Join(t.TempDir(), "pkg.rar"), "rar", true); err == nil {
+	if err := WriteArchive(dir, files, filepath.Join(t.TempDir(), "pkg.rar"), "rar", true); err == nil {
 		t.Error("an unknown format was accepted")
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Symlink(dir, filepath.Join(dir, "bin", "loop")); err != nil {
 			t.Fatal(err)
 		}
-		err := WriteArchive(dir, filepath.Join(t.TempDir(), "pkg.tar"), "tar", true)
+		err := WriteArchive(dir, append(files, filepath.Join(dir, "bin", "loop")), filepath.Join(t.TempDir(), "pkg.tar"), "tar", true)
 		if err == nil || !strings.Contains(err.Error(), "loop") {
 			t.Errorf("a symlink loop gave %v", err)
 		}

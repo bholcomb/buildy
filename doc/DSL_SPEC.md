@@ -1489,8 +1489,15 @@ install:
 | `tar` | .tar |
 
 Buildy writes the archive itself, the same way on every platform: no `tar`, `zip` or PowerShell
-is needed. Entries are the staging area's paths with forward slashes and no `./` prefix,
-in name order, each directory before its contents. Every entry has the modification time
+is needed. The archive holds exactly the files the staging section stages in this build (its
+tasks' outputs under its destination), never whatever else the directory holds: a file an earlier
+build staged that has since left the config, or one put there by hand, is not shipped. buildy
+doesn't empty the staging directory, as a destination can be any directory (`${workspace}`), but
+the archive doesn't depend on what is in it. Each staged file is an input of the install, so
+staging one more or one fewer file builds the archive again.
+
+Entries are the staged files' paths relative to the staging directory, with forward slashes and
+no `./` prefix, in name order, each directory before its contents. Every entry has the modification time
 2000-01-01 00:00:00 UTC and owner 0, and keeps its permission bits, so the same staging area
 always gives the same archive. With `follow_symlinks: true` (the default) a symlink is stored as
 the file or directory it points to; with `false`, as a link.

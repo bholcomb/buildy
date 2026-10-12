@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"buildy/internal/config"
@@ -58,10 +59,10 @@ type TaskGenerator struct {
 	outputDir string
 
 	// Artifact tracking
-	artifactOutputs    map[string][]string // artifact name -> output paths
-	artifactTaskIDs    map[string][]string // artifact name -> task IDs
-	stagingTasksByName map[string][]string // staging name -> task IDs
-	stagingDestByName  map[string]string   // staging name -> destination directory
+	artifactOutputs   map[string][]string // artifact name -> output paths
+	artifactTaskIDs   map[string][]string // artifact name -> task IDs
+	stagedByName      map[string][]string // staging name -> the files its tasks produce
+	stagingDestByName map[string]string   // staging name -> destination directory
 }
 
 // NewTaskGenerator creates a new TaskGenerator
@@ -86,7 +87,7 @@ func NewTaskGenerator(
 		artifactOutputs:    make(map[string][]string),
 		artifactTaskIDs:    make(map[string][]string),
 		Outputs:            NewDeclaredOutputs(),
-		stagingTasksByName: make(map[string][]string),
+		stagedByName:       make(map[string][]string),
 		stagingDestByName:  make(map[string]string),
 	}
 }
@@ -994,12 +995,12 @@ func (tg *TaskGenerator) generateStagingTasks(staging *config.Staging, outputDir
 	if err != nil {
 		return nil, err
 	}
-	var stagingTaskIDs []string
+	var staged []string
 	for _, t := range tasks {
-		stagingTaskIDs = append(stagingTaskIDs, t.TaskID)
+		staged = append(staged, t.Outputs...)
 	}
 
-	tg.stagingTasksByName[stagingName] = stagingTaskIDs
+	tg.stagedByName[stagingName] = staged
 	tg.stagingDestByName[stagingName] = destination
 	util.LogInfo("Generated %d staging tasks for '%s' at %s", len(tasks), stagingName, destination)
 	return tasks, nil
@@ -1218,9 +1219,23 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 
 		outputFile := filepath.Join(destination, filename+"."+format)
 
+		// The archive holds exactly the files the staging tasks produce under the staging
+		// directory, as inputs: whatever else is in the directory (what an earlier build staged,
+		// the user's own files) is not shipped, and a change to the staged set changes the key.
+		// Files a staging folder puts outside its directory are not in it.
+		var inputs []TaskInput
+		for _, file := range tg.stagedByName[stagingName] {
+			if rel, err := filepath.Rel(stagingDir, file); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				inputs = append(inputs, NewTaskInput(file))
+			} else {
+				util.LogInfo("install '%s': %s is outside the staging directory %s, so not in the archive", name, file, stagingDir)
+			}
+		}
+		sort.Slice(inputs, func(i, j int) bool { return inputs[i].Path < inputs[j].Path })
+
 		taskID := tg.TaskIDGen.Next("install", name)
-		task := NewNativeTask(taskID, "install", []TaskInput{{Path: stagingDir}}, []string{outputFile},
-			tg.stagingTasksByName[stagingName], NativeOp{Op: NativeArchive, Format: format, FollowSymlinks: followSymlinks})
+		task := NewNativeTask(taskID, "install", inputs, []string{outputFile}, nil,
+			NativeOp{Op: NativeArchive, Root: stagingDir, Format: format, FollowSymlinks: followSymlinks})
 		tg.finalizeTask(&task, "")
 		tasks = append(tasks, &task)
 		util.LogInfo("Generated install task: %s -> %s (format: %s)", stagingDir, outputFile, format)
