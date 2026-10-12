@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -100,6 +101,20 @@ type WorkspaceSection struct {
 	Modules  *ModuleList `yaml:"modules"`
 	Discover StringList  `yaml:"discover"`
 	Exclude  StringList  `yaml:"exclude"`
+}
+
+// validate checks the discover and exclude patterns.
+func (w *WorkspaceSection) validate(d *decoder) {
+	for _, list := range []struct {
+		what     string
+		patterns StringList
+	}{{"workspace.discover", w.Discover}, {"workspace.exclude", w.Exclude}} {
+		for _, p := range list.patterns {
+			if !doublestar.ValidatePattern(strings.TrimSpace(p)) {
+				d.errorf(nil, "%s: '%s' is not a valid pattern", list.what, p)
+			}
+		}
+	}
 }
 
 // ModuleList is workspace.modules: a filtered list of module entries, or the legacy map form
@@ -467,6 +482,9 @@ func LoadWorkspaceSection(path string) (*WorkspaceSection, error) {
 			d.decode(e.value, reflect.ValueOf(&section).Elem(), "workspace")
 		}
 	}
+	if section != nil {
+		section.validate(d)
+	}
 	if err := d.err("buildy config"); err != nil {
 		return nil, err
 	}
@@ -476,6 +494,9 @@ func LoadWorkspaceSection(path string) (*WorkspaceSection, error) {
 func (f *File) validate(d *decoder, root bool) {
 	if root && (f.Project == nil || strings.TrimSpace(f.Project.Name) == "") {
 		d.errorf(nil, "project.name is required in the workspace's root config")
+	}
+	if f.Workspace != nil {
+		f.Workspace.validate(d)
 	}
 	if f.Dependencies != nil && !root {
 		d.errorf(nil, "dependencies: only the workspace's root config declares dependencies (in buildy_config/)")

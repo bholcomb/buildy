@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -356,4 +358,21 @@ func TestFilteredListOfOne(t *testing.T) {
 		t.Errorf("sources = %+v", got)
 	}
 	wantProblems(t, d, "'defines' must be a list, not a mapping", "'libs' must be a list, not a mapping")
+}
+
+// A discover or exclude pattern that can't match is an error when the config loads, not a warning
+// while discovering (which skipped it).
+func TestWorkspacePatternsAreChecked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "buildy.yaml")
+	if err := os.WriteFile(path, []byte("project: {name: p}\nworkspace:\n  exclude: [\"third_party/[a\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for what, load := range map[string]func() error{
+		"LoadFile":             func() error { _, err := LoadFile(path, true); return err },
+		"LoadWorkspaceSection": func() error { _, err := LoadWorkspaceSection(path); return err },
+	} {
+		if err := load(); err == nil || !strings.Contains(err.Error(), "workspace.exclude: 'third_party/[a' is not a valid pattern") {
+			t.Errorf("%s: got %v", what, err)
+		}
+	}
 }

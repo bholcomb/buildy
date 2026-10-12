@@ -502,14 +502,10 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 	return result, nil
 }
 
-// matchPattern matches a path against a glob-like pattern
+// matchPattern matches a path against a discover or exclude pattern, which loading the config
+// checked.
 func matchPattern(path, pattern string) bool {
-	matched, err := doublestar.Match(pattern, path)
-	if err != nil {
-		util.LogWarning("Pattern match error for %s: %v", pattern, err)
-		return false
-	}
-	return matched
+	return doublestar.MatchUnvalidated(pattern, path)
 }
 
 // loadModule loads and validates a module configuration file

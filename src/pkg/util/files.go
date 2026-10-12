@@ -23,9 +23,12 @@ func CopyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
-
-	if _, err := io.Copy(destFile, sourceFile); err != nil {
+	_, err = io.Copy(destFile, sourceFile)
+	// A write can fail only when the file is closed (a full disk, a network file system)
+	if closeErr := destFile.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return err
 	}
 

@@ -31,7 +31,9 @@ func extractArchive(archivePath, formatName, dest string) error {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("failed to create %s: %w", parent, err)
 	}
-	removeStaleExtractions(dest)
+	if err := removeStaleExtractions(dest); err != nil {
+		return err
+	}
 	tmp, err := os.MkdirTemp(parent, extractTempPrefix(dest))
 	if err != nil {
 		return fmt.Errorf("failed to create a temporary extraction directory: %w", err)
@@ -59,11 +61,21 @@ func extractTempPrefix(dest string) string {
 }
 
 // removeStaleExtractions removes temporary directories left by an interrupted extraction of dest.
-func removeStaleExtractions(dest string) {
-	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(dest), extractTempPrefix(dest)+"*"))
-	for _, m := range matches {
-		os.RemoveAll(m)
+// (Names are compared, not globbed: a path may hold glob syntax.)
+func removeStaleExtractions(dest string) error {
+	parent := filepath.Dir(dest)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", parent, err)
 	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), extractTempPrefix(dest)) {
+			if err := os.RemoveAll(filepath.Join(parent, e.Name())); err != nil {
+				return fmt.Errorf("failed to remove an interrupted extraction: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // archiveFormat returns "zip", "tar" or "tar.gz" for an archive file name.
