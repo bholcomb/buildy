@@ -2716,7 +2716,7 @@ buildy --target game
 buildy --compile-commands  # Generate buildy_config/compile_commands.json for IDE tooling
 
 # Other options
-buildy -j 8                # Tasks run at once (each starts when its dependencies finish)
+buildy -j 8                # Tasks run at once (default: the number of CPUs)
 buildy --timeout 30m       # Kill a task or dependency build step that runs longer (no limit by default)
 buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging

@@ -48,7 +48,7 @@ buildy --config release   # Same as above
 ### Common Options
 
 ```bash
-buildy -j 8               # Use 8 parallel workers
+buildy -j 8               # Run 8 tasks at once (default: the number of CPUs)
 buildy -n 3               # Info level logging (default is 2=warning)
 buildy -n 4               # Verbose level logging
 buildy -n 5               # Debug level logging
@@ -1392,7 +1392,7 @@ longer, the same way.
 | `--architecture` | `-a` | Target architecture |
 | `--toolchain` | `-t` | Override toolchain |
 | `--target` | | Build a target and everything it depends on, in any module (repeatable); an unknown name is an error |
-| `--workers` | `-j` | How many tasks run at once; each task starts as soon as its dependencies have finished |
+| `--workers` | `-j` | How many tasks run at once (default: the number of CPUs); each task starts as soon as its dependencies have finished |
 | `--timeout` | | Kill a task, or a dependency build step, that runs longer than this Go duration (`90s`, `30m`, `2h`); no limit by default |
 | `--force` | `-f` | Ignore the cache and the dependency build records: rebuild everything |
 | `--update-deps` | | Fetch the dependencies that can move again: git branches and tags, archives without a checksum |

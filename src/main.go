@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -110,7 +111,7 @@ func main() {
 	release := flag.BoolP("release", "r", false, "Build in release mode (shortcut for --config=release)")
 	cacheDir := flag.String("cache-dir", workspace.DefaultCacheDir, "Cache directory: relative to the workspace root, or absolute")
 	dryRun := flag.BoolP("dry-run", "d", false, "Plan the build: list what would be fetched, built and run, without doing any of it")
-	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
+	workers := flag.IntP("workers", "j", runtime.NumCPU(), "How many tasks run at once (default: the number of CPUs)")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
 	clean := flag.Bool("clean", false, "Remove the workspace's output directory (build/: every configuration), nothing else")
 	cleanAll := flag.Bool("clean-all", false, "--clean, and the cache directory too (fetched dependencies and their builds)")
