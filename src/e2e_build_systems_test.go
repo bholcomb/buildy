@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"buildy/pkg/util"
 )
 
 // plainSystem is a build system that isn't built in: build.sh records its arguments, compiles
@@ -232,7 +234,14 @@ func TestE2EBuildSystemSearchOrder(t *testing.T) {
 		writeFile(t, path, strings.Replace(plainSystem, "build.sh and a static library", where, 1))
 		return path
 	}
-	byExe := define(filepath.Join(bin, "data", "build_systems"), "exe")
+	define(filepath.Join(bin, "data", "build_systems"), "exe")
+	// buildy names the data directory by its executable's real path: symlinks resolved, and on
+	// Windows short (8.3) names in full, as a temporary directory's often are
+	realBin, err := util.RealPath(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byExe := filepath.Join(realBin, "data", "build_systems", "plain.yaml")
 	extra := t.TempDir()
 	byData := define(filepath.Join(extra, "build_systems"), "data dir")
 	ws := t.TempDir()

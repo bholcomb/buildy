@@ -133,7 +133,7 @@ type archiver struct {
 // addChildren adds the entries of directory path, whose entry name is name: a directory a
 // followed symlink leads to.
 func (a *archiver) addChildren(path, name string) error {
-	real, err := filepath.EvalSymlinks(path)
+	real, err := RealPath(path)
 	if err != nil {
 		return err
 	}

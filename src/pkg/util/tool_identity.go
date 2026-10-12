@@ -78,12 +78,9 @@ func (ti *ToolIdentities) programID(program string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("can't find the program %s: %w", program, err)
 	}
-	real, err := filepath.EvalSymlinks(path)
+	real, err := RealPath(path)
 	if err != nil {
 		return "", fmt.Errorf("the program %s: %w", path, err)
-	}
-	if real, err = filepath.Abs(real); err != nil {
-		return "", err
 	}
 	hash, err := ti.hash(real)
 	if err != nil {

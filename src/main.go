@@ -51,10 +51,7 @@ func main() {
 	// The directory of the buildy executable (symlinks resolved), whose data/ is searched for
 	// templates, toolchains and build systems. Not os.Args[0]'s: run from the PATH, that is
 	// "buildy", which named the current directory.
-	exe, err := os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
+	exe, err := util.Executable()
 	if err != nil {
 		util.LogFatal("Failed to find the buildy executable: %v", err)
 	}

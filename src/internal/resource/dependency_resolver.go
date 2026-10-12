@@ -447,7 +447,7 @@ func (dr *DependencyResolver) buildFetchedDep(ctx context.Context, name string, 
 
 	b := newDependencyBuild(name, bs, dr.buildSystemManager.definition(bs.Name), source, dest,
 		dr.platform, dr.architecture, dr.configuration, buildType, args, override, execSpec, dr.dockerMounts())
-	exe, err := os.Executable()
+	exe, err := util.Executable()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find buildy executable: %w", err)
 	}
