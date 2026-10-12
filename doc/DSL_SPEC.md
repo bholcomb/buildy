@@ -2468,7 +2468,7 @@ error when the definition loads:
 | `${config}`, `${platform}`, `${arch}` | What is being built, buildy's names (`release`, `linux`, `x86_64`) |
 | `${jobs}` | Number of parallel jobs (the number of CPUs) |
 | `${args}` | `default_args`, then the dependency's `build.args`: each item one argument. Phase commands only |
-| `${buildy_exe}` | The running buildy executable |
+| `${buildy_exe}` | The running buildy executable, symlinks resolved (the one whose `data/` is searched) |
 | `${config_file}` | The dependency's `build.override` file, else its source directory (what build system buildy builds) |
 
 A path template (`working_dir`, an output pattern) must expand to one word. A placeholder inside a

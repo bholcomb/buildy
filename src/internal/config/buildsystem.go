@@ -15,7 +15,7 @@ import (
 //   - build_type: the build system's name for the configuration, only with configurations:;
 //   - jobs: the number of CPUs;
 //   - args: default_args, then the dependency's build.args (commands only: it is a list);
-//   - buildy_exe: the running buildy executable;
+//   - buildy_exe: the running buildy executable, symlinks resolved;
 //   - config_file: the dependency's build.override, else its source directory (for buildy).
 var BuildSystemPlaceholders = []string{
 	"source_dir", "build_dir", "install_dir",
