@@ -55,7 +55,8 @@ func sortedKeys(m map[string]string) []string {
 
 // Every built-in Go toolchain passes a target's options as go build takes them: the tags joined
 // with commas, all the ldflags as one argument (each item's own quoting kept for go to read),
-// the gcflags as one argument, and -trimpath in release.
+// the gcflags as one argument, and -trimpath in release. A shared library is c-shared, a static
+// library c-archive, each named as the platform names libraries.
 func TestGoOptionsReachTheCommand(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{"buildy.yaml": `project: {name: opts, version: 1.2.3}
@@ -68,27 +69,36 @@ targets:
       ldflags: ["-s", "-X main.version=${project_version}", "-X 'main.msg=hello world'"]
       gcflags: ["all=-N", "-l"]
     - {name: plain, language: go, path: cmd/plain}
+    - {name: hardened, language: go, path: cmd/plain, buildmode: pie}
   shared_libraries:
-    - {name: clib, language: go, path: clib}
+    - {name: clib, language: go, path: clib, build_tags: [a]}
+  static_libraries:
+    - {name: carc, language: go, path: clib}
 `})
 	app := "-tags | a,b | -ldflags=-s -X main.version=1.2.3 -X 'main.msg=hello world' | -gcflags=all=-N -l | ."
 	checkArgv(t, root, []argvCase{
 		{"linux", "x86_64", "debug", map[string]string{
-			"app":   "<root>/cmd/app: go | build | -o | <out>/bin/app | " + app,
-			"plain": "<root>/cmd/plain: go | build | -o | <out>/bin/plain | .",
-			"clib":  "<root>/clib: go | build | -buildmode=c-shared | -o | <out>/lib/clib | .",
+			"app":      "<root>/cmd/app: go | build | -o | <out>/bin/app | " + app,
+			"plain":    "<root>/cmd/plain: go | build | -o | <out>/bin/plain | .",
+			"hardened": "<root>/cmd/plain: go | build | -buildmode=pie | -o | <out>/bin/hardened | .",
+			"clib":     "<root>/clib: go | build | -buildmode=c-shared | -o | <out>/lib/libclib.so | -tags | a | .",
+			"carc":     "<root>/clib: go | build | -buildmode=c-archive | -o | <out>/lib/libcarc.a | .",
 		}},
 		{"linux", "x86_64", "release", map[string]string{
 			"app":  "<root>/cmd/app: go | build | -trimpath | -o | <out>/bin/app | " + app,
-			"clib": "<root>/clib: go | build | -buildmode=c-shared | -trimpath | -o | <out>/lib/clib | .",
+			"clib": "<root>/clib: go | build | -buildmode=c-shared | -trimpath | -o | <out>/lib/libclib.so | -tags | a | .",
+			"carc": "<root>/clib: go | build | -buildmode=c-archive | -trimpath | -o | <out>/lib/libcarc.a | .",
 		}},
 		{"macos", "x86_64", "release", map[string]string{
 			"app":  "<root>/cmd/app: go | build | -trimpath | -o | <out>/bin/app | " + app,
-			"clib": "<root>/clib: go | build | -buildmode=c-shared | -trimpath | -o | <out>/lib/clib | .",
+			"clib": "<root>/clib: go | build | -buildmode=c-shared | -trimpath | -o | <out>/lib/libclib.dylib | -tags | a | .",
+			"carc": "<root>/clib: go | build | -buildmode=c-archive | -trimpath | -o | <out>/lib/libcarc.a | .",
 		}},
 		{"windows", "x86_64", "debug", map[string]string{
-			"app":  "<root>/cmd/app: go | build | -o | <out>/bin/app.exe | " + app,
-			"clib": "<root>/clib: go | build | -buildmode=c-shared | -o | <out>/lib/clib.exe | .",
+			"app":      "<root>/cmd/app: go | build | -o | <out>/bin/app.exe | " + app,
+			"hardened": "<root>/cmd/plain: go | build | -buildmode=pie | -o | <out>/bin/hardened.exe | .",
+			"clib":     "<root>/clib: go | build | -buildmode=c-shared | -o | <out>/lib/clib.dll | -tags | a | .",
+			"carc":     "<root>/clib: go | build | -buildmode=c-archive | -o | <out>/lib/libcarc.a | .",
 		}},
 	})
 }

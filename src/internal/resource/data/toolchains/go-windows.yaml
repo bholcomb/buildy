@@ -21,6 +21,11 @@ toolchain:
 
   output_prefix: ""
 
+  # The C-compatible libraries' file names (the Go library templates' outputs)
+  variables:
+    c_shared_name: "${item.name}.dll"
+    c_archive_name: "lib${item.name}.a"
+
   tools:
     go_build:
       action: build

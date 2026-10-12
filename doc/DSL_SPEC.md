@@ -818,11 +818,11 @@ Define what to build. Targets are organized into explicit sections by type.
 
 | Section | Output Type | Languages |
 |---------|-------------|-----------|
-| `static_libraries` | Static library (.a, .lib) | c, cpp, rust |
+| `static_libraries` | Static library (.a, .lib) | c, cpp, rust, go |
 | `shared_libraries` | Shared library (.so, .dll, .dylib) | c, cpp, rust, go |
 | `executables` | Executable binary | c, cpp, rust, go |
 
-**Note:** Go and Rust library targets are for C/C++ interop only. For pure Go/Rust projects, use `executables` - dependencies are handled by Go modules and Cargo respectively.
+**Note:** Go and Rust library targets are for C/C++ interop only. For pure Go/Rust projects, use `executables` - dependencies are handled by Go modules and Cargo respectively. A Go shared library is built with `-buildmode=c-shared` (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll`), a static library with `-buildmode=c-archive` (`lib<name>.a`), both in the output directory's `lib/` with the C header Go writes beside them (`lib<name>.h`, `<name>.h` for the DLL); both need cgo (a C compiler, and `CGO_ENABLED` not `0`).
 
 ### Static Libraries
 

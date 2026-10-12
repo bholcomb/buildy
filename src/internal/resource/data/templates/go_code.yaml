@@ -1,9 +1,11 @@
 # Go Build Templates
-# Templates for building Go executables and C-compatible shared libraries
+# Templates for building Go executables and C-compatible libraries
 #
-# Note: Go doesn't support traditional static libraries. Go packages are
-# compiled directly into the final binary. For C interop, use shared_libraries
-# with buildmode=c-shared.
+# Go packages are compiled into the final binary. The library templates are for C/C++ interop:
+# - shared_libraries: buildmode=c-shared (.so, .dylib, .dll)
+# - static_libraries: buildmode=c-archive (.a)
+# Each writes its C header next to the library (libname.h for libname.so). The toolchain names
+# the files: c_shared_name, c_archive_name.
 
 templates:
   # Go executable: single-step build (Go handles its own compilation internally)
@@ -49,8 +51,33 @@ templates:
     steps:
       - name: build
         action: build
-        output: "${output_dir}/lib/${tool.output_pattern}"
+        output: "${output_dir}/lib/${c_shared_name}"
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:
           buildmode: "c-shared"
+
+  # Go static library: C-compatible archive using buildmode=c-archive
+  go_static_library:
+    description: "Build Go C-compatible static library"
+    metadata:
+      language: go
+      target_types: [static_library]
+      toolchain_language: go
+      # go build keeps its own content-based cache: buildy always runs it
+      tool_cached: true
+      pre_processing:
+        resolve_deps: false
+        resolve_sources: false
+        resolve_include_dirs: false
+        resolve_path: true
+      post_processing:
+        register_target: true
+    steps:
+      - name: build
+        action: build
+        output: "${output_dir}/lib/${c_archive_name}"
+        inputs: ["${item.path}"]
+        working_dir: "${item.path}"
+        tool_params:
+          buildmode: "c-archive"

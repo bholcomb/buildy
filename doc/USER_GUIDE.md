@@ -1140,10 +1140,16 @@ targets:
   executables:
     - name: myapp
       language: go
-      path: "cmd/myapp"          # Directory with main package
-      build_tags: ["netgo"]
-      ldflags: ["-s", "-w"]      # Strip for smaller binary
+      path: "cmd/myapp"          # Directory with the main package
+      build_tags: [netgo, {linux: [x11]}]
+      ldflags: ["-X main.version=${project_version}", {release: ["-s", "-w"]}]
+      gcflags: [{debug: ["all=-N -l"]}]
+      buildmode: pie             # exe (go's default) or pie
 ```
+
+`build_tags` becomes `-tags netgo,x11`, `ldflags` one `-ldflags=...` argument and `gcflags` one
+`-gcflags=...` argument; go splits those two into words itself, so a value with a space is quoted
+inside the item as go reads it: `"-X 'main.msg=hello world'"`. A release build adds `-trimpath`.
 
 ### Rust Projects
 
@@ -1153,15 +1159,24 @@ targets:
     - name: myapp
       language: rust
       path: "."                  # Directory with Cargo.toml
-      features: ["feature1"]
+      features: [cli, {linux: [alsa]}]
       bin: "myapp"               # If multiple binaries
 ```
+
+`features` becomes `--features cli,alsa` and `bin` `--bin myapp`; a release build adds
+`--release`. The Windows and WebAssembly toolchains pass their `--target` triple.
+
+These are all the keys a Go or Rust target takes, besides `name`, `language` and `depends_on`
+(the [DSL spec](DSL_SPEC.md#go-and-rust-target-keys) has the table). Any other key, a C/C++ one
+such as `sources` or `flags`, or the other language's, is an error, and so is a Go or Rust key on
+a C or C++ target. The lists take filters, as `sources` and `defines` do.
 
 Cargo builds into `build/<platform>-<arch>-<config>/cargo/`; the binary is
 `cargo/<profile>/myapp` (`debug` or `release`). Go and Rust builds run `go build` and
 `cargo build` every time and let the tool's own cache decide what to rebuild: it knows about
 imports outside the target directory, embedded files, `Cargo.toml`, path dependencies and build
-scripts. They show as executed, never as cache hits.
+scripts. They show as executed, never as cache hits; `buildy --dry-run -n 3` shows the command
+each would run.
 
 ### C/C++ Libraries for FFI
 
@@ -1171,9 +1186,18 @@ Go and Rust can produce C-compatible libraries:
 targets:
   shared_libraries:
     - name: mylib
-      language: go          # Creates a C-compatible .so/.dll
+      language: go          # -buildmode=c-shared: lib/libmylib.so (.dylib, mylib.dll)
+      path: "."
+  static_libraries:
+    - name: myarchive
+      language: go          # -buildmode=c-archive: lib/libmyarchive.a
       path: "."
 ```
+
+Go writes the C header beside the library (`lib/libmylib.h`). A Go library's build mode is its
+type's; it takes no `buildmode`. Go libraries need cgo: a C compiler on the `PATH`, and
+`CGO_ENABLED` not set to `0`. A Rust library is the crate's `staticlib` or `cdylib`, as its
+`Cargo.toml` declares.
 
 ## IDE Integration
 

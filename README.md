@@ -96,7 +96,7 @@ Buildy uses explicit sections for different target types:
 
 | Section | Output | Supported Languages |
 |---------|--------|---------------------|
-| `static_libraries` | Static library (.a, .lib) | c, cpp, rust |
+| `static_libraries` | Static library (.a, .lib) | c, cpp, rust, go |
 | `shared_libraries` | Shared library (.so, .dll) | c, cpp, rust, go |
 | `executables` | Executable binary | c, cpp, rust, go |
 
@@ -134,7 +134,13 @@ targets:
       features: ["feature1"] # Optional Cargo features
 ```
 
-Go/Rust library targets (`shared_libraries`, `static_libraries`) are for C/C++ interop only.
+A Go target takes `path`, `build_tags`, `ldflags`, `gcflags` and `buildmode`; a Rust target
+`path`, `features` and `bin` (and both `name`, `language`, `depends_on`). Any other key is an
+error; the lists take filters (`build_tags: [{linux: [x11]}]`). See
+[Go and Rust target keys](doc/DSL_SPEC.md#go-and-rust-target-keys).
+
+Go/Rust library targets (`shared_libraries`, `static_libraries`) are for C/C++ interop only: Go
+builds them with `-buildmode=c-shared` and `-buildmode=c-archive`.
 
 Buildy runs `go build` and `cargo build` on every build and lets their own caches decide what to
 rebuild; they show as executed, never as cache hits. Cargo builds into
@@ -292,7 +298,7 @@ Buildy separates **what** to build from **how** to build:
 **Templates** are language-agnostic recipes selected by `language` + target type:
 - `cpp_executable`, `cpp_static_library`, `cpp_shared_library`
 - `c_executable`, `c_static_library`, `c_shared_library`
-- `go_executable`, `go_shared_library`
+- `go_executable`, `go_static_library`, `go_shared_library`
 - `rust_executable`, `rust_static_library`, `rust_shared_library`
 
 **Toolchains** are platform-specific implementations that provide the actual commands.
