@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"buildy/internal/resource"
@@ -30,6 +29,18 @@ func outputOf(t *testing.T, tasks []*BuildTask, target string) *BuildTask {
 	}
 	t.Fatalf("no task for target %s", target)
 	return nil
+}
+
+// argAfter returns the argument after flag in args, or "" if there is none. The toolchain writes
+// the path (${output_dir}/cargo), and on Windows its separators are mixed: it is compared as a
+// path.
+func argAfter(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // Findings 4, 5, S6, S7: Go and Rust tasks are tool-cached with no guessed inputs, and Rust
@@ -73,7 +84,7 @@ func TestGoAndRustTasksAreToolCached(t *testing.T) {
 			if len(task.Inputs) != 0 {
 				t.Errorf("%s-%s %s: declares inputs %v", tc.platform, tc.config, target, task.Inputs)
 			}
-			if task.TaskType == "cargo_build" && !strings.Contains(strings.Join(task.Command.Args, "\x00"), "--target-dir\x00"+filepath.Join(outDir, "cargo")) {
+			if task.TaskType == "cargo_build" && filepath.Clean(argAfter(task.Command.Args, "--target-dir")) != filepath.Join(outDir, "cargo") {
 				t.Errorf("%s-%s %s: command %q doesn't put Cargo's target dir at %s", tc.platform, tc.config, target, task.Command, filepath.Join(outDir, "cargo"))
 			}
 			if got := task.Outputs[0]; got != filepath.Join(outDir, filepath.FromSlash(want)) {

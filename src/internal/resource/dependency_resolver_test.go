@@ -167,6 +167,11 @@ func TestPkgConfigKeepsEveryFlag(t *testing.T) {
 	if _, err := exec.LookPath("pkg-config"); err != nil {
 		t.Skip("skipping: pkg-config is not on the PATH")
 	}
+	// The pkg-config of GitHub's Windows runners is Strawberry Perl's script, which the runner's
+	// other perl can't run (Pod::Usage is missing)
+	if out, err := exec.Command("pkg-config", "--version").CombinedOutput(); err != nil {
+		t.Skipf("skipping: the pkg-config on the PATH doesn't run (pkg-config --version: %v): %s", err, out)
+	}
 	dir := t.TempDir()
 	writeDepFiles(t, dir, map[string]string{"demo.pc": `prefix=/opt/my\ demo
 Name: demo

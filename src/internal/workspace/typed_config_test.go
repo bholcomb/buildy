@@ -112,6 +112,10 @@ platforms:
 // Staging files take the documented {source, use_symlink} form; it was read as a filter map with
 // keys nothing matched, and dropped.
 func TestStagingFileEntries(t *testing.T) {
+	// A host that can symlink, as on Linux and macOS: a Windows host copies whatever the config says
+	saved := hostCanSymlink
+	defer func() { hostCanSymlink = saved }()
+	hostCanSymlink = true
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{
 		"buildy.yaml": `project: {name: ws}

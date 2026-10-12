@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -135,7 +136,12 @@ func TestBuildCommandShellTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `gen -v '/my ws/it'\''s.x' | tee /out/a.o > /dev/null`; cmd.Script != want || cmd.Args != nil {
+	// The script runs with the host's shell: sh, or cmd.exe on Windows
+	want := `gen -v '/my ws/it'\''s.x' | tee /out/a.o > /dev/null`
+	if runtime.GOOS == "windows" {
+		want = `gen -v "/my ws/it's.x" | tee /out/a.o > /dev/null`
+	}
+	if cmd.Script != want || cmd.Args != nil {
 		t.Errorf("script %q, want %q", cmd.Script, want)
 	}
 

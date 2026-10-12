@@ -92,9 +92,10 @@ workspace:
 			{BuildContext{Platform: "linux", Architecture: "arm64", Configuration: "release"},
 				"arm common legacy legacy/lin legacy/shared parent parent/child-linux platform-linux rel"},
 		} {
-			got := strings.Join(moduleNames(t, root, tc.ctx), " ")
-			if got != tc.want {
-				t.Errorf("%s form, %s-%s-%s:\n  got  %s\n  want %s", name, tc.ctx.Platform, tc.ctx.Architecture, tc.ctx.Configuration, got, tc.want)
+			// A module is named by its directory relative to the root, in the host's form
+			got, want := strings.Join(moduleNames(t, root, tc.ctx), " "), filepath.FromSlash(tc.want)
+			if got != want {
+				t.Errorf("%s form, %s-%s-%s:\n  got  %s\n  want %s", name, tc.ctx.Platform, tc.ctx.Architecture, tc.ctx.Configuration, got, want)
 			}
 		}
 	}
