@@ -57,7 +57,7 @@ platforms:
 		"app/lib.cpp":  "",
 		"app/main.cpp": "",
 	})
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

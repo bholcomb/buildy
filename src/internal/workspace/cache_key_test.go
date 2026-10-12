@@ -13,7 +13,7 @@ import (
 // task's cache key, its inputs given a stand-in hash: what the configuration puts in the key.
 func keysOf(t *testing.T, root string) map[string]string {
 	t.Helper()
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

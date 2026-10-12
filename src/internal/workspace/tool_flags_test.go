@@ -11,7 +11,7 @@ import (
 // generateWithToolchains generates root's tasks with its buildy_config/toolchains.
 func generateWithToolchains(t *testing.T, root, configuration string) []*BuildTask {
 	t.Helper()
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

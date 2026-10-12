@@ -2701,7 +2701,9 @@ dependencies apply, the other modules' targets exist, and there is one cache, at
 can't be read is an error.
 
 **Workspace Mode** (default):
-- Discovers all `buildy.yaml` modules in the project
+- Discovers all `buildy.yaml` modules in the project (without `workspace.modules`), outside the
+  cache directory (`--cache-dir`, `.buildy_cache` by default), `.git`, `venv` and what
+  `workspace.exclude` names
 - Resolves dependencies from `buildy_config/dependencies/`
 - Fetches and builds dependencies that aren't yet, for the configuration being built
 - Generates a full task graph with proper ordering

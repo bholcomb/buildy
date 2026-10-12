@@ -44,17 +44,32 @@ func resolveModuleEntries(modules *config.ModuleList, ctx BuildContext) []config
 	return modules.Entries.Resolve(ctx)
 }
 
+// DefaultCacheDir is the cache directory (--cache-dir) unless one is given: relative to the
+// workspace root.
+const DefaultCacheDir = ".buildy_cache"
+
+// cacheDirOf returns the cache directory of a workspace at root: cacheDir (--cache-dir) relative to
+// the root, or absolute.
+func cacheDirOf(root, cacheDir string) string {
+	if !filepath.IsAbs(cacheDir) {
+		cacheDir = filepath.Join(root, cacheDir)
+	}
+	return filepath.Clean(cacheDir)
+}
+
 // Workspace manages multi-module workspace with buildy.yaml files
 type Workspace struct {
 	RootDir    string
 	ConfigPath string                  // Explicit config file path (empty for default buildy.yaml discovery)
+	CacheDir   string                  // the cache directory, absolute: discovery never looks in it
 	Config     *WorkspaceConfig
 	Modules    map[string]*ModuleInfo // relative_path -> ModuleInfo
 	discovered bool
 }
 
-// NewWorkspace creates a new Workspace
-func NewWorkspace(rootDir string) (*Workspace, error) {
+// NewWorkspace loads the workspace at rootDir, whose cache directory is cacheDir (relative to it,
+// or absolute).
+func NewWorkspace(rootDir, cacheDir string) (*Workspace, error) {
 	if rootDir == "" {
 		return nil, fmt.Errorf("internal error: NewWorkspace needs a directory (DiscoverWorkspace finds one)")
 	}
@@ -65,6 +80,7 @@ func NewWorkspace(rootDir string) (*Workspace, error) {
 
 	ws := &Workspace{
 		RootDir:    rootDir,
+		CacheDir:   cacheDirOf(rootDir, cacheDir),
 		Modules:    make(map[string]*ModuleInfo),
 		discovered: false,
 	}
@@ -78,9 +94,9 @@ func NewWorkspace(rootDir string) (*Workspace, error) {
 	return ws, nil
 }
 
-// NewWorkspaceWithConfig creates a new Workspace with a custom config file path
-// This is used when building dependencies with override config files
-func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, error) {
+// NewWorkspaceWithConfig loads a standalone config file as a workspace rooted at rootDir (the
+// config of a dependency's build), whose cache directory is cacheDir.
+func NewWorkspaceWithConfig(rootDir, configPath, cacheDir string) (*Workspace, error) {
 	// Every path buildy derives is absolute, so the result never depends on the current directory
 	rootDir, err := filepath.Abs(rootDir)
 	if err != nil {
@@ -92,6 +108,7 @@ func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, erro
 	ws := &Workspace{
 		RootDir:    rootDir,
 		ConfigPath: configPath, // Store explicit config path
+		CacheDir:   cacheDirOf(rootDir, cacheDir),
 		Modules:    make(map[string]*ModuleInfo),
 		discovered: false,
 	}
@@ -109,9 +126,9 @@ func NewWorkspaceWithConfig(rootDir string, configPath string) (*Workspace, erro
 // nearest directory at or above start with a buildy.yaml is a module, and its workspace root is
 // the outermost directory above it whose buildy.yaml includes it as a module (listed in
 // workspace.modules, directly or through child modules, under any filter key; or, in discovery
-// mode, discovered). A buildy.yaml that no config above includes is its own workspace. The second
-// result says why the root was chosen.
-func findWorkspaceRoot(start string) (string, string, error) {
+// mode, discovered, outside its cache directory cacheDir). A buildy.yaml that no config above
+// includes is its own workspace. The second result says why the root was chosen.
+func findWorkspaceRoot(start, cacheDir string) (string, string, error) {
 	start, err := filepath.Abs(start)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to resolve path: %w", err)
@@ -130,7 +147,7 @@ func findWorkspaceRoot(start string) (string, string, error) {
 	}
 	nearest := candidates[0]
 	for i := len(candidates) - 1; i > 0; i-- {
-		included, err := includesModule(candidates[i], nearest)
+		included, err := includesModule(candidates[i], nearest, cacheDir)
 		if err != nil {
 			return "", "", err
 		}
@@ -147,7 +164,7 @@ func findWorkspaceRoot(start string) (string, string, error) {
 // includesModule reports whether the workspace whose root config is in root includes dir as a
 // module, for any build: explicit modules are followed through their child modules, whatever
 // their filter keys.
-func includesModule(root, dir string) (bool, error) {
+func includesModule(root, dir, cacheDir string) (bool, error) {
 	section, err := config.LoadWorkspaceSection(filepath.Join(root, "buildy.yaml"))
 	if err != nil {
 		return false, err
@@ -157,7 +174,7 @@ func includesModule(root, dir string) (bool, error) {
 		if section != nil {
 			discover, exclude = section.Discover, section.Exclude
 		}
-		return discovers(root, dir, discover, exclude), nil
+		return discovers(root, dir, cacheDirOf(root, cacheDir), discover, exclude), nil
 	}
 	return listsModule(root, section.Modules, dir, map[string]bool{})
 }
@@ -191,14 +208,18 @@ func listsModule(parent string, modules *config.ModuleList, dir string, seen map
 	return false, nil
 }
 
-// defaultExcludes are the directories discovery never looks in.
-var defaultExcludes = []string{".buildy_cache/**", "venv/**", ".git/**", "**/.git/**"}
+// defaultExcludes are the directories discovery never looks in, with the cache directory (whose
+// fetched dependencies have configs of their own).
+var defaultExcludes = []string{"venv/**", ".git/**", "**/.git/**"}
 
-// discovers reports whether a workspace at root in discovery mode, with these discover and exclude
-// patterns, finds dir's buildy.yaml.
-func discovers(root, dir string, discover, exclude []string) bool {
+// discovers reports whether a workspace at root in discovery mode, with this cache directory and
+// these discover and exclude patterns, finds dir's buildy.yaml.
+func discovers(root, dir, cacheDir string, discover, exclude []string) bool {
+	if !util.PathWithin(dir, root) || util.PathWithin(dir, cacheDir) {
+		return false
+	}
 	rel, err := filepath.Rel(root, filepath.Join(dir, "buildy.yaml"))
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil {
 		return false
 	}
 	excludes := append(append([]string{}, defaultExcludes...), exclude...)
@@ -464,7 +485,7 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 
 		// Check if this directory should be excluded
 		if info.IsDir() {
-			if excludedDir(relPath, ws.Config.ExcludePatterns) {
+			if util.NormalizePath(path) == util.NormalizePath(ws.CacheDir) || excludedDir(relPath, ws.Config.ExcludePatterns) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -539,12 +560,13 @@ func IsWorkspaceRoot(directory string) bool {
 }
 
 // DiscoverWorkspace loads the workspace startDir belongs to (findWorkspaceRoot): from inside a
-// module, the whole workspace that includes it.
-func DiscoverWorkspace(startDir string) (*Workspace, error) {
-	root, why, err := findWorkspaceRoot(startDir)
+// module, the whole workspace that includes it. cacheDir is --cache-dir: relative to the root, or
+// absolute.
+func DiscoverWorkspace(startDir, cacheDir string) (*Workspace, error) {
+	root, why, err := findWorkspaceRoot(startDir, cacheDir)
 	if err != nil {
 		return nil, err
 	}
 	util.LogInfo("Workspace root: %s (%s)", root, why)
-	return NewWorkspace(root)
+	return NewWorkspace(root, cacheDir)
 }

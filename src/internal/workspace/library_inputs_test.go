@@ -72,7 +72,7 @@ foo:
 		"third_party/lib/libfoo.a": "archive",
 	})
 
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

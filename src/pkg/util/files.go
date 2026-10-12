@@ -76,6 +76,13 @@ func NormalizePath(path string) string {
 	return cleaned
 }
 
+// PathWithin reports whether path is dir or lies inside it, comparing as NormalizePath does.
+// Both are absolute, or both relative to one directory.
+func PathWithin(path, dir string) bool {
+	rel, err := filepath.Rel(NormalizePath(dir), NormalizePath(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // NormalizePathForCache is specifically for cache key calculation.
 // It normalizes the path and also converts to forward slashes for cross-platform
 // cache key consistency (though cache is typically not shared across platforms).

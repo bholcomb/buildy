@@ -20,7 +20,7 @@ func loadWorkspace(t *testing.T, root string, files map[string]string) *workspac
 			t.Fatal(err)
 		}
 	}
-	ws, err := workspace.NewWorkspace(root)
+	ws, err := workspace.NewWorkspace(root, workspace.DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

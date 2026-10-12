@@ -91,7 +91,7 @@ func TestDockerToolchainTasksRunInDocker(t *testing.T) {
 		"buildy.yaml": "project: {name: d}\n" + cppEnvironment + "targets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n",
 		"main.cpp":    "int main() {}",
 	})
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ import (
 // moduleNames loads the workspace at root for ctx and returns its module paths.
 func moduleNames(t *testing.T, root string, ctx BuildContext) []string {
 	t.Helper()
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestModuleListErrors(t *testing.T) {
 		root := t.TempDir()
 		writeFiles(t, root, map[string]string{"buildy.yaml": "project: {name: ws}\nworkspace:\n  modules: " + modules + "\n"})
 		// The loader rejects the file
-		if _, err := NewWorkspace(root); err == nil || !strings.Contains(err.Error(), "workspace.modules") {
+		if _, err := NewWorkspace(root, DefaultCacheDir); err == nil || !strings.Contains(err.Error(), "workspace.modules") {
 			t.Errorf("modules: %s: %v", modules, err)
 		}
 	}
@@ -193,7 +193,7 @@ func TestUnknownKeysFailToLoad(t *testing.T) {
 	writeFiles(t, root, map[string]string{
 		"buildy.yaml": "project: {name: ws}\nbogus_key: 1\n",
 	})
-	_, err := NewWorkspace(root)
+	_, err := NewWorkspace(root, DefaultCacheDir)
 	if err == nil || !strings.Contains(err.Error(), "bogus_key") || !strings.Contains(err.Error(), filepath.Join(root, "buildy.yaml")) {
 		t.Fatalf("got %v", err)
 	}
@@ -202,7 +202,7 @@ func TestUnknownKeysFailToLoad(t *testing.T) {
 		"buildy.yaml":     "project: {name: ws}\nworkspace:\n  modules: [app]\n",
 		"app/buildy.yaml": "targets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp], defnies: [X=1]}\n",
 	})
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestFindWorkspaceRoot(t *testing.T) {
 		"other/sub":                  "other", // discovery mode
 		"other/.buildy_cache/deps/d": "other/.buildy_cache/deps/d",
 	} {
-		got, _, err := findWorkspaceRoot(filepath.Join(root, start))
+		got, _, err := findWorkspaceRoot(filepath.Join(root, start), DefaultCacheDir)
 		if err != nil {
 			t.Fatalf("%s: %v", start, err)
 		}
@@ -298,7 +298,7 @@ func TestFindWorkspaceRoot(t *testing.T) {
 			t.Errorf("from %s the root is %s, want %s", start, got, filepath.Join(root, want))
 		}
 	}
-	if _, _, err := findWorkspaceRoot(filepath.Dir(root)); err == nil {
+	if _, _, err := findWorkspaceRoot(filepath.Dir(root), DefaultCacheDir); err == nil {
 		t.Error("a directory without any buildy.yaml at or above it has a workspace")
 	}
 }
@@ -310,7 +310,42 @@ func TestFindWorkspaceRootBrokenParent(t *testing.T) {
 		"buildy.yaml":     "workspace:\n  modulez: [app]\n",
 		"app/buildy.yaml": "targets: {}\n",
 	})
-	if _, _, err := findWorkspaceRoot(filepath.Join(root, "app")); err == nil || !strings.Contains(err.Error(), "modulez") {
+	if _, _, err := findWorkspaceRoot(filepath.Join(root, "app"), DefaultCacheDir); err == nil || !strings.Contains(err.Error(), "modulez") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// Discovery never looks in the cache directory, wherever --cache-dir puts it: its fetched
+// dependencies have configs of their own. (It skipped .buildy_cache whatever the cache directory.)
+func TestDiscoveryExcludesTheCacheDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml":                      "project: {name: ws}\n",
+		"sub/buildy.yaml":                  "targets: {}\n",
+		"cache2/deps/d/buildy.yaml":        "project: {name: d}\n",
+		".buildy_cache/deps/e/buildy.yaml": "project: {name: e}\n",
+	})
+	for _, cacheDir := range []string{"cache2", filepath.Join(root, "cache2")} {
+		ws, err := NewWorkspace(root, cacheDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modules, err := ws.DiscoverModules(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for name := range modules {
+			names = append(names, filepath.ToSlash(name))
+		}
+		sort.Strings(names)
+		if strings.Join(names, " ") != ". .buildy_cache/deps/e sub" {
+			t.Errorf("--cache-dir %s: modules %v, want ., .buildy_cache/deps/e and sub", cacheDir, names)
+		}
+
+		start := filepath.Join(root, "cache2", "deps", "d")
+		if got, _, err := findWorkspaceRoot(start, cacheDir); err != nil || got != start {
+			t.Errorf("--cache-dir %s: the root of a fetched dependency is %s (%v), want the dependency", cacheDir, got, err)
+		}
 	}
 }

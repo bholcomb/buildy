@@ -63,7 +63,7 @@ func main() {
 	architecture := flag.StringP("architecture", "a", defaultArch, "Target architecture (auto-detected: "+defaultArch+")")
 	configuration := flag.StringP("config", "c", "debug", "Build configuration")
 	release := flag.BoolP("release", "r", false, "Build in release mode (shortcut for --config=release)")
-	cacheDir := flag.String("cache-dir", ".buildy_cache", "Cache directory: relative to the workspace root, or absolute")
+	cacheDir := flag.String("cache-dir", workspace.DefaultCacheDir, "Cache directory: relative to the workspace root, or absolute")
 	dryRun := flag.BoolP("dry-run", "d", false, "Plan the build: list what would be fetched, built and run, without doing any of it")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
@@ -163,7 +163,7 @@ func main() {
 		if err != nil {
 			util.LogFatal("Failed to get current directory: %v", err)
 		}
-		ws, err = workspace.DiscoverWorkspace(cwd)
+		ws, err = workspace.DiscoverWorkspace(cwd, *cacheDir)
 		if err != nil {
 			if *clean || *cleanAll {
 				util.LogFatal("Nothing to clean, nothing removed: %v", err)
@@ -182,7 +182,7 @@ func main() {
 
 		if info.IsDir() {
 			// A directory is a workspace root: the same build as running buildy inside it
-			ws, err = workspace.NewWorkspace(argPath)
+			ws, err = workspace.NewWorkspace(argPath, *cacheDir)
 			if err != nil {
 				util.LogFatal("Failed to load workspace from %s: %v", argPath, err)
 			}
@@ -193,7 +193,7 @@ func main() {
 			if err != nil {
 				util.LogFatal("Failed to get current directory: %v", err)
 			}
-			ws, err = workspace.NewWorkspaceWithConfig(cwd, argPath)
+			ws, err = workspace.NewWorkspaceWithConfig(cwd, argPath, *cacheDir)
 			if err != nil {
 				util.LogFatal("Failed to load %s: %v", argPath, err)
 			}
@@ -215,11 +215,7 @@ func main() {
 	util.LogVerbose("Found %d module(s)", len(ws.Modules))
 
 	// The cache directory: relative to the workspace root, or absolute
-	workspaceCacheDir := *cacheDir
-	if !filepath.IsAbs(workspaceCacheDir) {
-		workspaceCacheDir = filepath.Join(ws.RootDir, workspaceCacheDir)
-	}
-	workspaceCacheDir = filepath.Clean(workspaceCacheDir)
+	workspaceCacheDir := ws.CacheDir
 
 	// --clean removes what buildy produced in the workspace, and nothing else
 	if *clean || *cleanAll {

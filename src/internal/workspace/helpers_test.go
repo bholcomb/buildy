@@ -44,7 +44,7 @@ func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*Bui
 // generate loads the workspace at root and generates its tasks for a build context.
 func generate(t *testing.T, root, platform, arch, config string) (*Generated, error) {
 	t.Helper()
-	ws, err := NewWorkspace(root)
+	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		return nil, err
 	}
