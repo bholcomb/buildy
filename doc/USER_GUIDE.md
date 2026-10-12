@@ -1041,7 +1041,8 @@ line is too long for the system. See [Command Syntax](DSL_SPEC.md#command-syntax
 
 ### Custom Build Systems
 
-Define build systems for fetched dependencies:
+Build systems for fetched dependencies are defined like this. Buildy reads only its built-in
+definitions so far: files in `buildy_config/build_systems/` are **not loaded yet**.
 
 ```yaml
 # buildy_config/build_systems/bazel.yaml
@@ -1060,17 +1061,16 @@ build_system:
 
 ### Data Directory Search Paths
 
-Buildy searches for toolchains, templates, packages, and build systems in this order:
+Buildy loads toolchains and templates from these places; one of the same name in a later place
+replaces the earlier one:
 
-1. `./buildy_config/<type>/` - Project-specific
-2. `~/.buildy/<type>/` - User-shared
-3. Built-in (embedded in binary)
-
-Add custom search paths via CLI:
+1. Built-in (embedded in the binary)
+2. `data/toolchains/` and `data/templates/` next to the buildy executable
+3. Each `--add-data-dir <dir>`'s `toolchains/` and `templates/`, in order
+4. The workspace's `buildy_config/toolchains/` (toolchains only)
 
 ```bash
 buildy --add-data-dir /opt/company/buildy
-buildy --package-dir /opt/company/packages
 ```
 
 ## Toolchain Selection
@@ -1105,6 +1105,9 @@ environment:
 ```
 
 ### Per-Target Override
+
+Not implemented yet: a target's `toolchain:` is rejected as an unknown key. A target gets its
+module's toolchain, or its language's default when that is another language.
 
 ```yaml
 targets:
