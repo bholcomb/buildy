@@ -1171,7 +1171,7 @@ language's) is an error, as a misspelt key is. A C or C++ target can't have the 
 | `gcflags` | go | `-gcflags=<value>`: one argument, the items joined with spaces |
 | `buildmode` | go | `-buildmode=<mode>` for an executable: `exe` or `pie`. A library's is its type's: `c-shared` for `shared_libraries`, `c-archive` for `static_libraries` |
 | `features` | rust | `--features a,b`: one argument, the features joined with commas |
-| `bin` | rust | `--bin <name>`: an executable that builds one of its crate's binaries; also its file name |
+| `bin` | rust | `--bin <name>`: an executable that builds one of its crate's binaries; also its file name (executables only) |
 
 `build_tags`, `ldflags`, `gcflags` and `features` are lists that take
 [filters](#filtered-lists) like any other: `build_tags: [{linux: [x11]}, netgo]`,

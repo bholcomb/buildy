@@ -411,6 +411,7 @@ func TestTargetKeysOfAnotherLanguageAreErrors(t *testing.T) {
 		{"executables: [{name: a, language: go, path: ., buildmode: c-shared}]", "buildmode 'c-shared' is not one of: exe, pie"},
 		{"shared_libraries: [{name: a, language: go, path: ., buildmode: c-archive}]", "a Go shared library's build mode is its type's"},
 		{"static_libraries: [{name: a, language: go, path: ., buildmode: c-archive}]", "a Go static library's build mode is its type's"},
+		{"static_libraries: [{name: a, language: rust, path: ., bin: a}]", "'bin' names an executable's binary"},
 	} {
 		path := filepath.Join(t.TempDir(), "buildy.yaml")
 		if err := os.WriteFile(path, []byte("targets:\n  "+c.yaml+"\n"), 0o644); err != nil {

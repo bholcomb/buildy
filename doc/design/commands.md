@@ -137,7 +137,8 @@ as for every tool: `release` gives `-trimpath` and `--release`, and Cargo's prof
 follows. The target's lists take filters (`{linux: [x11]}`, `{release: ["-s", "-w"]}`).
 
 A key the target's language doesn't read is a load error naming the keys it takes: a Go target
-with `features` or `sources`, a C target with `ldflags`. A Go library's build mode is its type's
+with `features` or `sources`, a C target with `ldflags`, a Rust library with `bin`. A Go
+library's build mode is its type's
 (`c-shared`, or `c-archive` for the new `go_static_library` template); an executable's may be
 `exe` or `pie`. The Go libraries are named by the toolchain (`c_shared_name`, `c_archive_name`:
 `libx.so`, `libx.dylib`, `x.dll`, `libx.a`), as the Rust ones are; they were `lib/x` (and
@@ -179,7 +180,7 @@ cdylib library.
   built and vetted for those targets but have not run there.
 - Whether a staging symlink is made is decided by the target platform, not the host. *The host
   decides since [phase 5](layout.md#symlinks).*
-- Go and Rust options on Windows and macOS are tested as argument lists only; the end-to-end
-  tests run there (and in CI) but have run on Linux. A C target that includes the header a Go
+- Go and Rust options on Windows and macOS are tested as argument lists; the end-to-end tests
+  are written to run there too, but have only run on Linux. A C target that includes the header a Go
   library writes must be built after it (`--target lib` first): `depends_on.targets` orders a
   target's link, not its compiles, and the header is no declared output.

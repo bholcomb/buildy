@@ -322,6 +322,9 @@ func (t *Target) checkLanguageKeys(d *decoder, where, language, targetType strin
 			d.errorAt(t.Pos, "%s: '%s' is a key of %s targets, not of %s targets", where, key, owner, language)
 		}
 	}
+	if language == "rust" && t.Bin != "" && targetType != "executable" {
+		d.errorAt(t.Pos, "%s: 'bin' names an executable's binary; a Rust library is its crate's lib", where)
+	}
 	if language == "go" && t.Buildmode != "" {
 		if targetType != "executable" {
 			d.errorAt(t.Pos, "%s: a Go %s's build mode is its type's (c-shared for shared_libraries, c-archive for static_libraries): remove 'buildmode'", where, strings.ReplaceAll(targetType, "_", " "))
