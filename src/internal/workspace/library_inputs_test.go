@@ -72,6 +72,22 @@ foo:
 		"third_party/lib/libfoo.a": "archive",
 	})
 
+	tasks := generateWithDependencies(t, root)
+	link := linkTask(t, tasks, "app")
+	if !hasString(inputPaths(link), depLib) {
+		t.Errorf("link inputs %v lack %s", inputPaths(link), depLib)
+	}
+	for _, in := range inputPaths(link) {
+		if filepath.Base(in) == "libm.so" || filepath.Base(in) == "libm.a" {
+			t.Errorf("system library %s became an input", in)
+		}
+	}
+}
+
+// generateWithDependencies generates a Linux debug build's tasks with the workspace's
+// buildy_config/dependencies.yaml resolved.
+func generateWithDependencies(t *testing.T, root string) []*BuildTask {
+	t.Helper()
 	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		t.Fatal(err)
@@ -101,14 +117,42 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks := generated.Tasks
-	link := linkTask(t, tasks, "app")
-	if !hasString(inputPaths(link), depLib) {
-		t.Errorf("link inputs %v lack %s", inputPaths(link), depLib)
-	}
-	for _, in := range inputPaths(link) {
-		if filepath.Base(in) == "libm.so" || filepath.Base(in) == "libm.a" {
-			t.Errorf("system library %s became an input", in)
+	return generated.Tasks
+}
+
+// A dependency's library named like a workspace target is still the dependency's (or a system
+// library): a shared library "glfw" built over a dependency that links -lglfw (macOS's Homebrew
+// GLFW) must not take its own output as an input of its link.
+func TestDependencyLibraryNamedLikeAWorkspaceTargetIsNotThatTarget(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: ws}\n" + cppEnvironment + `targets:
+  shared_libraries:
+    - {name: glfw, language: cpp, output_prefix: "", sources: [plugin.cpp], deps: [glfw3]}
+  executables:
+    - {name: app, language: cpp, sources: [main.cpp], deps: [glfw3]}
+`,
+		"plugin.cpp": "int plugin() { return 0; }",
+		"main.cpp":   "int main() {}",
+		"buildy_config/dependencies.yaml": `
+glfw3:
+  libs: [glfw]
+`,
+	})
+	tasks := generateWithDependencies(t, root)
+	glfw := linkTask(t, tasks, "glfw")
+	for _, out := range glfw.Outputs {
+		if hasString(inputPaths(glfw), out) {
+			t.Errorf("link of glfw takes its own output %s as an input: %v", out, inputPaths(glfw))
 		}
+	}
+	app := linkTask(t, tasks, "app")
+	for _, out := range glfw.Outputs {
+		if hasString(inputPaths(app), out) {
+			t.Errorf("link of app takes glfw's output %s, for its dependency's -lglfw: %v", out, inputPaths(app))
+		}
+	}
+	if err := graphOf(t, tasks...).Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

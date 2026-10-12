@@ -65,7 +65,7 @@ type BuildTask struct {
 	DepFile       *DepFile      `json:"dep_file,omitempty"`
 	ToolCached    bool          `json:"tool_cached,omitempty"` // The tool keeps its own cache: always run, never a buildy cache hit
 	Dependencies  []string      `json:"dependencies"`
-	LinkLibs      []string      `json:"link_libs,omitempty"` // Libraries a link task links, by name (workspace targets or system libraries)
+	LinkLibs      []string      `json:"link_libs,omitempty"` // Libraries the target names that its link task links (workspace targets or system libraries; not its dependencies')
 	Module        string        `json:"module"`              // Module that defined the task ("" for the workspace root config)
 	Target        string        `json:"target,omitempty"`    // Target or artifact the task belongs to
 	Command       util.Command  `json:"command,omitzero"`    // What the task runs, and where

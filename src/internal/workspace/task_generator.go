@@ -248,6 +248,9 @@ func (tg *TaskGenerator) generateTargetTasks(
 		lists.sources = append(lists.sources, source)
 	}
 
+	// The libraries the target names: only these can be workspace targets (a dependency's are its
+	// own files or system libraries, even when a workspace target has the same name)
+	ownLibs := append([]string{}, lists.libs...)
 	var depLibFiles []string
 	if metadata.PreProcessing.ResolveDeps {
 		if depLibFiles, err = tg.resolveDeps(&lists); err != nil {
@@ -375,6 +378,13 @@ func (tg *TaskGenerator) generateTargetTasks(
 			for _, file := range depLibFiles {
 				task.Inputs = append(task.Inputs, NewTaskInput(file))
 			}
+			var linkLibs []string
+			for _, lib := range task.LinkLibs {
+				if hasString(ownLibs, lib) {
+					linkLibs = append(linkLibs, lib)
+				}
+			}
+			task.LinkLibs = linkLibs
 		}
 		// So it does after the final task of each target it depends on (resolved by name in
 		// resolveCrossModuleDependencies): a compile may include a header that target writes
