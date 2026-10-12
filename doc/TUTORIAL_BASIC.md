@@ -85,21 +85,19 @@ Here's the complete configuration:
 project:
   name: math-library
   version: "1.0.0"
-  description: "Simple math library example"
+  description: "Simple math library example demonstrating filtered lists"
 
 environment:
   compile:
     cpp_standard: "c++20"
     warnings: extra
-
+    
   configurations:
     debug:
       optimization: none
       symbols: true
-      defines: ["DEBUG=1", "MATH_LIB_VERSION=1"]
     release:
       optimization: full
-      defines: ["NDEBUG=1", "MATH_LIB_VERSION=1"]
 
 targets:
   static_libraries:
@@ -107,6 +105,15 @@ targets:
       language: cpp
       sources: ["libsrc/*.cpp"]
       include_dirs: ["include"]
+      defines:
+        # Common defines (always included)
+        - "MATH_LIB_VERSION=1"
+        # Configuration-specific defines using filtered list syntax
+        - debug:
+            - "DEBUG=1"
+            - "ENABLE_ASSERTS=1"
+        - release:
+            - "NDEBUG=1"
 
   executables:
     - name: calculator
@@ -115,8 +122,11 @@ targets:
       include_dirs: ["include"]
       libs:
         - mathcore
-      depends_on:
-        targets: ["mathcore"]
+      defines:
+        - debug:
+            - "DEBUG=1"
+        - release:
+            - "NDEBUG=1"
 ```
 
 Let's break this down:
@@ -129,7 +139,7 @@ project:
   version: "1.0.0"
 ```
 
-Every buildy project needs a name. The version is optional but recommended.
+Every buildy project needs a name. The version is optional.
 
 ### Environment Section
 
@@ -140,84 +150,94 @@ environment:
     warnings: extra
 ```
 
-This sets the C++ standard and warning level for all C++ targets. The `warnings: extra` keyword resolves to the appropriate flags for whichever toolchain is active (e.g., `-Wall -Wextra` for GCC/Clang, `/W4` for MSVC).
+This sets the C++ standard and warning level for all C++ targets. The `warnings: extra` keyword
+becomes the flags of whichever toolchain is active (`-Wall -Wextra` for GCC and Clang, `/W4` for
+MSVC). Without `cpp_standard`, the compiler uses its own default standard.
 
 ### Build Configurations
 
 ```yaml
-configurations:
-  debug:
-    optimization: none
-    symbols: true
-    defines: ["DEBUG=1"]
-  release:
-    optimization: full
-    defines: ["NDEBUG=1"]
+  configurations:
+    debug:
+      optimization: none
+      symbols: true
+    release:
+      optimization: full
 ```
 
-Debug builds include debug symbols and the `DEBUG` preprocessor macro. Release builds optimize for speed. Abstract keywords like `optimization` and `symbols` are resolved to concrete compiler flags by the active toolchain.
+Debug builds have debug symbols and no optimization; release builds are fully optimized. The
+toolchain turns `optimization` and `symbols` into compiler flags (`-O0 -g`, `-O3` with GCC).
 
 ### Static Library Target
 
 ```yaml
-static_libraries:
-  - name: mathcore
-    language: cpp
-    sources: ["libsrc/*.cpp"]
-    include_dirs: ["include"]
+  static_libraries:
+    - name: mathcore
+      language: cpp
+      sources: ["libsrc/*.cpp"]
+      include_dirs: ["include"]
+      defines:
+        - "MATH_LIB_VERSION=1"
+        - debug:
+            - "DEBUG=1"
+            - "ENABLE_ASSERTS=1"
+        - release:
+            - "NDEBUG=1"
 ```
 
-- `name`: The library name (produces `libmathcore.a` on Linux)
-- `language`: Must be `cpp` for C++ code
-- `sources`: Glob pattern matching source files
-- `include_dirs`: Directories to search for header files
+- `name`: the library's name (`libmathcore.a` on Linux, `mathcore.lib` with MSVC)
+- `language`: `cpp` for C++ code
+- `sources`: glob patterns of the source files
+- `include_dirs`: directories searched for headers
+- `defines`: a filtered list. Plain items always apply; the items under `debug:` only in a debug
+  build, those under `release:` only in a release build. A filter can also name a platform
+  (`linux:`), an architecture or a toolchain.
 
 ### Executable Target
 
 ```yaml
-executables:
-  - name: calculator
-    language: cpp
-    sources: ["appsrc/main.cpp"]
-    include_dirs: ["include"]
-    libs:
-      - mathcore
-    depends_on:
-      targets: ["mathcore"]
+  executables:
+    - name: calculator
+      language: cpp
+      sources: ["appsrc/main.cpp"]
+      include_dirs: ["include"]
+      libs:
+        - mathcore
 ```
 
-- `include_dirs`: Directories to search for header files
-- `libs`: Libraries to link against
-- `depends_on.targets`: Ensures mathcore builds first
+- `libs`: libraries to link. `mathcore` is a target of the workspace, so buildy links
+  `libmathcore.a` and builds it first; no other declaration is needed.
 
 ## Step 3: Build the Project
 
-Navigate to the example directory and build:
+Go to the example's directory and build:
 
 ```bash
 cd examples/math
 buildy
 ```
 
-You'll see output similar to:
+buildy prints each task as it runs, then a summary:
 
 ```
-================================================================================
-                              BUILD REPORT
-================================================================================
-Status: SUCCESS
-Duration: 0.234s
-
-Platform: linux / x86_64
-Configuration: debug
-Toolchain: gcc-cpp-linux
-
-Tasks:
-  Total:        3
-  Cache hits:   0 (0.0%)
-  Cache misses: 3
-================================================================================
+╔════════════════════════════════════════════════════════════╗
+║                        BUILD REPORT                        ║
+╠════════════════════════════════════════════════════════════╣
+║  Status:           SUCCESS                                 ║
+║  Platform:         linux-x86_64                            ║
+║  Configuration:    debug                                   ║
+║  Toolchain:        gcc-cpp-linux                           ║
+...
+║  Total Tasks:      4                                       ║
+║  Executed:         4                                       ║
+║  Cache Hits:       0 (0.0%)                                ║
+...
+║    compile:        2                                       ║
+║    link:           2                                       ║
+╚════════════════════════════════════════════════════════════╝
 ```
+
+Four tasks: a compile for each source file, the library's archive, and the executable's link.
 
 ## Step 4: Examine the Build Output
 
@@ -233,17 +253,20 @@ build/
     └── obj/
         ├── calculator/
         │   └── appsrc/
+        │       ├── main.cpp.d
         │       └── main.cpp.o
         └── mathcore/
             └── libsrc/
+                ├── math.cpp.d
                 └── math.cpp.o
 ```
 
 The output directory structure is:
 - `build/<platform>-<arch>-<config>/`
-- `bin/` for executables
-- `lib/` for libraries
-- `obj/<module>/<target>/` for intermediate object files, by source path within the module
+- `bin/` for executables (and shared libraries)
+- `lib/` for static libraries
+- `obj/<target>/` for object files, by source path (`obj/<module>/<target>/` in a module of a
+  workspace). The `.d` files list the headers each source included.
 
 ## Step 5: Run the Application
 
@@ -260,15 +283,15 @@ Debug: Adding 5 + 3
 4 * 7 = 28
 ```
 
-Notice the "Debug: Adding" message - this comes from the `DEBUG` macro we defined in the debug configuration.
+The "Debug: Adding" line comes from the `DEBUG` macro, which only the debug configuration defines.
 
 ## Step 6: Build in Release Mode
 
 ```bash
-buildy -c release
+buildy -r          # or: buildy -c release
 ```
 
-This creates a separate release directory:
+This builds into a separate directory:
 
 ```
 build/
@@ -292,31 +315,23 @@ Calculator v1.0
 4 * 7 = 28
 ```
 
-No debug message this time - the `DEBUG` macro isn't defined in release builds.
+No debug message this time: `DEBUG` isn't defined in release builds.
 
 ## Step 7: Incremental Builds
 
-Make a change to `appsrc/main.cpp` and rebuild:
+Run `buildy` again without changing anything: all four tasks are cache hits, and nothing runs.
 
-```bash
-buildy
-```
+Now add a comment to `appsrc/main.cpp` and build:
 
 ```
-================================================================================
-                              BUILD REPORT
-================================================================================
-Status: SUCCESS
-Duration: 0.156s
-
-Tasks:
-  Total:        3
-  Cache hits:   2 (66.7%)
-  Cache misses: 1
-================================================================================
+║  Total Tasks:      4                                       ║
+║  Executed:         1                                       ║
+║  Cache Hits:       3 (75.0%)                               ║
 ```
 
-Only `main.cpp` was recompiled. The library didn't change, so it was retrieved from cache.
+`main.cpp` was compiled again. Its object file came out the same, so the link was a cache hit too:
+buildy keys each task by the content of its inputs, not by file times. Change the code itself, and
+the link runs as well. Edit `include/mymath.h`, and both sources that include it compile again.
 
 ## Step 8: Clean and Rebuild
 
@@ -340,8 +355,8 @@ buildy --force
 - **Libraries** go in `targets.static_libraries:` or `targets.shared_libraries:`
 - **Applications** go in `targets.executables:`
 - **include_dirs**: Directories to search for header files
-- **depends_on**: Ensures build order
-- **libs**: Links the specified libraries
+- **libs**: Links the specified libraries, and builds the workspace's ones first
+- **Filtered lists** (`- debug: [...]`) apply items to one configuration or platform
 
 ## Next Steps
 

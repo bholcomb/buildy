@@ -26,10 +26,12 @@ portable_app/
 ```
 
 This project builds a simple SDL2 application, fetching SDL2 from git and a JSON library from a URL.
+It builds on Linux, with Docker and git (see the example's [README](../examples/portable_app/README.md)).
 
 ## Step 1: The Root Configuration
 
 ```yaml
+# buildy.yaml
 project:
   name: portable_app
   version: "1.0.0"
@@ -42,10 +44,9 @@ dependencies:
   file: buildy_config/dependencies.yaml
 
 environment:
+  # Every compile and link runs in the toolchain's Docker image (gcc:13)
   toolchains:
     default: docker-cpp-linux
-    windows: msvc-cpp-windows
-    macos: clang-cpp-macos
 
   compile:
     cpp_standard: "c++17"
@@ -95,15 +96,8 @@ install:
 
 ### Key Configuration Points
 
-**Docker toolchain:**
-
-```yaml
-environment:
-  toolchains:
-    default: docker-cpp-linux
-```
-
-Uses the Docker-based C++ toolchain for project builds.
+**Docker toolchain:** `docker-cpp-linux` runs every compile and link of the project in its image
+(`gcc:13`), as your user, with the workspace mounted at its own path.
 
 **Docker execution for a dependency:** each fetched dependency that should build in Docker says
 so in its own `execution` section (Step 2).
@@ -113,21 +107,22 @@ so in its own `execution` section (Step 2).
 The `buildy_config/dependencies.yaml` defines what to fetch. Each top-level key is a dependency:
 
 ```yaml
+# buildy_config/dependencies.yaml
+# The portable app's dependencies: each top-level key is one
+
 sdl2:
   description: "Simple DirectMedia Layer"
   version: "2.28.5"
+
   common:
     git: "https://github.com/libsdl-org/SDL.git"
     ref: "release-2.28.5"
+    # SDL's own configure script: gcc:13 has autoconf's tools, not CMake
     build:
-      system: cmake
-      args:
-        - "-DSDL_SHARED=OFF"
-        - "-DSDL_STATIC=ON"
-        - "-DSDL_TEST=OFF"
-    include_dirs: ["${dep_install_dir}/include"]
-    lib_dirs: ["${dep_install_dir}/lib"]
-    libs: ["SDL2"]
+      system: autoconf
+      args: ["--disable-shared", "--enable-static"]
+    include_dirs: ["${dep_install_dir}/include/SDL2"]
+    libs: ["SDL2", "m"]
     execution:
       type: docker
       image: "gcc:13"
@@ -136,9 +131,10 @@ sdl2:
 nlohmann_json:
   description: "JSON for Modern C++"
   version: "3.11.3"
+
   common:
-    url: "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz"
-    checksum: "sha256:d6c65aca6b1ed68e7a182f4757f0f7c6c9e4c1b2d69d2f5e2e6b3e8f1a2b3c4d5"
+    url: "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+    checksum: "sha256:a22461d13119ac5c78f205d3df1db13403e58ce1bb1794edc9313677313f4a9d"
     include_dirs: ["${dep_dir}/include"]
 ```
 
@@ -199,15 +195,17 @@ Buildy supports multiple build systems for fetched dependencies:
 
 ### One Configuration at a Time
 
-A dependency is built for the configuration you build: `buildy` builds SDL2 as cmake's `Debug`,
-`buildy -c release` as `Release`, each in its own directory:
+A dependency is built for the configuration you build: `buildy` builds SDL2 for debug,
+`buildy -c release` for release, each in its own directory:
 
 - `${dep_build_dir}`: `.buildy_cache/deps/sdl2/_build/<platform>-<arch>-<config>/`
 - `${dep_install_dir}`: `.buildy_cache/deps/sdl2/_install/<platform>-<arch>-<config>/`
 
 cmake, meson and autoconf install into `${dep_install_dir}`, and its `include/` and `lib/` are added
-to the dependency's dirs anyway. A configuration of your own needs a mapping for a build system
-that has configurations:
+to the dependency's dirs anyway (SDL2's headers are one level down, in `include/SDL2/`, so the
+example names that directory). autoconf has no configurations of its own: settings that differ
+pass `${config}` in `build.args`. A configuration of your own needs a mapping for a build system
+that has configurations (cmake, meson, cargo):
 
 ```yaml
     build:
@@ -259,7 +257,7 @@ complex_lib:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `type` | `docker` or `native` | `native` |
-| `image` | Docker image name | `gcc:13` |
+| `image` | Docker image name (required) | |
 | `volumes` | Extra volume mounts | none |
 | `user` | User to run as | `${UID}:${GID}` |
 
@@ -287,11 +285,11 @@ buildy
 
 The build process:
 
-1. **Fetch SDL2** from git (clones to cache directory)
-2. **Build SDL2** with CMake in Docker, for the debug configuration, and install it
-3. **Download nlohmann_json** archive
-4. **Extract** the header-only library
-5. **Compile** the application linking against SDL2
+1. **Fetch SDL2** from git (a clone in `.buildy_cache/deps/sdl2/`)
+2. **Build SDL2** with its `configure` script and `make` in Docker, for the debug configuration,
+   and install it
+3. **Download nlohmann_json**'s archive, check its SHA-256, and extract it
+4. **Compile and link** the application in Docker, against SDL2
 
 The first build downloads and builds the dependencies. Later builds fetch and build nothing of
 theirs; `buildy -c release` builds SDL2's release build once.
@@ -334,6 +332,9 @@ environment:
 Built-in Docker toolchains:
 - `docker-c-linux` - GCC C compiler in Docker
 - `docker-cpp-linux` - GCC C++ compiler in Docker
+
+The example uses `docker-cpp-linux`, so the host needs no compiler at all, and the program is
+built with the same compiler as SDL2.
 
 ## Step 8: Build System Definitions
 
