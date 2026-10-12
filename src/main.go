@@ -17,9 +17,12 @@ import (
 	flag "github.com/spf13/pflag"
 )
 
-// Build information - set via ldflags at build time (Version by release builds)
+// Version is buildy's version. Bump it in the commit a release tag names: CI fails a tag v<x>
+// whose source says another version (doc/RELEASING.md).
+var Version = "0.2.0"
+
+// Build information, set with -ldflags -X at build time
 var (
-	Version     = "0.1.0"
 	BuildTime   = "unknown"
 	GitCommit   = "unknown"
 	BuildConfig = "debug"
@@ -73,6 +76,7 @@ func main() {
 	cleanAll := flag.Bool("clean-all", false, "--clean, and the cache directory too (fetched dependencies and their builds)")
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")
+	version := flag.Bool("version", false, "Print buildy's version and exit")
 	force := flag.BoolP("force", "f", false, "Rebuild everything: ignore the cache, and build fetched dependencies again")
 	compileCommands := flag.Bool("compile-commands", false, "Generate compile_commands.json in buildy_config/ folder")
 	notifyLevel := flag.IntP("notify", "n", 2, "Log notify level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug")
@@ -101,6 +105,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if *version {
+		fmt.Printf("buildy %s (commit %s, %s build, %s)\n", Version, GitCommit, BuildConfig, BuildTime)
+		os.Exit(0)
+	}
 
 	// Handle -r/--release shortcut
 	if *release {

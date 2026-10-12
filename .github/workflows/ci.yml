@@ -1,10 +1,11 @@
 # Vet, test and build buildy on Linux, Windows and macOS. A v* tag also
 # publishes a GitHub release of each platform's binary.
 #
-# Each platform builds natively, with the build's time and commit. A tag's
-# build also sets main.Version to the tag without its "v" (v0.2.0 -> 0.2.0)
-# and is packaged as buildy-<version>-<rid>.tar.gz (.zip on Windows), with
-# the binary, buildy or buildy.exe, at the archive's root.
+# Each platform builds natively, with the build's time and commit. A tag
+# v<version> must name a commit whose src/main.go says that Version: the build
+# fails otherwise. Its build is packaged as buildy-<version>-<rid>.tar.gz
+# (.zip on Windows), with the binary, buildy or buildy.exe, at the archive's
+# root (doc/RELEASING.md).
 
 name: CI
 
@@ -57,7 +58,7 @@ jobs:
         working-directory: src
         run: go test ./...
 
-      # The version is the tag's on a tag, else the commit's.
+      # The archive's version is the tag's on a tag, else the commit's.
       - name: Build
         run: |
           build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -66,15 +67,14 @@ jobs:
           version="$git_commit"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
-            ldflags="$ldflags -X main.Version=$version"
           fi
           exe="buildy$(cd src && go env GOEXE)"
           mkdir -p dist/bin
           (cd src && go build -o "../dist/bin/$exe" -ldflags "$ldflags" .)
-          help="$(dist/bin/$exe --help 2>&1)"
-          echo "$help" | head -3
-          if [[ "$GITHUB_REF" == refs/tags/v* ]] && ! grep -qF "Buildy v$version " <<< "$help"; then
-            echo "::error::dist/bin/$exe does not report version $version"
+          reported="$(dist/bin/$exe --version)"
+          echo "$reported"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [[ "$reported" != "buildy $version "* ]]; then
+            echo "::error::tag $GITHUB_REF_NAME, but src/main.go's Version is not $version: bump it and tag that commit"
             exit 1
           fi
           echo "EXE=$exe" >> "$GITHUB_ENV"

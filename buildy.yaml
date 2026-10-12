@@ -1,6 +1,5 @@
 project:
   name: buildy
-  version: "1.0.0"
   description: "Multi-language build system"
 
 workspace:

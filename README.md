@@ -363,31 +363,7 @@ This eliminates hardcoded language-specific logic and makes the build system ful
 
 ## Releases
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) vets, tests and
-builds buildy on Linux x64, Windows x64 and macOS on Apple Silicon for every
-push to `main` and every pull request.
-
-To cut a release, tag a commit on `main` whose CI passed and push the tag:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The tag's CI builds each platform with the version embedded (`buildy --help`
-prints `Buildy v0.2.0`) and publishes a GitHub release:
-
-| Asset | Platform |
-|-------|----------|
-| `buildy-0.2.0-linux-x64.tar.gz` | Linux x86-64 |
-| `buildy-0.2.0-win-x64.zip` | Windows x64 |
-| `buildy-0.2.0-osx-arm64.tar.gz` | macOS on Apple Silicon |
-| `SHA256SUMS` | The SHA-256 of each archive |
-
-Each archive holds just the binary, `buildy` (`buildy.exe` on Windows). The
-Linux binary is static, so it runs on any distribution. The macOS binary
-isn't notarized: a copy downloaded with a browser needs
-`xattr -d com.apple.quarantine buildy`.
+See [doc/RELEASING.md](doc/RELEASING.md).
 
 ## Documentation
 
