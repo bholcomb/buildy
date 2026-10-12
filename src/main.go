@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	"buildy/internal/build"
 	"buildy/internal/cache"
@@ -36,6 +38,44 @@ func detectPlatform() string {
 // detectArchitecture returns the architecture buildy runs on
 func detectArchitecture() string {
 	return config.HostArchitecture()
+}
+
+// printToolchains prints a table of toolchains to standard output, whatever the log level: the
+// output is the point of --list-toolchains.
+func printToolchains(toolchains []*resource.ToolchainConfig) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tLANGUAGE\tTARGET\tHOST\tDESCRIPTION")
+	for _, tc := range toolchains {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", tc.Name, orDash(tc.Language), platformArch(tc.Target), platformArch(tc.Host), tc.Description)
+	}
+	w.Flush()
+}
+
+// platformArch is a toolchain's target or host as --list-toolchains shows it: linux-x86_64,
+// linux (any architecture), or any.
+func platformArch(pa config.PlatformArch) string {
+	platform, arch := orAny(pa.Platform), orAny(pa.Architecture)
+	switch {
+	case platform == "any" && arch == "any":
+		return "any"
+	case arch == "any":
+		return platform
+	}
+	return platform + "-" + arch
+}
+
+func orAny(s string) string {
+	if s == "" {
+		return "any"
+	}
+	return s
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // exitIfInterrupted exits with 130 if the run was interrupted.
@@ -99,7 +139,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Buildy v%s - Task-based build system\n", Version)
 		fmt.Fprintf(os.Stderr, "  Build:   %s (%s)\n", BuildConfig, BuildTime)
 		fmt.Fprintf(os.Stderr, "  Commit:  %s\n\n", GitCommit)
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] [config_files...]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: buildy [options] [workspace directory]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}
@@ -181,7 +221,7 @@ func main() {
 			util.LogFatal("Failed to get current directory: %v", err)
 		}
 		ws, err = workspace.DiscoverWorkspace(cwd, *cacheDir)
-		if err != nil {
+		if err != nil && !(*listToolchains && errors.Is(err, workspace.ErrNoWorkspace)) {
 			if *clean || *cleanAll {
 				util.LogFatal("Nothing to clean, nothing removed: %v", err)
 			}
@@ -216,6 +256,21 @@ func main() {
 			}
 			util.LogVerbose("Loaded standalone config %s (workspace root %s)", ws.ConfigPath, ws.RootDir)
 		}
+	}
+
+	// --list-toolchains lists the toolchains a build here could use: the built-in ones, those of
+	// the data directories, and the workspace's, if there is one
+	if *listToolchains {
+		dirs := dataDirs("toolchains")
+		if ws != nil {
+			dirs = append(dirs, filepath.Join(ws.RootDir, "buildy_config", "toolchains"))
+		}
+		toolchainManager, err := resource.NewToolchainManagerMulti(dirs)
+		if err != nil {
+			util.LogFatal("Failed to load the toolchains: %v", err)
+		}
+		printToolchains(toolchainManager.ListToolchains())
+		os.Exit(0)
 	}
 
 	// What is being built: every phase (module selection, dependencies, generation) uses it
@@ -255,24 +310,14 @@ func main() {
 		util.LogFatal("Failed to initialize toolchain manager: %v", err)
 	}
 
-	// Handle --list-toolchains (after workspace is loaded so we include workspace toolchains)
-	if *listToolchains {
-		util.LogInfo("Available toolchains:")
-		for _, tc := range toolchainManager.ListToolchains() {
-			util.LogInfo("  %-20s - %s", tc.Name, tc.Description)
-		}
-		os.Exit(0)
-	}
-
-	// Show cache stats if requested
+	// --cache-stats prints what the cache holds, whatever the log level
 	if *cacheStats {
 		buildCache, err := cache.NewBuildCache(workspaceCacheDir)
 		if err != nil {
 			util.LogFatal("Failed to open the cache: %v", err)
 		}
-		util.LogProgress("Cache Statistics:")
-		util.LogProgress("  Total entries: %d", buildCache.Entries())
-		util.LogProgress("  Cache directory: %s", buildCache.CacheDir())
+		fmt.Printf("Cache directory: %s\n", buildCache.CacheDir())
+		fmt.Printf("Entries:         %d\n", buildCache.Entries())
 		os.Exit(0)
 	}
 

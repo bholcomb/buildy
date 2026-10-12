@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 )
+
+// ErrNoWorkspace is the error of a discovery that finds no buildy.yaml.
+var ErrNoWorkspace = errors.New("no buildy.yaml")
 
 // ModuleInfo is a loaded module
 type ModuleInfo struct {
@@ -143,7 +147,7 @@ func findWorkspaceRoot(start, cacheDir string) (string, string, error) {
 		}
 	}
 	if len(candidates) == 0 {
-		return "", "", fmt.Errorf("no buildy.yaml in %s or any directory above it", start)
+		return "", "", fmt.Errorf("%w in %s or any directory above it", ErrNoWorkspace, start)
 	}
 	nearest := candidates[0]
 	for i := len(candidates) - 1; i > 0; i-- {
