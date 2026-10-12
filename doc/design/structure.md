@@ -36,9 +36,16 @@ edges that did the same are gone:
 
 What stays explicit, because there is no file relation to derive it from:
 
-- `depends_on.targets`: build order only (a code generator run before a target, no linking);
-- `depends_on.artifacts`: a target's tasks, compiles included, run after an artifact's tasks; a
-  generated header is no declared input of a compile;
+- `depends_on.targets`: build order only (a code generator run before a target, no linking).
+  Every task of the target, compiles included, runs after each named target's final task: a
+  compile may include a header that target writes (the one a Go library writes beside it), and a
+  header a compile reads is no declared input. Only the link waited, so a C program's compile ran
+  beside the Go library's build, failing for want of the header on a clean build and reading the
+  old one after a change (its dependency file's headers are hashed when it runs, now after the
+  header is written, so a changed header compiles it again); a Go or Rust target's build didn't
+  wait at all;
+- `depends_on.artifacts`: a target's tasks, compiles included, run after an artifact's tasks, for
+  the same reason (a generated header);
 - `artifacts.copy`'s `depends_on`;
 - a template step's `depends_on` (the built-in templates' link steps name `${compile.task_ids}`,
   which the producer edges already give; the key stays for templates of one's own).

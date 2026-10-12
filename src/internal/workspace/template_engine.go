@@ -490,13 +490,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		dependencies = append(dependencies, toStringSlice(resolvedDeps)...)
 	}
 
-	// Handle target dependencies (depends_on.targets) for all target types
-	// This ONLY adds build order dependencies (no linking) - use for code generators, etc.
-	if dependsOn, ok := itemConfig["depends_on"].(map[string]any); ok {
-		targets, _ := dependsOn["targets"].([]string)
-		dependencies = append(dependencies, targets...)
-	}
-
 	// The target's libs establish both linking and build order
 	libsFromConfig, _ := itemConfig["libs"].([]string)
 

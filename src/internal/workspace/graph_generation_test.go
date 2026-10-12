@@ -119,6 +119,60 @@ targets:
 	}
 }
 
+// Every task of a target, compiles included, runs after the final task of each target it depends
+// on: a compile may include a header that target writes (a Go library's), which is no declared
+// input. The dependency's own tasks don't wait for the target.
+func TestTargetDependenciesReachEveryTask(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: deps}\n" + cppEnvironment + `
+targets:
+  executables:
+    - {name: gen, language: cpp, sources: [gen.cpp, gen2.cpp]}
+    - {name: app, language: cpp, sources: [main.cpp, util.cpp], depends_on: [gen]}
+    - {name: tool, language: go, path: tool, depends_on: {targets: [app]}}
+`,
+		"gen.cpp":  "int main() {}",
+		"gen2.cpp": "int gen2() { return 0; }",
+		"main.cpp": "int main() {}",
+		"util.cpp": "int util() { return 0; }",
+	})
+	tasks := mustGenerateTasks(t, root)
+	final := map[string]string{} // target -> its final task
+	for _, task := range tasks {
+		if task.TaskType == "link" || task.TaskType == "build" {
+			final[task.Target] = task.TaskID
+		}
+	}
+	for _, task := range tasks {
+		var want, notWant []string
+		switch task.Target {
+		case "gen":
+			notWant = []string{final["app"], final["tool"]}
+		case "app":
+			want, notWant = []string{final["gen"]}, []string{final["tool"]}
+		case "tool":
+			want = []string{final["app"]}
+		}
+		for _, id := range want {
+			if !hasString(task.Dependencies, id) {
+				t.Errorf("%s does not depend on %s: %v", task.TaskID, id, task.Dependencies)
+			}
+		}
+		for _, id := range notWant {
+			if hasString(task.Dependencies, id) {
+				t.Errorf("%s depends on %s", task.TaskID, id)
+			}
+		}
+	}
+	if n := len(tasksOfType(tasks, "compile")); n != 4 {
+		t.Errorf("got %d compile tasks, want 4", n)
+	}
+	if err := graphOf(t, tasks...).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Setup tasks are gone: their shared directory outputs broke the one-producer rule.
 func TestNoSetupTasks(t *testing.T) {
 	root := t.TempDir()

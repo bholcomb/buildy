@@ -822,7 +822,7 @@ Define what to build. Targets are organized into explicit sections by type.
 | `shared_libraries` | Shared library (.so, .dll, .dylib) | c, cpp, rust, go |
 | `executables` | Executable binary | c, cpp, rust, go |
 
-**Note:** Go and Rust library targets are for C/C++ interop only. For pure Go/Rust projects, use `executables` - dependencies are handled by Go modules and Cargo respectively. A Go shared library is built with `-buildmode=c-shared` (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll`), a static library with `-buildmode=c-archive` (`lib<name>.a`), both in the output directory's `lib/` with the C header Go writes beside them (`lib<name>.h`, `<name>.h` for the DLL); both need cgo (a C compiler, and `CGO_ENABLED` not `0`).
+**Note:** Go and Rust library targets are for C/C++ interop only. For pure Go/Rust projects, use `executables` - dependencies are handled by Go modules and Cargo respectively. A Go shared library is built with `-buildmode=c-shared` (`lib<name>.so`, `lib<name>.dylib`, `<name>.dll`), a static library with `-buildmode=c-archive` (`lib<name>.a`), both in the output directory's `lib/` with the C header Go writes beside them (`lib<name>.h`, `<name>.h` for the DLL); both need cgo (a C compiler, and `CGO_ENABLED` not `0`). A C or C++ target that includes the header names the library in `depends_on.targets` as well as `libs`, so its compiles run after the library's build: `libs` orders only its link.
 
 ### Static Libraries
 
@@ -1218,8 +1218,8 @@ These are **intentionally separate** concepts:
 | Field | Purpose | Example |
 |-------|---------|---------|
 | `deps` | External dependencies (provide include paths, lib paths, libs, defines) | `[glfw3, zlib]` |
-| `libs` | Internal project libraries to link against (implies build order) | `[engine_core, engine_renderer]` |
-| `depends_on.targets` | Build ordering only (no linking) - for code generators, tools, etc. | `[proto_gen, asset_compiler]` |
+| `libs` | Internal project libraries to link against (implies build order of the link) | `[engine_core, engine_renderer]` |
+| `depends_on.targets` | Build ordering only (no linking): every task of the target, compiles included, runs after the named targets - for code generators, tools, a library whose generated header it includes | `[proto_gen, asset_compiler]` |
 | `depends_on.artifacts` | Build ordering (generated headers) | Code generators (protobuf, etc.) |
 
 Target names are unique across the workspace: `libs` and `depends_on.targets` refer to targets by

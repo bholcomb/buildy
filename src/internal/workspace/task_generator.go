@@ -376,7 +376,9 @@ func (tg *TaskGenerator) generateTargetTasks(
 				task.Inputs = append(task.Inputs, NewTaskInput(file))
 			}
 		}
-		for _, id := range artifactTaskIDs {
+		// So it does after the final task of each target it depends on (resolved by name in
+		// resolveCrossModuleDependencies): a compile may include a header that target writes
+		for _, id := range append(append([]string{}, artifactTaskIDs...), target.DependsOn.Targets...) {
 			if !hasString(task.Dependencies, id) {
 				task.Dependencies = append(task.Dependencies, id)
 			}

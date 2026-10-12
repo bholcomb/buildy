@@ -76,7 +76,7 @@ each of them complete and adds the two things that are missing.
 | `Exec` | Where the command runs: `native`, or `docker` with image, mounts and user. Taken from the toolchain that produced the task, not the module default. |
 | `ToolchainHash` | Content hash of that toolchain's config. `HashToolchainConfig` exists, but today the key uses only the toolchain name. |
 | `ToolCached` | True for tasks whose tool keeps its own correct cache (`go build`, `cargo build`, section 3). Set from template metadata, not hard-coded. |
-| `Dependencies` | Explicit edges. Edges to the producers of inputs are added automatically (below), so explicit edges remain only for ordering that inputs can't express, such as generated headers. |
+| `Dependencies` | Explicit edges. Edges to the producers of inputs are added automatically (below), so explicit edges remain only for ordering that inputs can't express, such as generated headers. *`depends_on.artifacts` and `depends_on.targets` order every task of a target, compiles included ([structure](structure.md#edges-producer-edges-and-the-explicit-ones-that-remain)).* |
 
 ### Graph validation
 
