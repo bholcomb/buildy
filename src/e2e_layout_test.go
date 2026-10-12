@@ -176,10 +176,10 @@ func TestE2EBuildFromInsideAModule(t *testing.T) {
 	}
 }
 
-// Finding 5.2: --clean, run anywhere in the workspace, removes the output directory and the files
-// buildy staged, installed or copied elsewhere, and nothing it didn't produce: directories named
-// build, dist or staging that buildy never configured stay, and so do files of the user's in a
-// directory buildy stages into. With no workspace it refuses. --clean-all removes the cache too.
+// Finding 5.2: --clean, run anywhere in the workspace, removes the output directory and nothing it
+// didn't produce: directories named build, dist or staging that buildy never configured stay. What
+// staging and installs put outside the output directory stays too (it may stand on the user's
+// files). With no workspace it refuses. --clean-all removes the cache too.
 func TestE2ECleanRemovesOnlyWhatBuildyMade(t *testing.T) {
 	dir := fixture(t, "clean_layout")
 	theirs := []string{
@@ -190,23 +190,21 @@ func TestE2ECleanRemovesOnlyWhatBuildyMade(t *testing.T) {
 		writeFile(t, filepath.Join(dir, f), "not buildy's")
 	}
 	mustBuildy(t, dir)
-	made := []string{"dist/docs/readme.txt", "dist/pkg.tar.gz", "build/" + filepath.Base(outDir(dir, "debug")) + "/data/a.dat"}
-	for _, f := range made {
+	data := "build/" + filepath.Base(outDir(dir, "debug")) + "/data/a.dat"
+	for _, f := range []string{"dist/docs/readme.txt", "dist/pkg.tar.gz", data} {
 		if !exists(filepath.Join(dir, f)) {
 			t.Fatalf("the build didn't make %s", f)
 		}
 	}
 
 	mustBuildy(t, filepath.Join(dir, "app"), "--clean")
-	for _, f := range theirs {
+	for _, f := range append(theirs, "dist/docs/readme.txt", "dist/pkg.tar.gz") {
 		if !exists(filepath.Join(dir, f)) {
-			t.Errorf("--clean removed %s, which buildy didn't make", f)
+			t.Errorf("--clean removed %s, outside the output directory", f)
 		}
 	}
-	for _, f := range append(made, "build", "dist/docs") {
-		if exists(filepath.Join(dir, f)) {
-			t.Errorf("--clean left %s", f)
-		}
+	if exists(filepath.Join(dir, "build")) {
+		t.Errorf("--clean left the output directory")
 	}
 	if !exists(filepath.Join(dir, ".buildy_cache")) {
 		t.Error("--clean removed the cache directory")

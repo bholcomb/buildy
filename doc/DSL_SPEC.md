@@ -1287,9 +1287,7 @@ artifacts:
   copy:
     - name: game_assets
       sources: ["assets/**/*.png", "assets/**/*.wav"]
-      destination: "${out_dir}/data"
-      preserve_structure: true
-      incremental: true
+      destination: "${out_dir}/data"      # each file by its name: no subdirectories
 ```
 
 **Copy with explicit source:**
@@ -2655,7 +2653,7 @@ buildy --timeout 30m       # Kill a task or dependency build step that runs long
 buildy -n 4                # Verbose logging
 buildy -n 5                # Debug logging
 buildy --dry-run           # Plan: what would be fetched and built, and the tasks in an order they can run in
-buildy --clean             # Remove what buildy built in the workspace (output directory, staged and installed files)
+buildy --clean             # Remove the output directory (build/), nothing else
 buildy --clean-all         # The same, and the cache directory (fetched dependencies too)
 buildy --force             # Ignore the cache and dependency build records, rebuild all
 ```

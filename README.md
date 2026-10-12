@@ -216,7 +216,9 @@ Options:
   --target <name>       Build a target and what it depends on (repeatable)
   -j, --workers <n>     Number of tasks run at once
   -d, --dry-run         Plan: show what would be fetched, built and run
-  --clean               Clean build outputs
+  --clean               Remove the workspace's output directory (build/), nothing else
+  --clean-all           --clean, and the cache directory (fetched dependencies too)
+  --cache-dir <dir>     Cache directory: relative to the workspace root, or absolute
   -f, --force           Ignore the cache and dependency build records, rebuild all
   --update-deps         Fetch git branches and tags, and archives without a checksum, again
   --compile-commands    Generate compile_commands.json

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"buildy/internal/cache"
 	"buildy/internal/workspace"
 	"buildy/pkg/util"
 )
@@ -17,16 +16,17 @@ func within(dir, path string) bool {
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// Clean removes what buildy produced for the workspace, and nothing else:
+// Clean removes what buildy produced for the workspace, inside the workspace root only:
 //
-//   - the output directories (OutputRoots: build/ by default, every configuration's outputs);
-//   - every other file the cache records a task producing (staging, installs and copies outside
-//     the output directory), with the directories that leaves empty;
+//   - the output directories (OutputRoots: build/ by default, every configuration's outputs, with
+//     the staging and install directories inside them, as by default);
 //   - with all, the cache directory too (fetched dependencies and their builds).
 //
-// Only what lies inside the workspace root is removed. An output directory that holds a module's
-// config, or a cache directory outside the workspace root for all, is an error before anything is
-// removed. Load the workspace's modules first.
+// What staging, installs and copies put outside the output directory stays: such a directory can
+// be the workspace itself, where a staged copy can stand on a file of the user's (Mobius stages
+// src/packages/x/x.mob onto its tracked packages/x/x.mob). An output directory that holds a
+// module's config, or a cache directory outside the workspace root for all, is an error before
+// anything is removed. Load the workspace's modules first.
 func Clean(ws *workspace.Workspace, ctx workspace.BuildContext, cliDefines map[string]string, cacheDir string, all bool) error {
 	root := ws.RootDir
 	if all && !within(root, cacheDir) {
@@ -53,60 +53,16 @@ func Clean(ws *workspace.Workspace, ctx workspace.BuildContext, cliDefines map[s
 		}
 		remove = append(remove, dir)
 	}
-
-	// The files the cache records outside those directories
-	var recorded []string
-	if info, err := os.Stat(cacheDir); err == nil && info.IsDir() {
-		bc, err := cache.NewBuildCache(cacheDir)
-		if err != nil {
-			return err
-		}
-		for _, output := range bc.RecordedOutputs() {
-			inside := !within(root, output) || within(cacheDir, output)
-			for _, dir := range remove {
-				inside = inside || within(dir, output)
-			}
-			if !inside {
-				recorded = append(recorded, output)
-			}
-		}
-	}
-
-	removed := 0
-	for _, file := range recorded {
-		info, err := os.Lstat(file)
-		if err != nil || info.IsDir() {
-			continue // gone, or no longer what buildy wrote
-		}
-		if err := os.Remove(file); err != nil {
-			return err
-		}
-		removed++
-		// The directories that leaves empty, up to the workspace root
-		for dir := filepath.Dir(file); within(root, dir); dir = filepath.Dir(dir) {
-			if os.Remove(dir) != nil {
-				break // not empty
-			}
-		}
-	}
-	if removed > 0 {
-		util.LogProgress("Removed %d files buildy staged, installed or copied outside the output directory", removed)
+	if all {
+		remove = append(remove, cacheDir)
 	}
 	for _, dir := range remove {
 		if _, err := os.Lstat(dir); err != nil {
 			continue
 		}
-		util.LogProgress("Removing the output directory %s", dir)
+		util.LogProgress("Removing %s", dir)
 		if err := os.RemoveAll(dir); err != nil {
 			return err
-		}
-	}
-	if all {
-		if _, err := os.Lstat(cacheDir); err == nil {
-			util.LogProgress("Removing the cache directory %s", cacheDir)
-			if err := os.RemoveAll(cacheDir); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

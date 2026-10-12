@@ -103,7 +103,7 @@ func main() {
 	dryRun := flag.BoolP("dry-run", "d", false, "Plan the build: list what would be fetched, built and run, without doing any of it")
 	workers := flag.IntP("workers", "j", util.DefaultMaxWorkers, "Max parallel workers")
 	cacheStats := flag.Bool("cache-stats", false, "Show cache statistics")
-	clean := flag.Bool("clean", false, "Remove what buildy built in the workspace: the output directory, and what it staged, installed or copied elsewhere")
+	clean := flag.Bool("clean", false, "Remove the workspace's output directory (build/: every configuration), nothing else")
 	cleanAll := flag.Bool("clean-all", false, "--clean, and the cache directory too (fetched dependencies and their builds)")
 	toolchain := flag.StringP("toolchain", "t", "", "Specify toolchain to use (overrides config file)")
 	listToolchains := flag.Bool("list-toolchains", false, "List available toolchains and exit")

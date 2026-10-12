@@ -320,8 +320,7 @@ Only `main.cpp` was recompiled. The library didn't change, so it was retrieved f
 
 ## Step 8: Clean and Rebuild
 
-To remove everything buildy built (the `build/` directory, and anything it staged or installed
-elsewhere):
+To remove everything buildy built (the `build/` directory):
 
 ```bash
 buildy --clean

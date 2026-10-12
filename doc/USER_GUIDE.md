@@ -53,7 +53,7 @@ buildy -n 3               # Info level logging (default is 2=warning)
 buildy -n 4               # Verbose level logging
 buildy -n 5               # Debug level logging
 buildy --force            # Ignore cache, rebuild everything
-buildy --clean            # Remove what buildy built (output directory, staged and installed files)
+buildy --clean            # Remove the output directory (build/), nothing else
 buildy --dry-run          # Show what would be built
 ```
 
@@ -1237,19 +1237,16 @@ buildy --force                   # Force rebuild
 buildy --cache-stats             # Show cache info
 ```
 
-`--clean` works from anywhere in the workspace and removes only what buildy produced, inside the
-workspace root:
-
-- the output directory: `build/` (`output.base_dir`) with every configuration's outputs, or, for an
-  `output.pattern` outside it, the output directory of the build context given (`-c`, `-p`, `-a`);
-- every other file the cache records a task producing: what staging, installs and copies put
-  outside the output directory (`dist/`, `${workspace}/bin`), and the directories that leaves
-  empty. Files of yours in those directories stay.
-
-It never removes a directory buildy didn't configure (a `build/`, `dist/` or `staging/` of your
-own), anything outside the workspace root, or an output directory holding a module's config.
-Outside any workspace it refuses and removes nothing. `--clean-all` also removes the cache
-directory, if it is inside the workspace root.
+`--clean` works from anywhere in the workspace and removes the output directory, inside the
+workspace root: `build/` (`output.base_dir`) with every configuration's outputs, and the staging
+and install directories in it (where they are by default); or, for an `output.pattern` outside
+`base_dir`, the output directory of the build context given (`-c`, `-p`, `-a`). What staging,
+installs and copies put outside the output directory (`dist/`, `${workspace}/bin`) stays: such a
+directory can hold your own files, even under the same names. It never removes a directory buildy
+didn't configure (a `build/`, `dist/` or `staging/` of your own), anything outside the workspace
+root, or an output directory holding a module's config. Outside any workspace it refuses and
+removes nothing. `--clean-all` also removes the cache directory, if it is inside the workspace
+root. See [the design note](design/layout.md#--clean).
 
 ### Dependencies
 
