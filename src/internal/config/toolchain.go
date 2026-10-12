@@ -18,6 +18,7 @@ type Toolchain struct {
 	Language     string                     `yaml:"language" json:"language"`
 	Target       PlatformArch               `yaml:"target" json:"target"`
 	Host         PlatformArch               `yaml:"host" json:"host"`
+	Priority     int                        `yaml:"priority" json:"priority"` // of the toolchains for a platform and architecture (and language), the highest is the default
 	Variables    Ordered[string]            `yaml:"variables" json:"variables"`
 	Execution    util.ExecSpec              `yaml:"execution" json:"execution"`
 	ReadsEnv     StringList                 `yaml:"reads_env" json:"reads_env"` // environment variables its tools read: their values are in every task's cache key

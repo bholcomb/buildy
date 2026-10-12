@@ -104,8 +104,9 @@ func (cp *ConfigParser) SelectToolchain(file *config.File) (*resource.ToolchainC
 		return tc, nil
 	}
 
-	if tc := cp.ToolchainManager.AutoDetect(cp.Platform, cp.Architecture); tc != nil {
-		return tc, nil
+	tc, err := cp.ToolchainManager.AutoDetect(cp.Platform, cp.Architecture)
+	if err != nil || tc != nil {
+		return tc, err
 	}
 	var names []string
 	for _, tc := range cp.ToolchainManager.ListToolchains() {

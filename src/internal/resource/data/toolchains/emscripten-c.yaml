@@ -6,6 +6,10 @@ toolchain:
   target:
     platform: wasm
     architecture: wasm32
+
+  # The C toolchain is wasm's default, as when the first by name was: give emscripten-cpp a higher
+  # priority to make C++ the default.
+  priority: 10
   
   host:
     platform: any

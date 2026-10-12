@@ -1,6 +1,10 @@
 package resource
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"buildy/internal/config"
@@ -15,54 +19,147 @@ func newEmbeddedToolchainManager(t *testing.T) *ToolchainManager {
 	return tm
 }
 
-func TestFindByLanguage_MacOS(t *testing.T) {
+// The default toolchains, for every platform and architecture, are those buildy chose before
+// priorities moved into the toolchain files (from lists by name in Go, then the first by name). A
+// platform and architecture not listed has none.
+func TestDefaultToolchains(t *testing.T) {
 	tm := newEmbeddedToolchainManager(t)
-
-	cases := []struct {
-		language     string
-		architecture string
-		want         string
-	}{
-		{"c", "arm64", "clang-c-macos-arm64"},
-		{"cpp", "arm64", "clang-cpp-macos-arm64"},
-		{"c", "x86_64", "clang-c-macos"},
-		{"cpp", "x86_64", "clang-cpp-macos"},
+	auto := map[[2]string]string{}
+	for _, c := range []struct{ platform, arch, want string }{
+		{"linux", "x86_64", "gcc-cpp-linux"},
+		{"linux", "arm", "gcc-c-arm-cross"},
+		{"windows", "x86_64", "msvc-cpp-windows"},
+		{"macos", "x86_64", "clang-cpp-macos"},
+		{"macos", "arm64", "clang-cpp-macos-arm64"},
+		{"wasm", "wasm32", "emscripten-c"},
+	} {
+		auto[[2]string{c.platform, c.arch}] = c.want
+	}
+	byLanguage := map[[3]string]string{}
+	for _, c := range []struct{ platform, arch, language, want string }{
+		{"linux", "x86_64", "c", "gcc-c-linux"},
+		{"linux", "x86_64", "cpp", "gcc-cpp-linux"},
+		{"linux", "x86_64", "go", "go-linux"},
+		{"linux", "x86_64", "rust", "rust-linux"},
+		{"linux", "x86_64", "glsl", "glslc"},
+		{"linux", "x86_64", "docs", "doxygen"},
+		{"linux", "x86", "glsl", "glslc"},
+		{"linux", "x86", "docs", "doxygen"},
+		{"linux", "arm64", "glsl", "glslc"},
+		{"linux", "arm64", "docs", "doxygen"},
+		{"linux", "arm", "c", "gcc-c-arm-cross"},
+		{"linux", "arm", "cpp", "gcc-cpp-arm-cross"},
+		{"linux", "arm", "glsl", "glslc"},
+		{"linux", "arm", "docs", "doxygen"},
+		{"linux", "wasm32", "glsl", "glslc"},
+		{"linux", "wasm32", "docs", "doxygen"},
+		{"windows", "x86_64", "c", "msvc-c-windows"},
+		{"windows", "x86_64", "cpp", "msvc-cpp-windows"},
+		{"windows", "x86_64", "go", "go-windows"},
+		{"windows", "x86_64", "rust", "rust-windows"},
+		{"windows", "x86_64", "glsl", "glslc"},
+		{"windows", "x86_64", "docs", "doxygen"},
+		{"windows", "x86", "glsl", "glslc"},
+		{"windows", "x86", "docs", "doxygen"},
+		{"windows", "arm64", "glsl", "glslc"},
+		{"windows", "arm64", "docs", "doxygen"},
+		{"windows", "arm", "glsl", "glslc"},
+		{"windows", "arm", "docs", "doxygen"},
+		{"windows", "wasm32", "glsl", "glslc"},
+		{"windows", "wasm32", "docs", "doxygen"},
+		{"macos", "x86_64", "c", "clang-c-macos"},
+		{"macos", "x86_64", "cpp", "clang-cpp-macos"},
+		{"macos", "x86_64", "go", "go-macos"},
+		{"macos", "x86_64", "rust", "rust-macos"},
+		{"macos", "x86_64", "glsl", "glslc"},
+		{"macos", "x86_64", "docs", "doxygen"},
+		{"macos", "x86", "glsl", "glslc"},
+		{"macos", "x86", "docs", "doxygen"},
+		{"macos", "arm64", "c", "clang-c-macos-arm64"},
+		{"macos", "arm64", "cpp", "clang-cpp-macos-arm64"},
+		{"macos", "arm64", "rust", "rust-macos-arm64"},
+		{"macos", "arm64", "glsl", "glslc"},
+		{"macos", "arm64", "docs", "doxygen"},
+		{"macos", "arm", "glsl", "glslc"},
+		{"macos", "arm", "docs", "doxygen"},
+		{"macos", "wasm32", "glsl", "glslc"},
+		{"macos", "wasm32", "docs", "doxygen"},
+		{"wasm", "x86_64", "glsl", "glslc"},
+		{"wasm", "x86_64", "docs", "doxygen"},
+		{"wasm", "x86", "glsl", "glslc"},
+		{"wasm", "x86", "docs", "doxygen"},
+		{"wasm", "arm64", "glsl", "glslc"},
+		{"wasm", "arm64", "docs", "doxygen"},
+		{"wasm", "arm", "glsl", "glslc"},
+		{"wasm", "arm", "docs", "doxygen"},
+		{"wasm", "wasm32", "c", "emscripten-c"},
+		{"wasm", "wasm32", "cpp", "emscripten-cpp"},
+		{"wasm", "wasm32", "rust", "rust-wasm"},
+		{"wasm", "wasm32", "glsl", "glslc"},
+		{"wasm", "wasm32", "docs", "doxygen"},
+	} {
+		byLanguage[[3]string{c.platform, c.arch, c.language}] = c.want
 	}
 
-	for _, c := range cases {
-		tc := tm.FindByLanguage(c.language, "macos", c.architecture)
+	name := func(tc *ToolchainConfig) string {
 		if tc == nil {
-			t.Errorf("FindByLanguage(%s, macos, %s): no toolchain, want %s", c.language, c.architecture, c.want)
-			continue
+			return ""
 		}
-		if tc.Name != c.want {
-			t.Errorf("FindByLanguage(%s, macos, %s) = %s, want %s", c.language, c.architecture, tc.Name, c.want)
-		}
-		if tc.Target.Architecture != c.architecture {
-			t.Errorf("%s targets %s, want %s", tc.Name, tc.Target.Architecture, c.architecture)
+		return tc.Name
+	}
+	for _, platform := range config.Platforms {
+		for _, arch := range config.Architectures {
+			tc, err := tm.AutoDetect(platform, arch)
+			if err != nil || name(tc) != auto[[2]string{platform, arch}] {
+				t.Errorf("AutoDetect(%s, %s) = %q, %v; want %q", platform, arch, name(tc), err, auto[[2]string{platform, arch}])
+			}
+			for _, language := range []string{"c", "cpp", "go", "rust", "glsl", "docs"} {
+				want := byLanguage[[3]string{platform, arch, language}]
+				tc, err := tm.FindByLanguage(language, platform, arch)
+				if err != nil || name(tc) != want {
+					t.Errorf("FindByLanguage(%s, %s, %s) = %q, %v; want %q", language, platform, arch, name(tc), err, want)
+				}
+			}
 		}
 	}
 }
 
-func TestAutoDetect_MacOS(t *testing.T) {
-	tm := newEmbeddedToolchainManager(t)
-
-	cases := []struct {
-		architecture string
-		want         string
-	}{
-		{"arm64", "clang-cpp-macos-arm64"},
-		{"x86_64", "clang-cpp-macos"},
+// A toolchain of the workspace's with a higher priority becomes the default; two with the highest
+// priority are an error that names both.
+func TestToolchainPriority(t *testing.T) {
+	toolchain := func(name string, priority int) string {
+		return fmt.Sprintf("toolchain:\n  name: %s\n  language: cpp\n  target: {platform: linux, architecture: x86_64}\n  priority: %d\n", name, priority)
+	}
+	load := func(files map[string]string) *ToolchainManager {
+		dir := t.TempDir()
+		for name, data := range files {
+			if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tm, err := NewToolchainManagerMulti([]string{dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tm
 	}
 
-	for _, c := range cases {
-		tc := tm.AutoDetect("macos", c.architecture)
-		if tc == nil {
-			t.Errorf("AutoDetect(macos, %s): no toolchain, want %s", c.architecture, c.want)
-			continue
-		}
-		if tc.Name != c.want {
-			t.Errorf("AutoDetect(macos, %s) = %s, want %s", c.architecture, tc.Name, c.want)
+	tm := load(map[string]string{"mine": toolchain("my-gcc", 50)})
+	if tc, err := tm.AutoDetect("linux", "x86_64"); err != nil || tc.Name != "my-gcc" {
+		t.Errorf("AutoDetect: %v, %v; want my-gcc", tc, err)
+	}
+	if tc, err := tm.FindByLanguage("cpp", "linux", "x86_64"); err != nil || tc.Name != "my-gcc" {
+		t.Errorf("FindByLanguage: %v, %v; want my-gcc", tc, err)
+	}
+
+	tm = load(map[string]string{"mine": toolchain("my-gcc", 40)})
+	for what, call := range map[string]func() (*ToolchainConfig, error){
+		"AutoDetect":     func() (*ToolchainConfig, error) { return tm.AutoDetect("linux", "x86_64") },
+		"FindByLanguage": func() (*ToolchainConfig, error) { return tm.FindByLanguage("cpp", "linux", "x86_64") },
+	} {
+		_, err := call()
+		if err == nil || !strings.Contains(err.Error(), "gcc-cpp-linux") || !strings.Contains(err.Error(), "my-gcc") || !strings.Contains(err.Error(), "priority 40") {
+			t.Errorf("%s with two of priority 40: %v", what, err)
 		}
 	}
 }

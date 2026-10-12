@@ -6,6 +6,10 @@ toolchain:
   target:
     platform: macos
     architecture: x86_64
+
+  # Of the toolchains for a platform and architecture, the one with the highest priority is the
+  # default (buildy picks it when a config names none).
+  priority: 20
   
   host:
     platform: macos

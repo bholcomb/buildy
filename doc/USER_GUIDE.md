@@ -1121,6 +1121,13 @@ buildy --toolchain clang-cpp-linux
 buildy --list-toolchains   # Show available toolchains
 ```
 
+### The Default Toolchain
+
+Without any of these, a module gets its platform's default: the toolchain for that platform and
+architecture with the highest `priority:` (GCC C++ on Linux, MSVC C++ on Windows, Apple Clang C++ on
+macOS). A toolchain of your own in `buildy_config/toolchains/` becomes the default by declaring a
+higher priority; two with the same highest priority are an error.
+
 ## Language-Specific Features
 
 ### Go Projects

@@ -1602,6 +1602,24 @@ environment:
 
 CLI override: `buildy --toolchain clang-cpp-linux`
 
+A module that names no toolchain gets the platform and architecture's default: of the native
+toolchains whose `target` is that platform and architecture, the one with the highest `priority`.
+A target in another language gets that language's default the same way (of the toolchains for its
+language, or else for its language and `target.platform: any`). Two toolchains sharing the
+highest priority are an error that names both. The built-in defaults:
+
+| Platform | Default | Then, for its language |
+|----------|---------|------------------------|
+| linux-x86_64 | `gcc-cpp-linux` (40) | `gcc-c-linux` (30), `clang-cpp-linux` (20), `clang-c-linux` (10) |
+| windows-x86_64 | `msvc-cpp-windows` (40) | `msvc-c-windows` (30), `gcc-cpp-mingw` (20), `gcc-c-mingw` (10) |
+| macos-x86_64 | `clang-cpp-macos` (20) | `clang-c-macos` (10) |
+| macos-arm64 | `clang-cpp-macos-arm64` (20) | `clang-c-macos-arm64` (10) |
+| linux-arm | `gcc-c-arm-cross` (10) | `gcc-cpp-arm-cross` (0) |
+| wasm-wasm32 | `emscripten-c` (10) | `emscripten-cpp` (0) |
+
+Go and Rust toolchains have priority 0: each is the only one for its language and platform. To
+make a toolchain of your own the default, give it a higher priority than the built-in one.
+
 ### Toolchain File Structure
 
 A toolchain file defines a complete compiler/build tool configuration:
@@ -1619,6 +1637,8 @@ toolchain:
   host:
     platform: linux           # Host platform
     architecture: x86_64      # Host architecture
+
+  priority: 40                # The default for its target is the highest priority (default 0)
 
   variables:                  # Toolchain-specific variables
     CC: "gcc"
@@ -1645,6 +1665,7 @@ toolchain:
 | `language` | Primary language (c, cpp, go, rust) |
 | `target` | Target platform and architecture (a [platform name](#platform-and-architecture-names) or `any`) |
 | `host` | Host platform requirements |
+| `priority` | Of the toolchains for a platform and architecture (and language), the highest is the default ([selection](#toolchain-selection)); default 0 |
 | `variables` | Toolchain-specific variables |
 | `output_prefix` | Default library filename prefix (e.g., `"lib"` or `""`) |
 | `execution` | Execution configuration (native, the default, or docker) |

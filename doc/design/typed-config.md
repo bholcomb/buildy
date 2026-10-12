@@ -125,7 +125,6 @@ and the Go and Rust `supports` keys no code read. The doxygen toolchain keeps on
 - `output:` is the module's own; whether the root's should reach modules belongs with phase 5
   (defaults). *Done in [phase 5](layout.md#one-output-layout): the root's `output:` merges into
   every module's.*
-- Toolchain preference (which toolchain a platform gets by default) is still a list in Go.
 - `supports.build_tags`, `features` and the other Go/Rust supports flags are documented but
   unread; deleting them changes the documented toolchain format.
 - Tool `flags` keys (`common`, configuration names) are not checked against the workspace's

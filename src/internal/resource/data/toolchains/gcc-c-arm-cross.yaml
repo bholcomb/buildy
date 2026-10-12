@@ -6,6 +6,10 @@ toolchain:
   target:
     platform: linux
     architecture: arm
+
+  # The C toolchain is linux-arm's default, as when the first by name was: give gcc-cpp-arm-cross
+  # a higher priority to make C++ the default.
+  priority: 10
   
   host:
     platform: linux

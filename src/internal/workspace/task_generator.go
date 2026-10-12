@@ -215,7 +215,9 @@ func (tg *TaskGenerator) generateTargetTasks(
 	commandBuilder := tg.CommandBuilder
 	targetToolchain := tg.CurrentToolchain
 	if tg.CurrentToolchain == nil || tg.CurrentToolchain.Language != metadata.ToolchainLanguage {
-		targetToolchain = tg.ToolchainManager.FindByLanguage(metadata.ToolchainLanguage, tg.Platform, tg.Architecture)
+		if targetToolchain, err = tg.ToolchainManager.FindByLanguage(metadata.ToolchainLanguage, tg.Platform, tg.Architecture); err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
 		if targetToolchain == nil {
 			return nil, fmt.Errorf("%s: no %s toolchain found for platform %s-%s", where, metadata.ToolchainLanguage, tg.Platform, tg.Architecture)
 		}
