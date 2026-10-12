@@ -44,11 +44,17 @@ func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*Bui
 // generate loads the workspace at root and generates its tasks for a build context.
 func generate(t *testing.T, root, platform, arch, config string) (*Generated, error) {
 	t.Helper()
+	return generateWithToolchain(t, root, BuildContext{Platform: platform, Architecture: arch, Configuration: config}, "")
+}
+
+// generateWithToolchain is generate with a toolchain named, as --toolchain names it ("": the
+// platform's default).
+func generateWithToolchain(t *testing.T, root string, ctx BuildContext, toolchain string) (*Generated, error) {
+	t.Helper()
 	ws, err := NewWorkspace(root, DefaultCacheDir)
 	if err != nil {
 		return nil, err
 	}
-	ctx := BuildContext{Platform: platform, Architecture: arch, Configuration: config}
 	if _, err := ws.DiscoverModules(ctx); err != nil {
 		return nil, err
 	}
@@ -60,7 +66,7 @@ func generate(t *testing.T, root, platform, arch, config string) (*Generated, er
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil)
+	cp := NewConfigParser(ctx, nil, toolchains, toolchain, templates, ws, nil)
 	return cp.GenerateWorkspaceTasks()
 }
 

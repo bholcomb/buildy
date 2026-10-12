@@ -347,8 +347,9 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 // resolveCrossModuleDependencies resolves dependencies by target name, now that every module's
 // targets are registered. A dependency is a task ID or a target name (depends_on.targets); a name
 // that is neither is an error. A link task's libraries that are workspace targets become inputs:
-// the library files their final task produces, so a changed library relinks (and graph
-// validation orders the link after it). The others are system libraries.
+// the file their link task says a link links (a DLL's import library), or the files a target's
+// final task produces, so a changed library relinks (and graph validation orders the link after
+// it). The others are system libraries.
 func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) error {
 	tasksByID := make(map[string]*BuildTask, len(allTasks))
 	for _, task := range allTasks {
@@ -378,9 +379,13 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) er
 				util.LogVerbose("Library '%s' of task '%s' is not a workspace target: a system library", lib, task.TaskID)
 				continue
 			}
-			for _, output := range target.Outputs {
-				if !hasInput(task, output) {
-					task.Inputs = append(task.Inputs, NewTaskInput(output))
+			files := target.Outputs
+			if target.LinkFile != "" {
+				files = []string{target.LinkFile}
+			}
+			for _, file := range files {
+				if !hasInput(task, file) {
+					task.Inputs = append(task.Inputs, NewTaskInput(file))
 				}
 			}
 		}

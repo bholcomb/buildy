@@ -50,8 +50,8 @@ What stays explicit, because there is no file relation to derive it from:
 - a template step's `depends_on` (the built-in templates' link steps name `${compile.task_ids}`,
   which the producer edges already give; the key stays for templates of one's own).
 
-A workspace target named in `libs:` becomes an input of the link (its library file), so its edge
-is a producer edge too.
+A workspace target named in `libs:` becomes an input of the link (its library file, or a DLL's
+import library where the toolchain writes one), so its edge is a producer edge too.
 
 ## Toolchain priority
 

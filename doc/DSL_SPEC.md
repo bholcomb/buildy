@@ -1234,8 +1234,14 @@ Two targets with the same name, in one module or in two, are an error naming bot
 a system library.
 
 A link's inputs include every library it links that the build produces (`libcalc.a`, a shared
-library and its import library) and every `deps:` library found in the dependency's `lib_dirs`, so
-a changed library relinks whatever links it. System libraries are not hashed.
+library, or a DLL's import library where the toolchain writes one: MSVC) and every `deps:` library
+found in the dependency's `lib_dirs`, so a changed library relinks whatever links it. System
+libraries are not hashed.
+
+A workspace shared library is linked through its toolchain's link artefact. With MSVC that is the
+import library its link writes (`lib/foo.lib`, with `/IMPLIB:`), so a link that names `foo` in
+`libs` gets `lib/` as a library directory; the DLL that runs is in `bin/`. Elsewhere it is the
+shared library itself, in `bin/` (MinGW links `foo.dll` with `-lfoo`).
 
 **Why separate?**
 
@@ -1770,6 +1776,8 @@ The `supports` section declares tool capabilities and flag formats:
 | `lib_dir_flag` | string | Flag prefix for lib dirs (e.g., `-L`) |
 | `libs` | bool | Supports library linking |
 | `lib_flag` | string | Flag prefix for libs (e.g., `-l`) |
+| `lib_suffix` | string | Appended to a library named without an extension (MSVC: `.lib`) |
+| `implib` | bool | The link of a DLL writes an import library, `${implib}` (MSVC): in `lib/` when the DLL is in `bin/`, else beside it. Links of the DLL link it |
 | `frameworks` | bool | Supports macOS frameworks |
 | `framework_flag` | string | Flag for frameworks (default `"-framework "`) |
 

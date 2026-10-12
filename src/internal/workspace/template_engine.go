@@ -501,8 +501,15 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	if (outputType == "executable" || outputType == "shared_library") && len(libsFromConfig) > 0 {
 		// Get the library output directory from template metadata
 		// This makes it template-driven rather than hardcoded
-		libOutputDir := bte.GetLibraryOutputDir("cpp", "shared_library")
-		libDirs = append(libDirs, filepath.Join(outputDir, libOutputDir))
+		libDir := filepath.Join(outputDir, bte.GetLibraryOutputDir("cpp", "shared_library"))
+		// A shared library is linked through its toolchain's link artefact: its import library
+		// where the toolchain writes one (MSVC: lib/, while the DLL that runs is in bin/)
+		if shared := toolMatcher.FindLinkTool("shared_library"); shared != nil {
+			if implibDir := resource.ImportLibraryDir(shared, libDir); implibDir != "" {
+				libDir = implibDir
+			}
+		}
+		libDirs = append(libDirs, libDir)
 
 		// For link ordering within the libs list, we don't need complex
 		// topological sorting here - the linker handles static lib order,
@@ -595,6 +602,11 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	// Libraries that are workspace targets are linked to their link tasks once every module is
 	// generated (resolveCrossModuleDependencies); the rest are system libraries
 	task.LinkLibs = libNames
+	// What a link of this library links: its import library, or the library itself
+	task.LinkFile = output
+	if implib != "" {
+		task.LinkFile = implib
+	}
 	return &task, nil
 }
 
