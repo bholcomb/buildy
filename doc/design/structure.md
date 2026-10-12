@@ -122,7 +122,9 @@ and the path resolver's workspace root. `prependMkdir`, the `ResolveSources*` wr
 
 Kept, undecided: `LoadFilesystemSystems` and the documented `buildy_config/build_systems/` (not
 loaded), and the Go and Rust tools' `supports` flags (`build_tags`, `features`, ...), documented
-and unread. *The `supports` flags are deleted since ([Go and Rust options](commands.md#go-and-rust-options)).*
+and unread. *Both are decided since: build systems are loaded
+([build systems of your own](dependencies.md#build-systems-of-your-own)), and the `supports`
+flags are deleted ([Go and Rust options](commands.md#go-and-rust-options)).*
 
 ## Duplication
 
@@ -151,7 +153,8 @@ defaults, the link and build steps' output pattern, and download hashing (`util.
 ## Left for later
 
 - `build.system: auto` picks the first by name between build systems of equal detection
-  priority (cmake and meson are both 10), where toolchains now fail on a tie.
+  priority (cmake and meson are both 10), where toolchains now fail on a tie. *A tie is an error
+  since [build systems of your own](dependencies.md#build-systems-of-your-own).*
 - The template engine still passes the target to templates as name-keyed maps (`${item.X}`,
   `${config.X}`), unchecked against the model.
 - Windows and macOS: toolchain selection is tested as a table for every platform; it has not run

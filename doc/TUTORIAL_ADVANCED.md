@@ -194,7 +194,8 @@ Buildy supports multiple build systems for fetched dependencies:
 | `cargo` | Cargo.toml | Rust crates |
 | `go_mod` | go.mod | Go modules |
 | `buildy` | buildy.yaml | Buildy itself, with an override config |
-| `auto` | Detects automatically | |
+| your own | its `detection.marker_files` | [Step 8](#step-8-build-system-definitions) |
+| `auto` | Detects automatically; two at the same priority are an error | |
 
 ### One Configuration at a Time
 
@@ -336,11 +337,46 @@ Built-in Docker toolchains:
 
 ## Step 8: Build System Definitions
 
-Each build system is a YAML definition built into buildy: its detection files, how buildy's
-configurations map to its own, the environment variables it reads, its phases (`clean` for an
-in-source build system, `configure`, `build`, `install`) and where its output lands. See
-[DSL Spec, Build Systems](DSL_SPEC.md#12-build-systems). Definitions of your own in
-`buildy_config/build_systems/` are not loaded yet.
+Each build system is a YAML definition: its detection files, how buildy's configurations map to
+its own, the environment variables it reads, its phases (`clean` for an in-source build system,
+`configure`, `build`, `install`) and where its output lands. The built-in ones are in buildy; a
+library built by something else gets a definition of your own in `buildy_config/build_systems/`:
+
+```yaml
+# buildy_config/build_systems/build_script.yaml
+build_system:
+  name: build_script
+  description: "a build.sh that takes the build type and a prefix"
+  detection:
+    marker_files: [build.sh]
+    priority: 10
+  configurations:
+    debug: debug
+    release: release
+  phases:
+    build:
+      command: "sh ${source_dir}/build.sh ${build_type} ${install_dir} ${args}"
+      working_dir: "${build_dir}"
+  output:
+    include_patterns: ["${install_dir}/include"]
+    lib_patterns: ["${install_dir}/lib"]
+```
+
+```yaml
+# buildy_config/dependencies.yaml
+mylib:
+  git: "https://example.com/mylib.git"
+  ref: "v2.0"
+  build:
+    system: build_script   # or auto: build.sh selects it
+  libs: [mylib]
+```
+
+Each configuration builds into its own install directory, and editing the definition rebuilds the
+dependency. A definition with a built-in's name (`make.yaml` with `name: make`) replaces the
+built-in one; buildy logs it at `-n 3`. See
+[User Guide, Custom Build Systems](USER_GUIDE.md#custom-build-systems) and
+[DSL Spec, Build Systems](DSL_SPEC.md#12-build-systems).
 
 ## Step 9: Troubleshooting
 

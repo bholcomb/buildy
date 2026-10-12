@@ -246,8 +246,10 @@ my-project/
 │   ├── dependencies.yaml    # External dependencies (optional)
 │   ├── dependencies/        # Per-dependency configs (optional)
 │   │   └── glfw3.yaml
-│   └── toolchains/          # Custom toolchains (optional)
-│       └── custom-gcc.yaml
+│   ├── toolchains/          # Custom toolchains (optional)
+│   │   └── custom-gcc.yaml
+│   └── build_systems/       # Build systems for fetched dependencies (optional)
+│       └── prefix_make.yaml
 ├── src/                     # Source files
 ├── include/                 # Headers
 ├── build/                   # Output directory (auto-created)

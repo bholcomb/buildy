@@ -690,7 +690,8 @@ stb:
 ```
 
 **Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, `buildy`,
-`auto` (detected from the fetched files), `none`
+your own ([Custom Build Systems](#custom-build-systems)), `auto` (detected from the fetched files),
+`none`
 
 ### Building with Buildy Config
 
@@ -1041,37 +1042,104 @@ line is too long for the system. See [Command Syntax](DSL_SPEC.md#command-syntax
 
 ### Custom Build Systems
 
-Build systems for fetched dependencies are defined like this. Buildy reads only its built-in
-definitions so far: files in `buildy_config/build_systems/` are **not loaded yet**.
+A library built by something buildy doesn't know (SCons, a Makefile with an install target, a
+script) gets a build system definition of your own: a YAML file in `buildy_config/build_systems/`
+(or a data directory, below). A dependency names it in `build.system` like a built-in one.
+
+This one builds a Makefile that installs into `$(PREFIX)`, the way many small C libraries do:
 
 ```yaml
-# buildy_config/build_systems/bazel.yaml
+# buildy_config/build_systems/prefix_make.yaml
 build_system:
-  name: bazel
-  description: "Google Bazel"
+  name: prefix_make
+  description: "make, then make install PREFIX=..."
 
-  detection:
-    marker_files: ["WORKSPACE", "BUILD.bazel"]
+  # buildy's configurations as this Makefile's CFLAGS: ${build_type} in the phases
+  configurations:
+    debug: "-O0 -g"
+    release: "-O2 -DNDEBUG"
+
+  # Environment variables its tools read: a change rebuilds the dependency
+  reads_env: [CC, AR]
+
+  # make builds in the source tree, one configuration at a time: clean runs before another
+  in_source: true
 
   phases:
+    clean:
+      command: "make clean"
     build:
-      command: "bazel build //..."
-      working_dir: "{source_dir}"
+      command: "make -j${jobs} CFLAGS=${build_type} ${args}"
+    install:
+      command: "make install PREFIX=${install_dir}"
+
+  # What exists of these is added to the dependency's include and lib dirs
+  output:
+    include_patterns: ["${install_dir}/include"]
+    lib_patterns: ["${install_dir}/lib"]
+```
+
+```yaml
+# buildy_config/dependencies.yaml
+tinyfmt:
+  git: "https://example.com/tinyfmt.git"
+  ref: "v1.2.0"
+  build:
+    system: prefix_make
+  libs: [tinyfmt]
+```
+
+`buildy` builds it with `make -j8 'CFLAGS=-O0 -g'` and installs it into
+`.buildy_cache/deps/tinyfmt/_install/<platform>-<arch>-debug/`; `buildy -c release` runs
+`make clean`, then builds and installs with `-O2 -DNDEBUG` into `..._install/...-release/`. The app
+gets `-I` and `-L` for the install directory from `output`, so the dependency needs only `libs`.
+
+How a definition works:
+
+- **Commands** are [command templates](DSL_SPEC.md#command-syntax), run without a shell: a
+  placeholder alone as a word is its values, each one argument (`${args}`), one inside a word
+  (`CFLAGS=${build_type}`) its value as text, and the word stays one argument. A phase that needs
+  `&&`, pipes or redirection sets `shell: true`, and buildy quotes the values for the shell.
+- **Placeholders**: `${source_dir}`, `${build_dir}`, `${install_dir}`, `${config}`, `${platform}`,
+  `${arch}`, `${build_type}` (only with `configurations`), `${jobs}`, `${args}` (phase commands
+  only), `${buildy_exe}` and `${config_file}`; see [the reference](DSL_SPEC.md#phase-variables).
+  Any other name is an error when the file loads.
+- **Configurations**: without `configurations`, the build system has none, and `${config}` is
+  buildy's name. With it, a configuration it doesn't map (`-c portable`) fails until the
+  dependency maps it in `build.configurations`.
+- **Rebuilds**: the definition's content is in each build's record: editing the file rebuilds the
+  dependencies it builds, the next time each one is built.
+- **Detection**: with `detection.marker_files` and `priority`, `build.system: auto` considers it
+  too. Two build systems that detect a tree at the same priority are an error naming both (set
+  `build.system`, or change a priority).
+
+Loading is strict: an unknown key, a missing `name` or `build` phase, an unknown placeholder or a
+`clean` phase without `in_source` stops buildy with the file and the line. A definition with a
+built-in's name replaces the built-in one, and buildy says so at `-n 3`:
+
+```
+Build system 'make' from buildy_config/build_systems/make.yaml replaces the one from built-in build_systems/make.yaml
 ```
 
 ### Data Directory Search Paths
 
-Buildy loads toolchains and templates from these places; one of the same name in a later place
-replaces the earlier one:
+Templates, toolchains and build systems are searched in these places, in this order; a definition
+replaces one of the same name from an earlier place (logged at `-n 3`), and two definitions of
+one name in the same directory are an error (toolchains and build systems):
 
 1. Built-in (embedded in the binary)
-2. `data/toolchains/` and `data/templates/` next to the buildy executable
-3. Each `--add-data-dir <dir>`'s `toolchains/` and `templates/`, in order
-4. The workspace's `buildy_config/toolchains/` (toolchains only)
+2. `data/templates/`, `data/toolchains/` and `data/build_systems/` next to the buildy executable
+   (the real file, symlinks resolved; not the current directory)
+3. Each `--add-data-dir <dir>`'s `templates/`, `toolchains/` and `build_systems/`, in order
+4. The workspace's `buildy_config/toolchains/` and `buildy_config/build_systems/` (templates have
+   no workspace directory)
 
 ```bash
 buildy --add-data-dir /opt/company/buildy
 ```
+
+Build systems are loaded when buildy builds a workspace's dependencies, not for a config file
+built on its own (standalone mode, which has none).
 
 ## Toolchain Selection
 
@@ -1337,7 +1405,7 @@ longer, the same way.
 | `--list-toolchains` | | List available toolchains |
 | `--cache-dir` | | Cache directory: relative to the workspace root, or absolute (default `.buildy_cache`) |
 | `--cache-stats` | | Show cache statistics |
-| `--add-data-dir` | | Additional data directory |
+| `--add-data-dir` | | Additional data directory: its `templates/`, `toolchains/` and `build_systems/` ([search paths](#data-directory-search-paths)) |
 
 ## Build Reports
 

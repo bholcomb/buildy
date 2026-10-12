@@ -121,6 +121,60 @@ one with other arguments) doesn't match it, and runs `make clean` before `make`.
 the marker holds `{}`, so a tree whose build failed or was interrupted is cleaned first next time.
 A freshly cloned or extracted tree isn't cleaned (a Makefile without a `clean` target builds once).
 
+## Build systems of your own
+
+*Added after phase 6, on `build-systems`.* Libraries with other build systems (SCons, a Makefile
+with an install target, a script) are built with a definition of your own: the model the
+built-in ones use, loaded from files. Nothing new is described; what the model said is loaded
+and checked.
+
+**Search order**, one for templates, toolchains and build systems (lowest priority first; a
+later definition replaces an earlier one of the same name):
+
+1. built-in;
+2. `data/build_systems/` next to the buildy executable (`os.Executable()`, symlinks resolved:
+   `os.Args[0]` named the current directory when buildy ran from the PATH);
+3. each `--add-data-dir`'s `build_systems/`, in order;
+4. the workspace's `buildy_config/build_systems/`.
+
+Build systems are loaded with a workspace's dependencies; standalone mode (a config file) has
+none.
+
+**Overriding: a definition with a built-in's name replaces it**, like a toolchain or a template,
+and buildy logs it at info level naming both files (`Build system 'make' from ... replaces the one
+from built-in build_systems/make.yaml`). Two definitions of a name in one directory are an error.
+An explicit opt-in (`replaces: make`) was considered and not done: the three kinds would differ,
+and a definition in your workspace named like a built-in can only mean to replace it.
+
+**Strict loading.** Beyond unknown keys, types and the phase rules above, a definition fails to
+load, naming the file, for:
+
+- a missing or empty `name`, or `auto` or `none` (they mean something else in `build.system`);
+- a placeholder that isn't one of `config.BuildSystemPlaceholders`: `source_dir`, `build_dir`,
+  `install_dir`, `config`, `platform`, `arch`, `build_type`, `jobs`, `args`, `buildy_exe`,
+  `config_file`. A test checks a build gives each one a value;
+- `${build_type}` without `configurations` (it would fail at build time), `${args}` in a
+  `working_dir` or output pattern (a path is one word), a placeholder in `default_args` (they are
+  values, passed as written: before, `${config}` there reached the tool as the text `${config}`),
+  and an empty `configurations` map;
+- with `shell: true`, a placeholder inside double quotes, as for a tool.
+
+`${buildy_exe}` is now given to every build system, not only to the one named buildy, so a
+definition that replaces buildy's (or wraps buildy) can use it.
+
+**Shell phases.** A phase may say `shell: true`, as a tool may (`commands.md`): its command is a
+script whose placeholder values are quoted for `sh` (in Docker too) or `cmd.exe`. The record holds
+the shell as the phase's program; what the script runs isn't identified.
+
+**Detection.** `build.system: auto` considers every definition. Two build systems that detect a
+tree at the highest priority are an error naming them, their files and markers, where the first
+by name was taken: cmake, meson, cargo and go_mod are all 10, so a tree with a `CMakeLists.txt`
+and a `Cargo.toml` built with cargo. This is phase 6's toolchain priority rule.
+
+**Records.** A definition's SHA-256 is computed from its file, built-in or not, and is in each
+build's marker, so editing a definition rebuilds the dependencies it builds (any edit, a comment
+included). Replacing a built-in rebuilds the dependencies it built too.
+
 ## The marker
 
 A finished build is recorded in its marker, like an archive's extraction. The marker holds
@@ -130,7 +184,7 @@ everything that decides what the build produces:
 |---|---|
 | `source` | the fetched tree: `git <commit>`, or `sha256 <archive hash>` |
 | `dir` | the source tree's path: build trees hold absolute paths (CMakeCache.txt) |
-| `build_system` | its name and the SHA-256 of its definition: a buildy upgrade that changes it rebuilds |
+| `build_system` | its name and the SHA-256 of its definition file: a buildy upgrade that changes a built-in one, or an edit of your own, rebuilds |
 | `platform`, `architecture`, `configuration`, `build_type` | what is built |
 | `args` | `build.args`, variables resolved |
 | `override` | `build.override`'s path and content hash |
@@ -252,6 +306,23 @@ to the linker as written; before, it became `-l-pthread`.
     `${config}` in `build.args`;
   - `--dry-run` plans nothing for an up-to-date dependency and a build for another configuration;
     an interrupted dependency build leaves no marker (`e2e_test.go`).
+- Build systems of your own:
+  - loading: a later directory's definition replaces a built-in or an earlier one; the hash
+    changes with an edit; two of a name in one directory and an unknown key are errors naming
+    the files; detection takes the highest priority and fails on a tie, two built-ins included
+    (`build_system_manager_test.go`); placeholders, names, `default_args` and empty
+    configurations are checked (`config_test.go`); every placeholder has a value, and a shell
+    phase quotes them (`dependency_build_test.go`);
+  - end to end (`e2e_build_systems_test.go`): a `plain` build system (a `build.sh` that builds a
+    static library, a shell phase that installs it and its header) picked by `auto` builds a git
+    dependency; the app prints 1 in debug and 2 in release, from separate build and install
+    directories; every placeholder reaches the configure phase; a no-op build runs nothing of
+    it; editing the definition or a `reads_env` variable rebuilds; `-c portable` fails; a `make`
+    definition logs that it replaces the built-in; a second definition detecting the tree at the
+    same priority, and an unknown key, fail naming the files; definitions next to the
+    executable (run from the PATH), in an `--add-data-dir` and in the workspace replace each
+    other in that order, and the current directory's `data/` is not read; with
+    `BUILDY_TEST_DOCKER=1`, a phase runs in the dependency's Docker execution.
 
 ## Real-world check
 
@@ -281,8 +352,12 @@ it itself, so that step can go.
 
 - Dependencies are resolved whatever `--target` selects: a target that needs none still fetches
   and builds them the first time (then the markers make it cheap).
-- Build system files in `buildy_config/build_systems/` are documented but not loaded
-  (`BuildSystemManager.LoadFilesystemSystems` is never called): load them, or remove the docs and
-  the function (undecided; phase 6 kept both).
+- ~~Build system files in `buildy_config/build_systems/` are documented but not loaded~~: loaded
+  ([above](#build-systems-of-your-own)).
 - Windows and macOS: the cmake `--config` arguments are tested as argument lists; neither platform
-  has run a dependency build in this phase.
+  has run a dependency build in this phase. A shell phase under `cmd.exe`, and finding `data/`
+  next to the executable on macOS (where `os.Executable()` may return the symlink, resolved by
+  `EvalSymlinks`), are built and vetted, not run; the end-to-end build system tests skip Windows
+  (they run `sh`).
+- Templates have no workspace directory (`buildy_config/templates/`); toolchains and build
+  systems do.

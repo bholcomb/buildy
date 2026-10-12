@@ -1581,12 +1581,20 @@ Templates are language-agnostic recipes. Toolchains are platform-specific implem
 
 ### Search Order
 
-1. `./buildy_config/toolchains/*.yaml` - Project-specific
-2. `--add-data-dir <dir>`'s `toolchains/*.yaml`
-3. Built-in (embedded in binary)
+Templates, toolchains and [build systems](#12-build-systems) are searched in one order, highest
+priority first:
 
-A toolchain replaces one of the same name lower in the list. Two files in one directory with the
-same toolchain name are an error.
+1. `./buildy_config/toolchains/*.yaml` and `./buildy_config/build_systems/*.yaml` - Project-specific
+   (templates have no workspace directory)
+2. Each `--add-data-dir <dir>`'s `templates/`, `toolchains/` and `build_systems/`, the last one
+   given first
+3. `data/templates/`, `data/toolchains/` and `data/build_systems/` next to the buildy executable
+   (symlinks resolved)
+4. Built-in (embedded in binary)
+
+A definition replaces one of the same name lower in the list, and buildy logs both files at info
+level (`-n 3`). Two toolchain or build system files in one directory with the same name are an
+error.
 
 ### Built-in Toolchains
 
@@ -2288,8 +2296,11 @@ Build systems define how to build fetched dependencies (e.g., CMake, Meson, Make
 | `go_mod` | go.mod | none | build |
 | `buildy` | buildy.yaml | any, by name (`${config}`) | build |
 
-`build.system: auto` picks the build system by the files in the fetched tree (the highest
-priority wins).
+`build.system: auto` picks the build system by the files in the fetched tree, among the built-in
+ones and [your own](#build-system-definition): the highest `detection.priority` wins (buildy 20,
+cmake, meson, cargo and go_mod 10, autoconf 8, make 5). Two that detect the tree at the same
+priority (a tree with `CMakeLists.txt` and `meson.build`) are an error naming both: set
+`build.system`.
 
 cmake configures with `-DCMAKE_BUILD_TYPE=${build_type}` (once) and installs into
 `${dep_install_dir}` (`CMAKE_INSTALL_LIBDIR=lib`); its build and install pass `--config
@@ -2369,8 +2380,12 @@ complex_lib:
 ### Build System Definition
 
 The built-in definitions are YAML files embedded in buildy
-(`src/internal/resource/data/build_systems/`). Definitions of your own in
-`buildy_config/build_systems/` are **not loaded yet**.
+(`src/internal/resource/data/build_systems/`). Definitions of your own go in
+`buildy_config/build_systems/*.yaml`, a data directory's `build_systems/`, or `data/build_systems/`
+next to the executable ([search order](#search-order)); a dependency names one in `build.system`,
+and `build.system: auto` considers it. One with a built-in's name replaces the built-in (logged at
+info level, naming both files). Build systems are loaded for a workspace's dependencies, not in
+standalone mode.
 
 ```yaml
 build_system:
@@ -2400,47 +2415,64 @@ build_system:
     lib_patterns: ["${install_dir}/lib", "${build_dir}"]
 ```
 
+A complete example of your own, a Makefile that installs into `$(PREFIX)`, is in the
+[user guide](USER_GUIDE.md#custom-build-systems).
+
+A definition is loaded strictly, like a toolchain: an unknown key, a value of the wrong type, a
+missing `name`, a missing `build` phase, or any rule below broken is an error naming the file
+(and the line where there is one), and buildy stops.
+
 ### Build System Fields
 
 | Field | Description |
 |-------|-------------|
-| `name` | Build system identifier |
+| `name` | Required. The name `build.system` uses. Not `auto` or `none`. One with a built-in's name replaces it |
 | `description` | Human-readable description |
-| `detection.marker_files` | Files that indicate this build system |
-| `detection.priority` | Detection priority (higher wins) |
-| `configurations` | buildy configuration: the build system's, the phases' `${build_type}`. Without it the build system has no configurations |
-| `in_source` | Builds in the source tree: one configuration at a time, with a `clean` phase run before another is built |
-| `reads_env` | Environment variables its tools read: their values are in each build's record, so a change rebuilds |
-| `phases` | `clean`, `configure`, `build`, `install`; `build` is required, `clean` only with `in_source` |
+| `detection.marker_files` | Files whose presence in the fetched tree selects this build system for `build.system: auto`. None: never detected |
+| `detection.priority` | Detection priority (an integer; higher wins; default 0). Two build systems that detect a tree at the highest priority are an error naming both |
+| `configurations` | buildy configuration: the build system's, the phases' `${build_type}`. Without it the build system has no configurations, and `build.configurations` on a dependency is an error. With it, a configuration it doesn't map fails unless the dependency maps it in `build.configurations`. Values can't be empty; an empty map is an error |
+| `in_source` | Builds in the source tree: one configuration at a time, with the `clean` phase run before another is built (and after a failed build). Requires a `clean` phase |
+| `reads_env` | Environment variables its tools read: their values are in each build's record, so a change rebuilds (native builds; a Docker build sees only the execution's `env`) |
+| `phases` | `clean`, `configure`, `build`, `install`; `build` is required, `clean` only with `in_source` (and required there). Any other name is an error |
+| `output` | Where the built headers and libraries are (below) |
 
 ### Phase Fields
 
 | Field | Description |
 |-------|-------------|
-| `command` | [Command template](#command-syntax), run without a shell |
-| `working_dir` | Working directory (default: `${source_dir}`) |
-| `default_args` | Arguments ahead of the dependency's `build.args` in `${args}` |
+| `command` | Required. A [command template](#command-syntax), run without a shell |
+| `working_dir` | Working directory, a path template (default: `${source_dir}`) |
+| `default_args` | Arguments ahead of the dependency's `build.args` in `${args}`, each one argument, passed as written (a placeholder in one is an error: put it in the command) |
+| `shell` | `true` runs `command` as a shell script (`sh -c`, also in Docker; `cmd.exe` on a Windows host), for `&&`, pipes and redirection. Placeholder values are quoted for the shell; a placeholder inside double quotes is an error. The build's record holds the shell, not the programs the script runs |
 
 ### Output Fields
 
 | Field | Description |
 |-------|-------------|
-| `include_patterns` | Directories added to the dependency's include dirs, when they exist |
-| `lib_patterns` | Directories added to the dependency's lib dirs, when they exist |
+| `include_patterns` | Path templates of directories added to the dependency's include dirs, those that exist, in order |
+| `lib_patterns` | Path templates of directories added to the dependency's lib dirs, those that exist, in order |
+
+Directories the dependency's own `include_dirs` and `lib_dirs` already name are not added twice.
 
 ### Phase Variables
 
-Available in command templates and output patterns:
+Available in phase commands, working directories and output patterns. Any other `${name}` is an
+error when the definition loads:
 
 | Variable | Description |
 |----------|-------------|
 | `${source_dir}` | Source directory of the dependency (`${dep_dir}`) |
-| `${build_dir}` | `${source_dir}/_build/<platform>-<arch>-<config>` |
-| `${install_dir}` | `${source_dir}/_install/<platform>-<arch>-<config>` |
-| `${build_type}` | The build system's name for the configuration (with `configurations`) |
-| `${config}`, `${platform}`, `${arch}` | What is being built |
-| `${jobs}` | Number of parallel jobs (auto-detected from CPU count) |
-| `${args}` | `default_args`, then the dependency's `build.args`: each item one argument |
+| `${build_dir}` | `${source_dir}/_build/<platform>-<arch>-<config>` (`${dep_build_dir}`), emptied before each build of an out-of-source build system |
+| `${install_dir}` | `${source_dir}/_install/<platform>-<arch>-<config>` (`${dep_install_dir}`), emptied likewise |
+| `${build_type}` | The build system's name for the configuration; only in a definition with `configurations` |
+| `${config}`, `${platform}`, `${arch}` | What is being built, buildy's names (`release`, `linux`, `x86_64`) |
+| `${jobs}` | Number of parallel jobs (the number of CPUs) |
+| `${args}` | `default_args`, then the dependency's `build.args`: each item one argument. Phase commands only |
+| `${buildy_exe}` | The running buildy executable |
+| `${config_file}` | The dependency's `build.override` file, else its source directory (what build system buildy builds) |
+
+A path template (`working_dir`, an output pattern) must expand to one word. A placeholder inside a
+word must have one value, as in any [command template](#command-syntax).
 
 ---
 

@@ -80,7 +80,9 @@ buildy does the quoting. POSIX quoting (`util.QuotePOSIX`) single-quotes anythin
 plainly safe. cmd.exe has no escape that works inside quotes, so `util.QuoteCmd` double-quotes
 and refuses a value holding `"`, `%`, `!` or a line break rather than pass it on changed. A
 shell tool can't take a response file. No built-in toolchain needs a shell; the Docker
-end-to-end test's stand-in compiler (`test -f /.dockerenv && cp ...`) is the one user.
+end-to-end test's stand-in compiler (`test -f /.dockerenv && cp ...`) is the one user. A build
+system's phase may say `shell: true` too, with the same rules
+([build systems of your own](dependencies.md#build-systems-of-your-own)).
 
 ### Work buildy does itself
 
