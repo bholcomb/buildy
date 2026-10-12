@@ -68,8 +68,8 @@ func wantLinks(t *testing.T, tasks []*BuildTask, target, library, linked, notLin
 func TestMSVCLinksAWorkspaceDLLThroughItsImportLibrary(t *testing.T) {
 	out, tasks := sharedLibraryLinks(t, "windows", "")
 	bin, lib := filepath.Join(out, "bin"), filepath.Join(out, "lib")
-	// The executable template's own ${output_dir}/lib, written with a slash on every host
-	templateLib := out + "/lib"
+	// The executable template's own ${output_dir}/lib and /bin, written with a slash on every host
+	templateLib, templateBin := out+"/lib", out+"/bin"
 	obj := func(module, target, source string) string {
 		return filepath.Join(out, "obj", module, target, source+".obj")
 	}
@@ -81,7 +81,7 @@ func TestMSVCLinksAWorkspaceDLLThroughItsImportLibrary(t *testing.T) {
 		"/LIBPATH:"+lib, "mcore.lib",
 		"/OUT:"+filepath.Join(bin, "plug.dll"), "/IMPLIB:"+filepath.Join(lib, "plug.lib"))
 	wantArgs(t, tasks, "app", "link.exe", "/nologo", "/DEBUG", obj("app", "app", "main.cpp"),
-		"/LIBPATH:"+lib, "/LIBPATH:"+templateLib, "/LIBPATH:"+bin, "mcore.lib", "plug.lib",
+		"/LIBPATH:"+lib, "/LIBPATH:"+templateLib, "/LIBPATH:"+templateBin, "mcore.lib", "plug.lib",
 		"/OUT:"+filepath.Join(bin, "app.exe"))
 
 	wantLinks(t, tasks, "plug", "mcore", filepath.Join(lib, "mcore.lib"), filepath.Join(bin, "mcore.dll"))
@@ -94,8 +94,8 @@ func TestMSVCLinksAWorkspaceDLLThroughItsImportLibrary(t *testing.T) {
 func TestMinGWLinksAWorkspaceDLLItself(t *testing.T) {
 	out, tasks := sharedLibraryLinks(t, "windows", "gcc-cpp-mingw")
 	bin := filepath.Join(out, "bin")
-	// The executable template's own ${output_dir}/lib, written with a slash on every host
-	templateLib := out + "/lib"
+	// The executable template's own ${output_dir}/lib and /bin, written with a slash on every host
+	templateLib, templateBin := out+"/lib", out+"/bin"
 	obj := func(module, target, source string) string {
 		return filepath.Join(out, "obj", module, target, source+".o")
 	}
@@ -106,7 +106,7 @@ func TestMinGWLinksAWorkspaceDLLItself(t *testing.T) {
 	wantArgs(t, tasks, "plug", "x86_64-w64-mingw32-g++", "-shared", obj("plugin", "plug", "plugin.cpp"),
 		"-L"+bin, "-lmcore", "-o", filepath.Join(bin, "plug.dll"))
 	wantArgs(t, tasks, "app", "x86_64-w64-mingw32-g++", obj("app", "app", "main.cpp"),
-		"-L"+bin, "-L"+templateLib, "-L"+bin, "-lmcore", "-lplug", "-o", filepath.Join(bin, "app.exe"))
+		"-L"+bin, "-L"+templateLib, "-L"+templateBin, "-lmcore", "-lplug", "-o", filepath.Join(bin, "app.exe"))
 
 	wantLinks(t, tasks, "plug", "mcore", filepath.Join(bin, "mcore.dll"), "")
 	wantLinks(t, tasks, "app", "mcore", filepath.Join(bin, "mcore.dll"), "")
@@ -118,8 +118,8 @@ func TestMinGWLinksAWorkspaceDLLItself(t *testing.T) {
 func TestLinuxLinksAWorkspaceSharedLibraryItself(t *testing.T) {
 	out, tasks := sharedLibraryLinks(t, "linux", "")
 	bin := filepath.Join(out, "bin")
-	// The executable template's own ${output_dir}/lib, written with a slash on every host
-	templateLib := out + "/lib"
+	// The executable template's own ${output_dir}/lib and /bin, written with a slash on every host
+	templateLib, templateBin := out+"/lib", out+"/bin"
 	obj := func(module, target, source string) string {
 		return filepath.Join(out, "obj", module, target, source+".o")
 	}
@@ -127,7 +127,7 @@ func TestLinuxLinksAWorkspaceSharedLibraryItself(t *testing.T) {
 	wantArgs(t, tasks, "plug", "g++", "-shared", "-Wl,-rpath,$ORIGIN", obj("plugin", "plug", "plugin.cpp"),
 		"-L"+bin, "-lmcore", "-o", filepath.Join(bin, "libplug.so"))
 	wantArgs(t, tasks, "app", "g++", "-Wl,-rpath,$ORIGIN", obj("app", "app", "main.cpp"),
-		"-L"+bin, "-L"+templateLib, "-L"+bin, "-lmcore", "-lplug", "-o", filepath.Join(bin, "app"))
+		"-L"+bin, "-L"+templateLib, "-L"+templateBin, "-lmcore", "-lplug", "-o", filepath.Join(bin, "app"))
 
 	wantLinks(t, tasks, "plug", "mcore", filepath.Join(bin, "libmcore.so"), "")
 	wantLinks(t, tasks, "app", "mcore", filepath.Join(bin, "libmcore.so"), "")
