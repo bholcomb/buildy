@@ -523,10 +523,11 @@ func (ws *Workspace) findModuleFiles() ([]string, error) {
 	return result, nil
 }
 
-// matchPattern matches a path against a discover or exclude pattern, which loading the config
-// checked.
+// matchPattern matches a path (relative to the root, with the host's separators) against a
+// discover or exclude pattern, which loading the config checked. Patterns separate with '/', on
+// Windows too, where the path's backslashes are made slashes first.
 func matchPattern(path, pattern string) bool {
-	return doublestar.MatchUnvalidated(pattern, path)
+	return doublestar.MatchUnvalidated(pattern, filepath.ToSlash(path))
 }
 
 // loadModule loads and validates a module configuration file
