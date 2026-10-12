@@ -1,12 +1,11 @@
 package workspace
 
 import (
-	"sort"
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
-	"sync"
 )
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-zA-Z0-9]+`)
@@ -67,156 +66,45 @@ func sanitizeToken(value string) string {
 	return strings.ToLower(value)
 }
 
-// TaskIDRegistry maintains a bidirectional mapping between target names and task IDs
-// This avoids fragile string parsing to extract target names from task IDs
-type TaskIDRegistry struct {
-	mu sync.RWMutex
-	
-	// targetToLinkTask maps target name -> link task ID
-	targetToLinkTask map[string]string
-	
-	// taskToTarget maps task ID -> target name
-	taskToTarget map[string]string
-	
-	// moduleTargets maps module path -> list of target names
-	moduleTargets map[string][]string
-	
-	// targetOutputPath maps target name -> primary output file path
-	targetOutputPath map[string]string
-
-	// artifacts maps artifact name -> its module, outputs and producing tasks
-	artifacts map[string]registeredArtifact
+// generatedNames is what a generation registers by name, workspace-wide: each target's final task
+// and each named artifact, for libs, depends_on, copies, staging and --target. One generation owns
+// one (ConfigParser.GenerateWorkspaceTasks); target and artifact names are unique across the
+// workspace.
+type generatedNames struct {
+	targets   map[string]*BuildTask // target name -> its final task (link or build)
+	artifacts map[string]artifact   // artifact name -> its module, outputs and producing tasks
 }
 
-// registeredArtifact is a named artifact of a module.
-type registeredArtifact struct {
+// artifact is a named artifact of a module: generate, transform or copy.
+type artifact struct {
 	module  string
 	outputs []string
 	taskIDs []string
 }
 
-// RegisterArtifact records an artifact's outputs and producing tasks. Two modules may not define
-// artifacts of the same name.
-func (r *TaskIDRegistry) RegisterArtifact(name, module string, outputs, taskIDs []string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if existing, ok := r.artifacts[name]; ok && existing.module != module {
+func newGeneratedNames() *generatedNames {
+	return &generatedNames{targets: map[string]*BuildTask{}, artifacts: map[string]artifact{}}
+}
+
+// addArtifact records an artifact's outputs and producing tasks. Artifact names are unique across
+// the workspace.
+func (n *generatedNames) addArtifact(name, module string, outputs, taskIDs []string) error {
+	if existing, ok := n.artifacts[name]; ok {
+		if existing.module == module {
+			return fmt.Errorf("artifact '%s' is defined twice in module %s; artifact names must be unique across the workspace", name, module)
+		}
 		return fmt.Errorf("artifact '%s' is defined in module %s and in module %s; artifact names must be unique across the workspace", name, existing.module, module)
 	}
-	r.artifacts[name] = registeredArtifact{module: module, outputs: outputs, taskIDs: taskIDs}
+	n.artifacts[name] = artifact{module: module, outputs: outputs, taskIDs: taskIDs}
 	return nil
 }
 
-// GetArtifact returns an artifact's outputs and producing tasks.
-func (r *TaskIDRegistry) GetArtifact(name string) (outputs, taskIDs []string, ok bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	a, ok := r.artifacts[name]
-	return a.outputs, a.taskIDs, ok
-}
-
-// NewTaskIDRegistry creates a new TaskIDRegistry
-func NewTaskIDRegistry() *TaskIDRegistry {
-	return &TaskIDRegistry{
-		targetToLinkTask: make(map[string]string),
-		taskToTarget:     make(map[string]string),
-		moduleTargets:    make(map[string][]string),
-		targetOutputPath: make(map[string]string),
-		artifacts:        make(map[string]registeredArtifact),
+// targetNames returns the registered target names, sorted.
+func (n *generatedNames) targetNames() []string {
+	names := make([]string, 0, len(n.targets))
+	for name := range n.targets {
+		names = append(names, name)
 	}
+	sort.Strings(names)
+	return names
 }
-
-
-// RegisterTarget registers a target name to its link task ID
-func (r *TaskIDRegistry) RegisterTarget(targetName, linkTaskID, modulePath string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	
-	r.targetToLinkTask[targetName] = linkTaskID
-	r.taskToTarget[linkTaskID] = targetName
-	
-	// Track targets per module
-	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
-}
-
-// RegisterTargetWithOutput registers a target name with its link task ID and output path
-func (r *TaskIDRegistry) RegisterTargetWithOutput(targetName, linkTaskID, modulePath, outputPath string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	
-	r.targetToLinkTask[targetName] = linkTaskID
-	r.taskToTarget[linkTaskID] = targetName
-	r.targetOutputPath[targetName] = outputPath
-	
-	// Track targets per module
-	r.moduleTargets[modulePath] = append(r.moduleTargets[modulePath], targetName)
-}
-
-
-// GetTargetOutputPath returns the output path for a target name
-func (r *TaskIDRegistry) GetTargetOutputPath(targetName string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	outputPath, ok := r.targetOutputPath[targetName]
-	return outputPath, ok
-}
-
-// GetLinkTaskID returns the link task ID for a target name
-func (r *TaskIDRegistry) GetLinkTaskID(targetName string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	taskID, ok := r.targetToLinkTask[targetName]
-	return taskID, ok
-}
-
-// GetTargetName returns the target name for a task ID
-func (r *TaskIDRegistry) GetTargetName(taskID string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	targetName, ok := r.taskToTarget[taskID]
-	return targetName, ok
-}
-
-// GetModuleTargets returns all target names for a module
-func (r *TaskIDRegistry) GetModuleTargets(modulePath string) []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	targets := r.moduleTargets[modulePath]
-	// Return a copy to avoid races
-	result := make([]string, len(targets))
-	copy(result, targets)
-	return result
-}
-
-// GetAllTargets returns all registered target names
-func (r *TaskIDRegistry) GetAllTargets() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	
-	targets := make([]string, 0, len(r.targetToLinkTask))
-	for name := range r.targetToLinkTask {
-		targets = append(targets, name)
-	}
-	sort.Strings(targets)
-	return targets
-}
-
-
-// Clear removes all entries from the registry
-func (r *TaskIDRegistry) Clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	
-	r.targetToLinkTask = make(map[string]string)
-	r.taskToTarget = make(map[string]string)
-	r.moduleTargets = make(map[string][]string)
-	r.targetOutputPath = make(map[string]string)
-	r.artifacts = make(map[string]registeredArtifact)
-}
-
-// Global registry instance for cross-module dependency resolution
-var globalTaskRegistry = NewTaskIDRegistry()

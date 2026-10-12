@@ -291,11 +291,15 @@ func TestSelectTakesTheDependencyClosure(t *testing.T) {
 		"appmod/main.cpp":    "int main() {}",
 		"appmod/other.cpp":   "int main() {}",
 	})
-	graph := graphOf(t, mustGenerateTasks(t, root)...)
+	generated, err := generate(t, root, "linux", "x86_64", "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := graphOf(t, generated.Tasks...)
 	if err := graph.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	selected, err := graph.Select([]string{"app"})
+	selected, err := graph.Select([]string{"app"}, generated.Targets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +314,7 @@ func TestSelectTakesTheDependencyClosure(t *testing.T) {
 		t.Errorf("the selection is not a closed graph: %v", err)
 	}
 
-	_, err = graph.Select([]string{"nosuch"})
+	_, err = graph.Select([]string{"nosuch"}, generated.Targets)
 	if err == nil || !strings.Contains(err.Error(), "unknown target 'nosuch'") || !strings.Contains(err.Error(), "calc") {
 		t.Errorf("got %v", err)
 	}

@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -41,61 +43,51 @@ func TestTaskIDGeneratorModulePrefix(t *testing.T) {
 	}
 }
 
-// TestTaskIDRegistryTargetResolution tests the core target → task ID resolution.
-func TestTaskIDRegistryTargetResolution(t *testing.T) {
-	registry := NewTaskIDRegistry()
-
-	// Register some targets
-	registry.RegisterTargetWithOutput("mylib", "link_mylib_001__src", "src", "/build/lib/mylib.so")
-	registry.RegisterTargetWithOutput("myapp", "link_myapp_001__examples", "examples", "/build/bin/myapp")
-
-	// Test resolution by target name
-	taskID, ok := registry.GetLinkTaskID("mylib")
-	if !ok {
-		t.Error("Should find mylib target")
+// Artifact names are unique across the workspace, within a module too.
+func TestArtifactNamesAreUnique(t *testing.T) {
+	names := newGeneratedNames()
+	if err := names.addArtifact("shaders", "a", []string{"/o/x.spv"}, []string{"t1"}); err != nil {
+		t.Fatal(err)
 	}
-	if taskID != "link_mylib_001__src" {
-		t.Errorf("Expected link_mylib_001__src, got %s", taskID)
+	if err := names.addArtifact("shaders", "a", nil, nil); err == nil || !strings.Contains(err.Error(), "defined twice in module a") {
+		t.Errorf("same module: got %v", err)
 	}
-
-	// Test reverse lookup
-	targetName, ok := registry.GetTargetName("link_myapp_001__examples")
-	if !ok {
-		t.Error("Should find target for task ID")
-	}
-	if targetName != "myapp" {
-		t.Errorf("Expected myapp, got %s", targetName)
-	}
-
-	// Test output path lookup
-	outputPath, ok := registry.GetTargetOutputPath("mylib")
-	if !ok {
-		t.Error("Should find output path for mylib")
-	}
-	if outputPath != "/build/lib/mylib.so" {
-		t.Errorf("Expected /build/lib/mylib.so, got %s", outputPath)
+	if err := names.addArtifact("shaders", "b", nil, nil); err == nil || !strings.Contains(err.Error(), "in module a and in module b") {
+		t.Errorf("two modules: got %v", err)
 	}
 }
 
-// TestTaskIDRegistryClear verifies the registry can be cleared.
-func TestTaskIDRegistryClear(t *testing.T) {
-	registry := NewTaskIDRegistry()
-	registry.RegisterTarget("target1", "task1", "mod1")
-
-	// Verify it's populated
-	_, ok := registry.GetLinkTaskID("target1")
-	if !ok {
-		t.Error("Registry should have target1")
+// Each generation owns what it names: generations running at the same time, of different
+// workspaces, each see their own targets only.
+func TestGenerationsShareNoState(t *testing.T) {
+	roots := map[string]string{}
+	for _, name := range []string{"one", "two", "three"} {
+		root := t.TempDir()
+		writeFiles(t, root, map[string]string{
+			"buildy.yaml": "project: {name: " + name + "}\n" + cppEnvironment +
+				"targets:\n  executables:\n    - {name: app_" + name + ", language: cpp, sources: [main.cpp]}\n",
+			"main.cpp": "int main() {}",
+		})
+		roots[name] = root
 	}
-
-	// Clear it
-	registry.Clear()
-
-	// Verify it's empty
-	_, ok = registry.GetLinkTaskID("target1")
-	if ok {
-		t.Error("Registry should be empty after Clear()")
+	var wg sync.WaitGroup
+	for name, root := range roots {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 5; i++ {
+				generated, err := generate(t, root, "linux", "x86_64", "debug")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if len(generated.Targets) != 1 || generated.Targets["app_"+name] == "" {
+					t.Errorf("workspace %s: targets %v", name, generated.Targets)
+				}
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // TestTaskIDGeneratorSpecialCharacters tests handling of special characters in paths.

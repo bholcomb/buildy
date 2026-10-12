@@ -27,10 +27,11 @@ func generateWithToolchains(t *testing.T, root, configuration string) []*BuildTa
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
+	generated, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}
+	tasks := generated.Tasks
 	return tasks
 }
 

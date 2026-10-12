@@ -93,9 +93,10 @@ func (tg *TaskGraph) Validate() error {
 }
 
 // Select returns the graph of what building the named targets takes: each target's final task
-// (its link or build) and every task it transitively depends on. Validate the full graph first:
-// the producer edges it adds are what make the closure complete. An unknown name is an error.
-func (tg *TaskGraph) Select(targets []string) (*TaskGraph, error) {
+// (its link or build; finalTasks maps target names to them, Generated.Targets) and every task it
+// transitively depends on. Validate the full graph first: the producer edges it adds are what make
+// the closure complete. An unknown name is an error.
+func (tg *TaskGraph) Select(targets []string, finalTasks map[string]string) (*TaskGraph, error) {
 	selected := NewTaskGraph()
 	var visit func(id string)
 	visit = func(id string) {
@@ -109,9 +110,12 @@ func (tg *TaskGraph) Select(targets []string) (*TaskGraph, error) {
 		}
 	}
 	for _, target := range targets {
-		id, ok := globalTaskRegistry.GetLinkTaskID(target)
+		id, ok := finalTasks[target]
 		if !ok || tg.Tasks[id] == nil {
-			names := globalTaskRegistry.GetAllTargets()
+			names := make([]string, 0, len(finalTasks))
+			for name := range finalTasks {
+				names = append(names, name)
+			}
 			sort.Strings(names)
 			return nil, fmt.Errorf("unknown target '%s'; the targets are: %s", target, strings.Join(names, ", "))
 		}

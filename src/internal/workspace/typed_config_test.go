@@ -76,10 +76,11 @@ platforms:
 	templates, _ := NewBuildTemplateEngineMulti(nil)
 	var first []string
 	for i := 0; i < 20; i++ {
-		tasks, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
+		generated, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
 		if err != nil {
 			t.Fatal(err)
 		}
+		tasks := generated.Tasks
 		commands := commandsOf(tasks)
 		if first == nil {
 			first = commands

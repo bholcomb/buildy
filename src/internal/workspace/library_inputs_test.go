@@ -97,10 +97,11 @@ foo:
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps).GenerateWorkspaceTasks()
+	generated, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "", templates, ws, deps).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}
+	tasks := generated.Tasks
 	link := linkTask(t, tasks, "app")
 	if !hasString(inputPaths(link), depLib) {
 		t.Errorf("link inputs %v lack %s", inputPaths(link), depLib)

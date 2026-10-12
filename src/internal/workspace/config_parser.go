@@ -25,13 +25,20 @@ type ConfigParser struct {
 	TemplateEngine     *BuildTemplateEngine
 	CurrentToolchain   *resource.ToolchainConfig
 	Workspace          *Workspace
-	TargetRegistry     *TargetRegistry
 	CurrentModule      string
 	DependencyResolver *resource.DependencyResolver
 	TaskIDGen          *TaskIDGenerator
 	ConfigFileDir      string
 	CacheDir           string           // ${cache_dir}
 	Outputs            *DeclaredOutputs // every output generated so far, for file patterns
+	names              *generatedNames  // the generation's targets and artifacts, by name
+}
+
+// Generated is what generating a workspace's tasks produced: the tasks, in the order they were
+// generated, and each target's final task (its link or build), by target name, for --target.
+type Generated struct {
+	Tasks   []*BuildTask
+	Targets map[string]string
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -110,22 +117,20 @@ func (cp *ConfigParser) SelectToolchain(file *config.File) (*resource.ToolchainC
 // GenerateWorkspaceTasks generates the tasks of every module. A build of selected targets runs
 // part of them (TaskGraph.Select): generation is cheap, and every target is needed to resolve
 // names anyway.
-func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
+func (cp *ConfigParser) GenerateWorkspaceTasks() (*Generated, error) {
 	if cp.Workspace == nil {
 		return nil, fmt.Errorf("no workspace configured")
 	}
 	if err := cp.checkNames(); err != nil {
 		return nil, err
 	}
-
-	// Start from an empty task registry: it maps this generation's targets to their tasks
-	globalTaskRegistry.Clear()
-	cp.Outputs = NewDeclaredOutputs()
-
-	cp.TargetRegistry = NewTargetRegistry(cp.Workspace)
-	if err := cp.TargetRegistry.Initialize(); err != nil {
+	if err := checkTargetNames(cp.Workspace); err != nil {
 		return nil, err
 	}
+
+	// What this generation produces and names
+	cp.Outputs = NewDeclaredOutputs()
+	cp.names = newGeneratedNames()
 
 	// The workspace root's variables (workspace-level staging and install use them)
 	rootVars, err := Variables(cp.Workspace.Config.File, cp.buildContext(), cp.Workspace.RootDir, cp.CLIDefines)
@@ -185,7 +190,40 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	allTasks = append(allTasks, workspaceTasks...)
 
 	util.LogProgress("Generated %d tasks from %d modules", len(allTasks), len(cp.Workspace.Modules))
-	return allTasks, nil
+	targets := make(map[string]string, len(cp.names.targets))
+	for name, task := range cp.names.targets {
+		targets[name] = task.TaskID
+	}
+	return &Generated{Tasks: allTasks, Targets: targets}, nil
+}
+
+// checkTargetNames checks that no two targets share a name: libraries are linked by name, and
+// executables and libraries share bin/ and lib/ in the output directory. Load the modules first.
+func checkTargetNames(ws *Workspace) error {
+	if !ws.discovered {
+		return fmt.Errorf("internal error: the workspace's modules were not loaded")
+	}
+	modulePaths := make([]string, 0, len(ws.Modules))
+	for modulePath := range ws.Modules {
+		modulePaths = append(modulePaths, modulePath)
+	}
+	sort.Strings(modulePaths)
+	defined := map[string]string{} // target name -> module
+	for _, modulePath := range modulePaths {
+		module := ws.Modules[modulePath]
+		for _, name := range module.Targets {
+			if other, ok := defined[name]; ok {
+				if other == modulePath {
+					return fmt.Errorf("target '%s' is defined twice in module %s (%s); target names must be unique across the workspace",
+						name, modulePath, module.Path)
+				}
+				return fmt.Errorf("target '%s' is defined in module %s (%s) and in module %s (%s); target names must be unique across the workspace",
+					name, other, ws.Modules[other].Path, modulePath, module.Path)
+			}
+			defined[name] = modulePath
+		}
+	}
+	return nil
 }
 
 // checkNames checks the names the workspace's configs use that only the loaded toolchains can
@@ -246,7 +284,7 @@ func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo)
 	moduleParser.CacheDir = cp.CacheDir
 	moduleParser.Outputs = cp.Outputs
 	moduleParser.CurrentModule = modulePath
-	moduleParser.TargetRegistry = cp.TargetRegistry
+	moduleParser.names = cp.names
 	moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
 
 	// Paths in a module are relative to its directory; in a standalone config (a dependency's
@@ -292,6 +330,7 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 	tg := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
+	tg.names = cp.names
 	cp.Outputs.AddDir(outputDir)
 	tg.Outputs = cp.Outputs
 	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir, cp.Outputs)
@@ -324,20 +363,20 @@ func (cp *ConfigParser) resolveCrossModuleDependencies(allTasks []*BuildTask) er
 		for _, dep := range task.Dependencies {
 			if tasksByID[dep] != nil {
 				add(dep)
-			} else if linkID, ok := globalTaskRegistry.GetLinkTaskID(dep); ok {
-				util.LogInfo("Resolved dependency '%s' to task '%s' in task '%s'", dep, linkID, task.TaskID)
-				add(linkID)
+			} else if target, ok := cp.names.targets[dep]; ok {
+				util.LogInfo("Resolved dependency '%s' to task '%s' in task '%s'", dep, target.TaskID, task.TaskID)
+				add(target.TaskID)
 			} else {
 				return fmt.Errorf("%s depends on '%s', which is not a target in the workspace", task.Describe(), dep)
 			}
 		}
 		for _, lib := range task.LinkLibs {
-			linkID, ok := globalTaskRegistry.GetLinkTaskID(lib)
+			target, ok := cp.names.targets[lib]
 			if !ok {
 				util.LogVerbose("Library '%s' of task '%s' is not a workspace target: a system library", lib, task.TaskID)
 				continue
 			}
-			for _, output := range tasksByID[linkID].Outputs {
+			for _, output := range target.Outputs {
 				if !hasInput(task, output) {
 					task.Inputs = append(task.Inputs, NewTaskInput(output))
 				}
@@ -406,7 +445,7 @@ func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGen
 	}
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
-	taskGen.TargetRegistry = cp.TargetRegistry
+	taskGen.names = cp.names
 	taskGen.Outputs = cp.Outputs
 
 	tasks, err := taskGen.GenerateTargetTasks(file, outputDir)

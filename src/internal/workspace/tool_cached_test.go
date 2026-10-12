@@ -106,10 +106,11 @@ func TestDockerToolchainTasksRunInDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "docker-cpp-linux", templates, ws, nil).GenerateWorkspaceTasks()
+	generated, err := NewConfigParser(BuildContext{Platform: "linux", Architecture: "x86_64", Configuration: "debug"}, nil, toolchains, "docker-cpp-linux", templates, ws, nil).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}
+	tasks := generated.Tasks
 	if len(tasks) == 0 {
 		t.Fatal("no tasks")
 	}

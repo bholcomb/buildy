@@ -48,20 +48,14 @@ type TaskGenerator struct {
 	VarEnv             *util.VariableEnvironment
 	PathResolver       *PathResolver
 	TaskIDGen          *TaskIDGenerator
-	TargetRegistry     *TargetRegistry
 	CurrentModule      string
 	Workspace          *Workspace
 	Outputs            *DeclaredOutputs // the outputs of every task generated so far, for file patterns
-
-	// Track generated targets for cross-module dependency resolution
-	generatedTargets map[string]string // target name -> link task ID
+	names              *generatedNames  // the generation's targets and artifacts, by name
 
 	// The module's output directory, from GenerateTargetTasks
 	outputDir string
 
-	// Artifact tracking
-	artifactOutputs   map[string][]string // artifact name -> output paths
-	artifactTaskIDs   map[string][]string // artifact name -> task IDs
 	stagedByName      map[string][]string // staging name -> the files its tasks produce
 	stagingDestByName map[string]string   // staging name -> destination directory
 }
@@ -84,9 +78,6 @@ func NewTaskGenerator(
 		DependencyResolver: dependencyResolver,
 		VarEnv:             varEnv,
 		Workspace:          workspace,
-		generatedTargets:   make(map[string]string),
-		artifactOutputs:    make(map[string][]string),
-		artifactTaskIDs:    make(map[string][]string),
 		Outputs:            NewDeclaredOutputs(),
 		stagedByName:       make(map[string][]string),
 		stagingDestByName:  make(map[string]string),
@@ -273,12 +264,12 @@ func (tg *TaskGenerator) generateTargetTasks(
 	// (Its source patterns match generated sources whether or not it names their artifact.)
 	var artifactTaskIDs []string
 	for _, artifactName := range target.DependsOn.Artifacts {
-		taskIDs, exists := tg.artifactTaskIDs[artifactName]
-		if !exists {
+		a, exists := tg.names.artifacts[artifactName]
+		if !exists || a.module != tg.moduleName() {
 			return nil, fmt.Errorf("%s depends on artifact '%s', which is not a generate or transform artifact of the module",
 				where, artifactName)
 		}
-		artifactTaskIDs = append(artifactTaskIDs, taskIDs...)
+		artifactTaskIDs = append(artifactTaskIDs, a.taskIDs...)
 	}
 
 	// The template's view of the target: ${item.X}
@@ -484,13 +475,8 @@ func (tg *TaskGenerator) registerTarget(name string, tasks []*BuildTask) {
 	if targetTask == nil {
 		return
 	}
-	tg.generatedTargets[name] = targetTask.TaskID
-	outputPath := ""
-	if len(targetTask.Outputs) > 0 {
-		outputPath = targetTask.Outputs[0]
-	}
-	globalTaskRegistry.RegisterTargetWithOutput(name, targetTask.TaskID, tg.CurrentModule, outputPath)
-	util.LogInfo("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
+	tg.names.targets[name] = targetTask
+	util.LogInfo("Registered target '%s' -> task '%s' (outputs: %v)", name, targetTask.TaskID, targetTask.Outputs)
 }
 
 // GenerateTargetTasks generates a module's generate and transform artifacts and its targets.
@@ -674,9 +660,7 @@ func (tg *TaskGenerator) registerArtifact(name string, outputs, taskIDs []string
 	if name == "" {
 		return nil
 	}
-	tg.artifactOutputs[name] = outputs
-	tg.artifactTaskIDs[name] = taskIDs
-	return globalTaskRegistry.RegisterArtifact(name, tg.moduleName(), outputs, taskIDs)
+	return tg.names.addArtifact(name, tg.moduleName(), outputs, taskIDs)
 }
 
 // files expands a file pattern, relative to the module directory: the files on disk outside the
@@ -1061,10 +1045,8 @@ func (tg *TaskGenerator) processStagingContents(
 		// Artifacts: the module's own, or another module's (workspace-level staging assembles
 		// the artifacts of every module)
 		for _, ref := range item.Artifacts {
-			outputs, taskIDs := tg.artifactOutputs[ref.Name], tg.artifactTaskIDs[ref.Name]
-			if len(outputs) == 0 {
-				outputs, taskIDs, _ = globalTaskRegistry.GetArtifact(ref.Name)
-			}
+			a := tg.names.artifacts[ref.Name]
+			outputs, taskIDs := a.outputs, a.taskIDs
 			if len(outputs) == 0 {
 				return nil, fmt.Errorf("staging folder '%s' in module %s: no module defines artifact '%s' with outputs", folderName, tg.moduleName(), ref.Name)
 			}
@@ -1119,19 +1101,16 @@ func (tg *TaskGenerator) processStagingContents(
 
 // createTargetStagingTask creates a staging task copying (or linking) a target's output
 func (tg *TaskGenerator) createTargetStagingTask(targetName string, destFolder string, useSymlink bool) (*BuildTask, error) {
-	taskID, found := tg.generatedTargets[targetName]
-	if !found {
-		// Workspace-level staging names the targets of every module
-		taskID, found = globalTaskRegistry.GetLinkTaskID(targetName)
-	}
+	// Staging, at module or workspace level, names the targets of every module
+	target, found := tg.names.targets[targetName]
 	if !found {
 		return nil, fmt.Errorf("staging folder %s in module %s: '%s' is not a target of the workspace", destFolder, tg.moduleName(), targetName)
 	}
-	sourcePath, ok := globalTaskRegistry.GetTargetOutputPath(targetName)
-	if !ok || sourcePath == "" {
+	if len(target.Outputs) == 0 {
 		return nil, fmt.Errorf("staging folder %s in module %s: target '%s' has no output", destFolder, tg.moduleName(), targetName)
 	}
-	return tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(destFolder, filepath.Base(sourcePath)), useSymlink, []string{taskID}), nil
+	sourcePath := target.Outputs[0]
+	return tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(destFolder, filepath.Base(sourcePath)), useSymlink, []string{target.TaskID}), nil
 }
 
 // createSymlinkOrCopyTask creates a task that either symlinks or copies a file
@@ -1304,14 +1283,12 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 		var dependencies []string
 		source := c.Source
 		if c.Target != "" {
-			outputPath, found := globalTaskRegistry.GetTargetOutputPath(c.Target)
-			if !found || outputPath == "" {
+			target, found := tg.names.targets[c.Target]
+			if !found || len(target.Outputs) == 0 {
 				return nil, fmt.Errorf("artifacts.copy in module %s: target '%s' is not a target of the workspace", tg.moduleName(), c.Target)
 			}
-			source = outputPath
-			if taskID, found := globalTaskRegistry.GetLinkTaskID(c.Target); found {
-				dependencies = append(dependencies, taskID)
-			}
+			source = target.Outputs[0]
+			dependencies = append(dependencies, target.TaskID)
 		}
 		var err error
 		if source, err = resolveStrict(env, source, "the source of artifacts.copy"); err != nil {
@@ -1324,10 +1301,8 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 		source, dest = tg.absolute(source), tg.absolute(dest)
 
 		for _, dep := range c.DependsOn {
-			if taskID, found := tg.generatedTargets[dep]; found {
-				dependencies = append(dependencies, taskID)
-			} else if taskID, found := globalTaskRegistry.GetLinkTaskID(dep); found {
-				dependencies = append(dependencies, taskID)
+			if target, found := tg.names.targets[dep]; found {
+				dependencies = append(dependencies, target.TaskID)
 			} else {
 				return nil, fmt.Errorf("artifacts.copy in module %s depends on '%s', which is not a target of the workspace", tg.moduleName(), dep)
 			}

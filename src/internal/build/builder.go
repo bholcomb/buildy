@@ -70,11 +70,12 @@ func (b *Builder) BuildWorkspace(
 	taskGenStart := time.Now()
 
 	// Generate tasks for all modules
-	allTasks, err := configParser.GenerateWorkspaceTasks()
+	generated, err := configParser.GenerateWorkspaceTasks()
 	if err != nil {
 		result.Finish(false)
 		return result, fmt.Errorf("failed to generate workspace tasks: %w", err)
 	}
+	allTasks := generated.Tasks
 
 	// Build and validate the whole task graph (under --dry-run too)
 	graph := workspace.NewTaskGraph()
@@ -91,7 +92,7 @@ func (b *Builder) BuildWorkspace(
 
 	// --target: run the named targets and everything they depend on, in any module
 	if len(targets) > 0 {
-		if graph, err = graph.Select(targets); err != nil {
+		if graph, err = graph.Select(targets, generated.Targets); err != nil {
 			result.Finish(false)
 			return result, err
 		}

@@ -34,6 +34,16 @@ func generateTasks(t *testing.T, root string) ([]*BuildTask, error) {
 // generateTasksFor is generateTasks for another platform, architecture or configuration.
 func generateTasksFor(t *testing.T, root, platform, arch, config string) ([]*BuildTask, error) {
 	t.Helper()
+	generated, err := generate(t, root, platform, arch, config)
+	if err != nil {
+		return nil, err
+	}
+	return generated.Tasks, nil
+}
+
+// generate loads the workspace at root and generates its tasks for a build context.
+func generate(t *testing.T, root, platform, arch, config string) (*Generated, error) {
+	t.Helper()
 	ws, err := NewWorkspace(root)
 	if err != nil {
 		return nil, err

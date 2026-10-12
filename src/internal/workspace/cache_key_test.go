@@ -29,10 +29,11 @@ func keysOf(t *testing.T, root string) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
+	generated, err := NewConfigParser(ctx, nil, toolchains, "", templates, ws, nil).GenerateWorkspaceTasks()
 	if err != nil {
 		t.Fatal(err)
 	}
+	tasks := generated.Tasks
 	keys := make(map[string]string, len(tasks))
 	for _, task := range tasks {
 		for i := range task.Inputs {
