@@ -87,22 +87,27 @@ myproject/
 
 ### Multi-Module Project
 
-Larger projects use workspaces with multiple modules:
+Larger projects are workspaces of modules, each a directory with its own `buildy.yaml`:
 
 ```
 myproject/
-├── buildy.yaml                 # Root workspace
-├── buildy_config/
-│   ├── dependencies.yaml       # External dependencies
-│   └── packages/
-│       └── sdl2.yaml           # Package definitions
+├── buildy.yaml              # The workspace root: its modules and shared settings
+├── buildy_config/           # Optional
+│   ├── dependencies.yaml    # External dependencies
+│   ├── dependencies/        # More dependency files, and buildy configs that build them
+│   ├── toolchains/          # Toolchains of your own
+│   └── build_systems/       # Build systems for fetched dependencies
 ├── core/
-│   └── buildy.yaml             # Core library module
+│   └── buildy.yaml          # A module
 ├── renderer/
-│   └── buildy.yaml             # Renderer module
-└── game/
-    └── buildy.yaml             # Main executable module
+│   └── buildy.yaml
+├── game/
+│   └── buildy.yaml
+├── build/                   # Outputs: build/<platform>-<arch>-<config>/
+└── .buildy_cache/           # The cache and fetched dependencies
 ```
+
+buildy writes `build/` and `.buildy_cache/`; add both to your `.gitignore`.
 
 ## Core Concepts
 
@@ -674,34 +679,35 @@ A dependency is fetched once and built once per configuration:
 See [the design note](design/dependencies.md) for the details: what a build's record holds, the
 git policy, and the timeouts.
 
-**Git repository:**
+**Git repository, built with CMake:**
 
 ```yaml
 # buildy_config/dependencies.yaml
-imgui:
-  description: "Dear ImGui"
-  version: "1.90.1"
-  common:
-    git: "https://github.com/ocornut/imgui.git"
-    ref: "v1.90.1"
-    build:
-      system: cmake
-      args: ["-DIMGUI_DEMO=OFF"]
-    include_dirs: ["${dep_install_dir}/include"]   # added anyway: cmake installs there
-    lib_dirs: ["${dep_install_dir}/lib"]
-    libs: ["imgui"]
+pugixml:
+  description: "XML parser"
+  git: "https://github.com/zeux/pugixml.git"
+  ref: "v1.14"
+  build:
+    system: cmake
+    args: ["-DPUGIXML_BUILD_TESTS=OFF"]
+  libs: ["pugixml"]
 ```
+
+cmake installs into `${dep_install_dir}`, whose `include/` and `lib/` are added to the dependency's
+include and lib dirs, so it needs only `libs`.
 
 **URL download (header-only):**
 
 ```yaml
-stb:
-  description: "STB single-header libraries"
-  common:
-    url: "https://github.com/nothings/stb/archive/master.tar.gz"
-    checksum: "sha256:..."
-    include_dirs: ["${dep_dir}"]
+nlohmann_json:
+  description: "JSON for Modern C++"
+  url: "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+  checksum: "sha256:a22461d13119ac5c78f205d3df1db13403e58ce1bb1794edc9313677313f4a9d"
+  include_dirs: ["${dep_dir}/include"]
 ```
+
+An archive is a `.tar.gz`, `.tgz`, `.tar` or `.zip`. Its `checksum` is the SHA-256 of the archive
+(`curl -L <url> | sha256sum`); with one, a changed or corrupted download is an error.
 
 **Supported build systems:** `cmake`, `meson`, `make`, `autoconf`, `cargo`, `go_mod`, `buildy`,
 your own ([Custom Build Systems](#custom-build-systems)), `auto` (detected from the fetched files),
@@ -728,15 +734,12 @@ glfw3:
 When `build.system: buildy` is specified with an `override`:
 
 1. The dependency source is fetched as usual to `.buildy_cache/deps/<name>/`
-2. Buildy invokes itself recursively in **standalone mode** to build the dependency
-3. The override config file defines targets that compile the dependency source
-4. The configuration being built is built (`--config ${config}`), custom ones included
-5. The library paths use `${config}` to reference the correct build output
+2. buildy runs itself on the override config, with the fetched source as the workspace root: the
+   config's paths are relative to the source, and it builds into the source's `build/`
+3. It builds the configuration being built (`--config ${config}`), custom ones included
+4. The library paths use `${config}` to reference the correct build output
 
-**Standalone Mode:** When buildy is invoked with an explicit config file path (instead of a directory), it operates in standalone mode:
-- Only builds what's defined in that specific config file
-- Does not discover modules or resolve dependencies
-- Source paths are resolved relative to the working directory
+The override config builds its own targets only: it has no modules and no dependencies of its own.
 
 **Example override config** (`glfw3_build.yaml`):
 
@@ -1159,21 +1162,29 @@ built on its own (standalone mode, which has none).
 
 ### Built-in Toolchains
 
-**C/C++:**
-- `gcc-c-linux`, `gcc-cpp-linux` - GCC on Linux
-- `clang-c-linux`, `clang-cpp-linux` - Clang on Linux
-- `clang-c-macos`, `clang-cpp-macos` - Apple Clang
-- `clang-c-macos-arm64`, `clang-cpp-macos-arm64` - Apple Clang on Apple Silicon
-- `msvc-c-windows`, `msvc-cpp-windows` - MSVC
-- `gcc-c-mingw`, `gcc-cpp-mingw` - MinGW cross-compiler
-- `docker-c-linux`, `docker-cpp-linux` - Docker-based GCC
-- `emscripten-c`, `emscripten-cpp` - WebAssembly
+`buildy --list-toolchains` lists these, and the toolchains of your own. Each compiler builds for one
+platform and architecture; the default for a platform is the one of the highest `priority`.
 
-**Go:** `go-linux`, `go-macos`, `go-macos-arm64`, `go-windows`
-
-**Rust:** `rust-linux`, `rust-macos`, `rust-macos-arm64`, `rust-windows`, `rust-wasm`
-
-**Assets:** `glslc` (shader compilation), `texconv`, `compressonator`, `imagemagick`
+| Toolchain | Builds | For | Notes |
+|-----------|--------|-----|-------|
+| `gcc-c-linux`, `gcc-cpp-linux` | C, C++ | Linux x86-64 | The default on Linux |
+| `clang-c-linux`, `clang-cpp-linux` | C, C++ | Linux x86-64 | |
+| `clang-c-macos-arm64`, `clang-cpp-macos-arm64` | C, C++ | macOS on Apple Silicon | Apple Clang; the default there |
+| `clang-c-macos`, `clang-cpp-macos` | C, C++ | macOS on Intel | Apple Clang; the default there |
+| `msvc-c-windows`, `msvc-cpp-windows` | C, C++ | Windows x64 | The default on Windows; run buildy in a Developer Command Prompt |
+| `gcc-c-mingw`, `gcc-cpp-mingw` | C, C++ | Windows x64 | MinGW-w64, cross-compiling from Linux |
+| `gcc-c-arm-cross`, `gcc-cpp-arm-cross` | C, C++ | Linux on 32-bit ARM | `arm-linux-gnueabihf-gcc`, cross-compiling from Linux |
+| `docker-c-linux`, `docker-cpp-linux` | C, C++ | Linux x86-64 | GCC in the `gcc:13` Docker image, from any host with Docker |
+| `emscripten-c`, `emscripten-cpp` | C, C++ | WebAssembly | `emcc` and `em++` |
+| `go-linux`, `go-macos`, `go-macos-arm64`, `go-windows` | Go | Linux, macOS (Intel, Apple Silicon), Windows | `go build` |
+| `rust-linux`, `rust-macos`, `rust-macos-arm64` | Rust | Linux, macOS (Intel, Apple Silicon) | `cargo build` |
+| `rust-windows` | Rust | Windows x64 | Cargo's `x86_64-pc-windows-gnu` target: a cross-compile from Linux |
+| `rust-wasm` | Rust | WebAssembly | Cargo's `wasm32-unknown-unknown` target |
+| `glslc` | GLSL shaders | SPIR-V | Transforms: shaderc's `glslc` |
+| `texconv` | Textures | DDS | Transforms: DirectXTex's `texconv` (Windows) |
+| `compressonator` | Textures | Compressed formats | Transforms: AMD's `compressonatorcli` |
+| `imagemagick` | Images | Other image formats | Transforms: ImageMagick's `convert` |
+| `doxygen` | Documentation | | Doxygen |
 
 ### Platform-Specific Toolchains
 
@@ -1332,6 +1343,18 @@ buildy --cache-dir /path  # Custom cache directory
 
 The cache directory is `.buildy_cache/` in the workspace root by default. A relative `--cache-dir`
 is relative to the workspace root (not the current directory), an absolute one is used as it is.
+It holds:
+
+```
+.buildy_cache/
+├── cache_index.json          # What each task last produced
+├── cache_journal.jsonl       # The entries of the running build's tasks, until it ends
+├── file_hashes.json          # File hashes, by size, times and inode
+├── tasks_<context>.json      # The last task graph of each platform-arch-config
+├── build_report_<context>.json
+├── deps/<name>/              # A fetched dependency, with its _build/ and _install/
+└── downloads/                # Downloaded archives
+```
 
 ## CLI Reference
 
@@ -1341,7 +1364,7 @@ is relative to the workspace root (not the current directory), an absolute one i
 buildy                           # Build with defaults
 buildy -c release                # Release build
 buildy --target myapp            # Build specific target
-buildy --platform linux --arch x86_64  # Specify platform/arch
+buildy --platform windows --architecture x86_64  # Another platform (cross-compiling)
 ```
 
 ### Cache and Clean
@@ -1414,29 +1437,46 @@ longer, the same way.
 | `--clean-all` | | `--clean`, and the cache directory: fetched dependencies, their builds, the cache records |
 | `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for (and, with `-n 3`, its command); fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
-| `--compile-commands` | | Generate compile_commands.json |
+| `--compile-commands` | | Write `buildy_config/compile_commands.json` for editors and language servers |
 | `--define` | `-D` | Define variable (VAR=value) |
-| `--list-toolchains` | | List available toolchains |
+| `--list-toolchains` | | List the toolchains a build here can use (built-in, data directories, the workspace's), and exit |
 | `--cache-dir` | | Cache directory: relative to the workspace root, or absolute (default `.buildy_cache`) |
-| `--cache-stats` | | Show cache statistics |
+| `--cache-stats` | | Print the cache directory and how many entries it holds, and exit |
 | `--add-data-dir` | | Additional data directory: its `templates/`, `toolchains/` and `build_systems/` ([search paths](#data-directory-search-paths)) |
+| `--version` | | Print buildy's version and exit |
+| `--help` | `-h` | Print the options and exit |
 
 ## Build Reports
 
 After each build, buildy prints a summary and saves a detailed JSON report to `.buildy_cache/build_report_<platform>-<arch>-<config>.json` (the task graph goes to `tasks_<platform>-<arch>-<config>.json`).
 
 ```
-================================================================================
-                              BUILD REPORT
-================================================================================
-Status: SUCCESS
-Duration: 2.345s
-
-Tasks:
-  Total:       24
-  Cache hits:  18 (75.0%)
-  Cache misses: 6
-================================================================================
+╔════════════════════════════════════════════════════════════╗
+║                        BUILD REPORT                        ║
+╠════════════════════════════════════════════════════════════╣
+║  Status:           SUCCESS                                 ║
+║  Platform:         linux-x86_64                            ║
+║  Configuration:    debug                                   ║
+║  Toolchain:        gcc-cpp-linux                           ║
+╠════════════════════════════════════════════════════════════╣
+║  TIMING                                                    ║
+╠════════════════════════════════════════════════════════════╣
+║  Total Duration:   0.21s                                   ║
+║  Task Generation:  0.00s                                   ║
+║  Execution:        0.21s                                   ║
+╠════════════════════════════════════════════════════════════╣
+║  TASKS                                                     ║
+╠════════════════════════════════════════════════════════════╣
+║  Total Tasks:      4                                       ║
+║  Executed:         1                                       ║
+║  Cache Hits:       3 (75.0%)                               ║
+║  Cache Misses:     1                                       ║
+╠════════════════════════════════════════════════════════════╣
+║  TASKS BY TYPE                                             ║
+╠════════════════════════════════════════════════════════════╣
+║    compile:        2                                       ║
+║    link:           2                                       ║
+╚════════════════════════════════════════════════════════════╝
 ```
 
 ## Tutorials

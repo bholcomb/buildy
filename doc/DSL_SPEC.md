@@ -463,26 +463,26 @@ glfw:
     frameworks: ["Cocoa", "IOKit", "CoreVideo"]
 
 # Fetched dependency with cmake build
-imgui:
-  description: "Dear ImGui"
-  version: "1.90.1"
+pugixml:
+  description: "XML parser"
+  version: "1.14"
   common:
-    git: "https://github.com/ocornut/imgui.git"
-    ref: "v1.90.1"
+    git: "https://github.com/zeux/pugixml.git"
+    ref: "v1.14"
     build:
       system: cmake
-      args: ["-DIMGUI_DEMO=OFF"]
+      args: ["-DPUGIXML_BUILD_TESTS=OFF"]
     include_dirs: ["${dep_install_dir}/include"]   # added anyway: cmake installs there
     lib_dirs: ["${dep_install_dir}/lib"]
-    libs: ["imgui"]
+    libs: ["pugixml"]
 
 # Header-only library
-stb:
-  description: "STB single-header libraries"
+nlohmann_json:
+  description: "JSON for Modern C++"
   common:
-    url: "https://github.com/nothings/stb/archive/master.tar.gz"
-    checksum: "sha256:..."
-    include_dirs: ["${dep_dir}"]
+    url: "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
+    checksum: "sha256:a22461d13119ac5c78f205d3df1db13403e58ce1bb1794edc9313677313f4a9d"
+    include_dirs: ["${dep_dir}/include"]
 
 # Fetched dependency built with custom buildy config
 glfw3:
@@ -721,10 +721,10 @@ Build configuration: toolchains, compiler settings, build configurations.
 ```yaml
 environment:
   toolchains:
-    default: gcc-linux        # Default for all platforms
-    linux: clang-linux        # Override for Linux
-    windows: msvc-windows     # Override for Windows
-    macos: clang-macos        # Override for macOS
+    default: gcc-cpp-linux        # For every platform without its own
+    linux: clang-cpp-linux        # Linux
+    windows: msvc-cpp-windows     # Windows
+    macos: clang-cpp-macos-arm64  # macOS
     
   compile:
     cpp_standard: "c++20"
@@ -1603,32 +1603,8 @@ error.
 
 ### Built-in Toolchains
 
-| Toolchain | Platform | Language | Description |
-|-----------|----------|----------|-------------|
-| `gcc-c-linux` | Linux | C | GCC C compiler |
-| `gcc-cpp-linux` | Linux | C++ | GCC C++ compiler |
-| `clang-c-linux` | Linux | C | Clang C compiler |
-| `clang-cpp-linux` | Linux | C++ | Clang C++ compiler |
-| `clang-c-macos` | macOS | C | Apple Clang C |
-| `clang-cpp-macos` | macOS | C++ | Apple Clang C++ |
-| `clang-c-macos-arm64` | macOS ARM | C | Apple Clang C for Apple Silicon |
-| `clang-cpp-macos-arm64` | macOS ARM | C++ | Apple Clang C++ for Apple Silicon |
-| `msvc-c-windows` | Windows | C | MSVC C compiler |
-| `msvc-cpp-windows` | Windows | C++ | MSVC C++ compiler |
-| `gcc-c-mingw` | Linux→Windows | C | MinGW cross-compiler |
-| `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
-| `go-linux` | Linux | Go | Go compiler |
-| `go-macos` | macOS | Go | Go compiler |
-| `go-macos-arm64` | macOS ARM | Go | Go compiler for Apple Silicon |
-| `go-windows` | Windows | Go | Go compiler |
-| `rust-linux` | Linux | Rust | Cargo/rustc |
-| `rust-macos` | macOS | Rust | Cargo/rustc |
-| `rust-macos-arm64` | macOS ARM | Rust | Cargo/rustc for Apple Silicon |
-| `rust-windows` | Windows | Rust | Cargo/rustc |
-| `rust-wasm` | Any | Rust | Rust to WebAssembly |
-| `emscripten-c` | Any | C | C to WebAssembly |
-| `emscripten-cpp` | Any | C++ | C++ to WebAssembly |
-| `glslc` | Any | GLSL | GLSL to SPIR-V shader compiler |
+The [user guide's table](USER_GUIDE.md#built-in-toolchains) lists them; `buildy --list-toolchains`
+prints them with the workspace's own.
 
 ### Toolchain Selection
 
@@ -2533,9 +2509,9 @@ dependencies:
 
 environment:
   toolchains:
-    default: gcc-linux
-    windows: msvc-windows
-    macos: clang-macos
+    default: gcc-cpp-linux
+    windows: msvc-cpp-windows
+    macos: clang-cpp-macos-arm64
     
   compile:
     cpp_standard: "c++20"
@@ -2690,23 +2666,20 @@ targets:
 # Basic build (platform/architecture auto-detected from host)
 buildy
 
-# Build specific directory
+# Build the workspace of another directory (the same as running buildy in it)
 buildy path/to/project/
-
-# Standalone mode - build a specific config file
-buildy path/to/config.yaml
 
 # Specify configuration
 buildy --config release
 buildy --config debug
 
 # Specify platform/architecture (auto-detected by default)
-buildy --platform linux --arch x86_64
-buildy --platform macos --arch arm64
-buildy --platform windows --arch x86_64
+buildy --platform linux --architecture x86_64
+buildy --platform macos --architecture arm64
+buildy -p windows -a x86_64
 
 # Override toolchain
-buildy --toolchain clang-linux
+buildy --toolchain clang-cpp-linux
 
 # Define variables
 buildy --define VERSION=1.2.3 --define BUILD_NUMBER=42
@@ -2741,7 +2714,7 @@ Buildy operates in two modes depending on how it's invoked:
 |------------|------|----------|
 | `buildy` | Workspace | Find the workspace the current directory belongs to (below), discover modules, resolve dependencies, build the workspace |
 | `buildy path/to/dir/` | Workspace | The same, with that directory as the workspace root |
-| `buildy path/to/config.yaml` | Standalone | Build only what's in that config file |
+| `buildy path/to/config.yaml` | Standalone | Internal: how buildy builds a dependency with `build.system: buildy` |
 
 **Which workspace.** Without a path, buildy takes the nearest directory at or above the current one
 that has a `buildy.yaml` (a module, or a root), then looks further up, like Cargo: the root is the
@@ -2762,7 +2735,8 @@ can't be read is an error.
 - Fetches and builds dependencies that aren't yet, for the configuration being built
 - Generates a full task graph with proper ordering
 
-**Standalone Mode** (explicit config file):
+**Standalone Mode** (a config file, not a directory; buildy uses it to build a dependency with
+`build.system: buildy`, and it is not meant for building projects):
 - Only builds what's defined in the specified config file
 - Does not discover other modules
 - Does not resolve or fetch dependencies
@@ -2783,7 +2757,7 @@ Use `--platform` and `--architecture` to override for cross-compilation.
 
 ### IDE Integration
 
-The `--compile-commands` flag generates a `compile_commands.json` file in the `buildy/` directory. This file is used by IDEs and language servers (e.g., clangd, ccls) for code intelligence features like:
+The `--compile-commands` flag writes `buildy_config/compile_commands.json` in the workspace root. This file is used by IDEs and language servers (e.g., clangd, ccls) for code intelligence features like:
 
 - Auto-completion
 - Go to definition
@@ -2825,30 +2799,9 @@ After each build, buildy generates a comprehensive build report with statistics 
 
 ### Terminal Summary
 
-A summary is always printed to the terminal:
-
-```
-================================================================================
-                              BUILD REPORT
-================================================================================
-Status: SUCCESS
-Duration: 2.345s (task gen: 0.123s, execution: 2.222s)
-
-Platform: linux / x86_64
-Configuration: debug
-Toolchain: clang-linux
-
-Tasks:
-  Total:       24
-  Cache hits:   18 (75.0%)
-  Cache misses:  6
-  Failed:        0
-
-By Type:
-  compile:  20 tasks
-  link:      4 tasks
-================================================================================
-```
+A summary is always printed to the terminal: the status, the build context and toolchain, the
+timings, the task counts (executed, cache hits) and the tasks by type, and the failed tasks if any.
+The [user guide](USER_GUIDE.md#build-reports) has an example.
 
 ### JSON Report
 

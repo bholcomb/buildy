@@ -1,381 +1,161 @@
 # Buildy McBuildface
 
-A modern, data-driven build system for multi-language projects.
+**One YAML file builds your C, C++, Go and Rust code, fetches and builds its dependencies, and
+rebuilds only what actually changed.**
 
-## Features
+Buildy is a build tool for multi-language projects. You list your targets in `buildy.yaml`;
+buildy picks the compiler for your platform, runs every step it can in parallel, and caches each
+result by the content of its inputs, so touching a file costs nothing and changing a flag rebuilds
+exactly what it affects. The same file builds on Linux, Windows and macOS, and buildy itself is a
+single binary.
 
-- **Multi-Language Support**: Build C, C++, Go, and Rust projects with a unified configuration
-- **Data-Driven**: All build logic defined in YAML - templates, toolchains, and build configurations
-- **Content-Addressable Caching**: Fast incremental builds keyed on the content of every input
-- **Parallel Execution**: Automatic dependency resolution and parallel task execution
-- **Cross-Platform**: Same `buildy.yaml` works on Linux, Windows, and macOS
-- **Extensible**: Add new languages and tools via YAML template and toolchain files
+## Example
 
-## Quick Start
-
-### Building Buildy
-
-Buildy needs Go 1.25 or later (`src/go.mod`). With `GOTOOLCHAIN=auto`, the Go default, an
-older `go` downloads it.
-
-```bash
-cd src && go build -o ../bin/buildy .
-```
-
-Or download a release (see [Releases](#releases)) and put `buildy` on your `PATH`.
-
-### Building a Project
-
-```bash
-# Build with default settings (debug, auto-detected platform)
-buildy
-
-# Build a specific directory (the same build as running buildy in it)
-buildy path/to/project/
-
-# Build a specific config file (standalone mode)
-buildy path/to/config.yaml
-
-# Build release configuration
-buildy -r              # Short form
-buildy --config release  # Long form
-
-# Specify platform for cross-compilation
-buildy --platform linux --architecture x86_64
-
-# Verbose/debug output
-buildy -n 4               # Verbose level
-buildy -n 5               # Debug level
-```
-
-## Project Configuration
-
-Projects are configured using `buildy.yaml` files. Here's a simple example:
+A library and a program that uses it:
 
 ```yaml
+# buildy.yaml
 project:
-  name: my-project
-  version: "1.0.0"
+  name: hello
 
 environment:
   compile:
     cpp_standard: "c++20"
-    warnings: extra
-  
-  configurations:
-    debug:
-      optimization: none
-      symbols: true
-    release:
-      optimization: full
-      defines: ["NDEBUG=1"]
 
 targets:
   static_libraries:
-    - name: mylib
+    - name: greet
       language: cpp
-      sources: ["src/*.cpp"]
+      sources: ["lib/*.cpp"]
       include_dirs: ["include"]
 
   executables:
-    - name: myapp
+    - name: hello
       language: cpp
       sources: ["app/*.cpp"]
-      libs: [mylib]
-      depends_on:
-        targets: [mylib]
+      include_dirs: ["include"]
+      libs: [greet]
 ```
 
-## Target Sections
-
-Buildy uses explicit sections for different target types:
-
-| Section | Output | Supported Languages |
-|---------|--------|---------------------|
-| `static_libraries` | Static library (.a, .lib) | c, cpp, rust, go |
-| `shared_libraries` | Shared library (.so, .dll) | c, cpp, rust, go |
-| `executables` | Executable binary | c, cpp, rust, go |
-
-### Language Field
-
-The `language` field is **required** for all targets:
-
-```yaml
-targets:
-  executables:
-    - name: myapp
-      language: cpp    # Required: c, cpp, go, or rust
-      sources: ["src/*.cpp"]
+```bash
+buildy       # debug:   build/linux-x86_64-debug/bin/hello
+buildy -r    # release: build/linux-x86_64-release/bin/hello
 ```
 
-### Go and Rust Projects
-
-For Go and Rust, typically only `executables` are needed since dependencies are managed by Go modules and Cargo:
-
-```yaml
-# Go executable
-targets:
-  executables:
-    - name: myapp
-      language: go
-      path: "cmd/myapp"      # Directory with go.mod or main package
-      ldflags: ["-s", "-w"]  # Optional linker flags
-
-# Rust executable  
-targets:
-  executables:
-    - name: myapp
-      language: rust
-      path: "."              # Directory with Cargo.toml
-      features: ["feature1"] # Optional Cargo features
-```
-
-A Go target takes `path`, `build_tags`, `ldflags`, `gcflags` and `buildmode`; a Rust target
-`path`, `features` and `bin` (and both `name`, `language`, `depends_on`). Any other key is an
-error; the lists take filters (`build_tags: [{linux: [x11]}]`). See
-[Go and Rust target keys](doc/DSL_SPEC.md#go-and-rust-target-keys).
-
-Go/Rust library targets (`shared_libraries`, `static_libraries`) are for C/C++ interop only: Go
-builds them with `-buildmode=c-shared` and `-buildmode=c-archive`.
-
-Buildy runs `go build` and `cargo build` on every build and lets their own caches decide what to
-rebuild; they show as executed, never as cache hits. Cargo builds into
-`build/<platform>-<arch>-<config>/cargo/`, so a Rust executable is
-`cargo/<debug|release>/<name>`.
-
-## Workspaces
-
-Multi-module projects use the `workspace` section:
-
-```yaml
-# Root buildy.yaml
-project:
-  name: game-engine
-
-workspace:
-  modules:
-    - core                    # Built on all platforms
-    - renderer
-    - audio
-    - linux:                  # Linux only
-        - platform/linux
-    - windows:                # Windows only
-        - platform/windows
-```
-
-Each subdirectory contains its own `buildy.yaml`. The module list uses filtered list syntax - plain strings are always included, map entries with platform keys are filtered.
-
-## Dependencies
-
-External dependencies are defined in `buildy_config/dependencies.yaml`:
+To use a library from elsewhere, define it once and name it in the target's `deps`:
 
 ```yaml
 # buildy_config/dependencies.yaml
-zlib:
-  common:
-    pkg_config: zlib
-
-pthread:
-  linux:
-    libs: ["pthread"]
-
-imgui:
-  common:
-    git: "https://github.com/ocornut/imgui.git"
-    ref: "v1.90.1"
-    include_dirs: ["${dep_dir}"]
-
-glfw3:
-  common:
-    url: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip"
-    checksum: "sha256:abc123..."  # Recommended for reproducibility
-    include_dirs: ["${dep_dir}/include"]
-
-sdl2:
-  common:
-    git: "https://github.com/libsdl-org/SDL.git"
-    ref: "release-2.28.5"
-    build: {system: cmake, args: ["-DSDL_TEST=OFF"]}
-    libs: ["SDL2"]
+pugixml:
+  git: "https://github.com/zeux/pugixml.git"
+  ref: "v1.14"
+  build: {system: cmake}
+  libs: [pugixml]
 ```
-
-Fetched dependencies are fetched once and then used offline, at the commit or archive first
-fetched, until `--update-deps`. A dependency with a `build.system` is built for the configuration
-being built only (`-c release` links its release build), and again only when its source, build
-settings or tools change. See [the design note](doc/design/dependencies.md).
-
-## Command-Line Options
-
-```
-Usage: buildy [options]
-
-Options:
-  -c, --config <name>   Build configuration (debug, release)
-  -r, --release         Shortcut for --config=release
-  -p, --platform <name> Target platform (linux, windows, macos)
-  -a, --arch <name>     Target architecture (x86_64, arm64)
-  -t, --toolchain <name> Override toolchain selection
-  --target <name>       Build a target and what it depends on (repeatable)
-  -j, --workers <n>     Number of tasks run at once
-  -d, --dry-run         Plan: show what would be fetched, built and run
-  --clean               Remove the workspace's output directory (build/), nothing else
-  --clean-all           --clean, and the cache directory (fetched dependencies too)
-  --cache-dir <dir>     Cache directory: relative to the workspace root, or absolute
-  -f, --force           Ignore the cache and dependency build records, rebuild all
-  --update-deps         Fetch git branches and tags, and archives without a checksum, again
-  --compile-commands    Generate compile_commands.json
-  -n, --notify <level>  Log level: 1=error, 2=warning, 3=info, 4=verbose, 5=debug
-  --timeout <duration>  Kill a task or dependency build step that runs longer (e.g. 30m; default: no limit)
-```
-
-Each task starts as soon as the tasks it depends on have finished. What a compiler prints
-(warnings) is shown under its task. Ctrl-C stops the build at any point, fetches and dependency
-builds included: running commands are killed with everything they started, and buildy exits with
-130 (a second Ctrl-C exits at once).
-
-## Project Structure
-
-```
-my-project/
-├── buildy.yaml              # Project configuration
-├── buildy_config/
-│   ├── dependencies.yaml    # External dependencies (optional)
-│   ├── dependencies/        # Per-dependency configs (optional)
-│   │   └── glfw3.yaml
-│   ├── toolchains/          # Custom toolchains (optional)
-│   │   └── custom-gcc.yaml
-│   └── build_systems/       # Build systems for fetched dependencies (optional)
-│       └── prefix_make.yaml
-├── src/                     # Source files
-├── include/                 # Headers
-├── build/                   # Output directory (auto-created)
-└── .buildy_cache/           # Build cache (git-ignored)
-    ├── cache_index.json     # What each task last produced
-    ├── cache_journal.jsonl  # Entries of the tasks of a run, until it ends
-    ├── file_hashes.json     # File hashes, by size, times and inode
-    ├── deps/                # Fetched dependencies: <name>/ with its _build/ and _install/
-    └── downloads/           # Cached archives
-```
-
-## Built-in Toolchains
-
-Buildy includes toolchains for common compilers:
-
-| Toolchain | Platform | Language | Description |
-|-----------|----------|----------|-------------|
-| `gcc-c-linux` | Linux | C | GCC C compiler |
-| `gcc-cpp-linux` | Linux | C++ | GCC C++ compiler |
-| `clang-c-linux` | Linux | C | Clang C compiler |
-| `clang-cpp-linux` | Linux | C++ | Clang C++ compiler |
-| `clang-c-macos` | macOS | C | Apple Clang C |
-| `clang-cpp-macos` | macOS | C++ | Apple Clang C++ |
-| `clang-c-macos-arm64` | macOS ARM | C | Apple Clang C for Apple Silicon |
-| `clang-cpp-macos-arm64` | macOS ARM | C++ | Apple Clang C++ for Apple Silicon |
-| `msvc-c-windows` | Windows | C | MSVC C compiler |
-| `msvc-cpp-windows` | Windows | C++ | MSVC C++ compiler |
-| `gcc-c-mingw` | Linux→Windows | C | MinGW cross-compiler |
-| `gcc-cpp-mingw` | Linux→Windows | C++ | MinGW cross-compiler |
-| `go-linux` | Linux | Go | Go compiler |
-| `go-macos` | macOS | Go | Go compiler |
-| `go-macos-arm64` | macOS ARM | Go | Go compiler for Apple Silicon |
-| `go-windows` | Windows | Go | Go compiler |
-| `rust-linux` | Linux | Rust | Cargo/rustc |
-| `rust-macos` | macOS | Rust | Cargo/rustc |
-| `rust-macos-arm64` | macOS ARM | Rust | Cargo/rustc for Apple Silicon |
-| `rust-windows` | Windows | Rust | Cargo/rustc |
-| `rust-wasm` | Any | Rust | Rust to WebAssembly |
-| `emscripten-cpp` | Any | C++ | C++ to WebAssembly |
-| `glslc` | Any | GLSL | GLSL to SPIR-V |
-
-## Templates vs Toolchains
-
-Buildy separates **what** to build from **how** to build:
-
-| Concept | Purpose | Example |
-|---------|---------|---------|
-| **Templates** | Define build workflow (steps, inputs, outputs) | "Compile each source, then link them" |
-| **Toolchains** | Define actual commands and flags | "Use `gcc -c` for compiling" |
-
-**Templates** are language-agnostic recipes selected by `language` + target type:
-- `cpp_executable`, `cpp_static_library`, `cpp_shared_library`
-- `c_executable`, `c_static_library`, `c_shared_library`
-- `go_executable`, `go_static_library`, `go_shared_library`
-- `rust_executable`, `rust_static_library`, `rust_shared_library`
-
-**Toolchains** are platform-specific implementations that provide the actual commands.
-
-### Data-Driven Command Parameters
-
-Toolchains use declarative `command_params` to define how command placeholders are resolved:
 
 ```yaml
-# Example from go-linux.yaml
-command_params:
-  build_tags:
-    sources: ["tool_params.build_tags", "item.build_tags"]
-    format: "-tags ${value}"   # two arguments: -tags a,b
-    join: ","
+    - name: hello
+      ...
+      deps: [pugixml]
 ```
 
-This eliminates hardcoded language-specific logic and makes the build system fully extensible via YAML.
+The next build clones pugixml at `v1.14`, builds it with CMake for the configuration you are
+building, and gives `hello` its headers and library. Later builds use it offline.
 
-## Architecture
+buildy writes `build/` and `.buildy_cache/` in your project: add both to `.gitignore`.
+
+## Why buildy?
+
+- **Rebuilds only what changed.** Each step is keyed by its command, the content of its inputs and
+  the compiler itself. Touching a file costs nothing, and a link runs only when an object file it
+  reads really changed.
+- **Dependencies without a package manager.** Fetch from git (a branch, tag or commit) or an
+  archive URL checked against its SHA-256, or find them with pkg-config. buildy builds them with
+  CMake, Meson, make, autoconf, Cargo or buildy itself, once per configuration, and keeps them
+  until you ask for `--update-deps`.
+- **One file, every platform.** Filtered lists pick sources, flags, defines, libraries and modules
+  per platform, architecture, configuration or toolchain. GCC, Clang, MSVC, MinGW and Emscripten are
+  built in, and `debug` and `release` work with no setup.
+- **C, C++, Go and Rust side by side.** Go and Rust targets build with `go build` and
+  `cargo build` in the same run as the C and C++ ones, and a C program can link a Go library and
+  include the header Go writes for it.
+- **Workspaces.** Split a project into modules, each with its own `buildy.yaml`. Run `buildy` in
+  any directory of the workspace and it builds the whole workspace, with one cache.
+- **Assets in the same build.** Compile shaders, convert textures, and stage everything into a
+  directory or a `.zip` or `.tar.gz` next to the binaries, cached like the code.
+- **Everything is data.** Toolchains, build templates and dependency build systems are YAML. Add a
+  compiler or a tool in `buildy_config/toolchains/`, or a build system in
+  `buildy_config/build_systems/`, without changing buildy.
+- **Plays well with others.** `--compile-commands` writes `compile_commands.json` for clangd and
+  editors, `--dry-run` shows the plan, Ctrl-C stops everything a build started, `--timeout` kills a
+  stuck step, and a mistake in a config names its file, line and key.
+
+## Getting buildy
+
+Download the archive for your platform from the
+[latest release](https://github.com/bholcomb/buildy/releases/latest) and put the `buildy`
+executable it holds on your `PATH`:
+
+| Platform | Archive |
+|----------|---------|
+| Linux x86-64 | `buildy-0.2.0-linux-x64.tar.gz` |
+| Windows x64 | `buildy-0.2.0-win-x64.zip` |
+| macOS on Apple Silicon | `buildy-0.2.0-osx-arm64.tar.gz` |
+
+`SHA256SUMS` in the release has each archive's checksum. The Linux binary is static and runs on any
+distribution. The macOS binary isn't notarized: if you downloaded it with a browser, run
+`xattr -d com.apple.quarantine buildy` once before you run it.
+
+To build it from source instead, with Go 1.25 or later:
+
+```bash
+git clone https://github.com/bholcomb/buildy.git
+cd buildy/src && go build -o ../bin/buildy .
+```
+
+## Command line
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        buildy.yaml                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Config Parser                            │
-│  - Parse YAML configuration                                  │
-│  - Resolve variables and imports                             │
-│  - Merge platform/configuration overrides                    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Task Generator                            │
-│  - Look up templates by language + target type               │
-│  - Apply pre-processing (packages, sources, paths)           │
-│  - Expand templates into concrete build tasks                │
-│  - Apply post-processing (register targets, scan sources)    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Task Graph                              │
-│  - Build dependency graph                                    │
-│  - Topological order (a cycle is an error)                   │
-│  - Each task starts when its dependencies finish             │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       Executor                               │
-│  - Check every task's inputs exist                           │
-│  - Skip tasks whose cache entry and outputs are current      │
-│  - Execute the rest in parallel; check their outputs exist   │
-│  - Record the outputs and discovered inputs in the cache     │
-└─────────────────────────────────────────────────────────────┘
+buildy                     Build the workspace you are in (the debug configuration)
+buildy -r                  Build release (-c <name> builds any configuration)
+buildy --target <name>     Build one target and what it needs
+buildy -d                  Dry run: show what would be fetched, built and run
+buildy -f                  Rebuild everything, ignoring the cache
+buildy --clean             Remove build/ (--clean-all removes the cache and dependencies too)
+buildy --update-deps       Fetch git branches and tags again, to where they are now
+buildy --compile-commands  Write buildy_config/compile_commands.json for your editor
+buildy -n 3                Say more (4 verbose, 5 debug)
 ```
 
-## Releases
-
-See [doc/RELEASING.md](doc/RELEASING.md).
+buildy runs as many tasks at once as the machine has CPUs (`-j` to change it). `-p` and `-a` build
+for another platform and architecture. `--list-toolchains` lists the compilers it knows. The
+[user guide](doc/USER_GUIDE.md#all-options) has every option.
 
 ## Documentation
 
-- [DSL Specification](doc/DSL_SPEC.md) - Complete configuration reference
+- [User guide](doc/USER_GUIDE.md): everything buildy does, with examples. Start here.
+- Tutorials, each built around one of the [examples](examples/):
+  - [Basic](doc/TUTORIAL_BASIC.md): a library and a program (`examples/math`)
+  - [Multi-module](doc/TUTORIAL_MULTIMODULE.md): a workspace with a fetched dependency, shaders
+    and packaging (`examples/game_engine`)
+  - [Advanced](doc/TUTORIAL_ADVANCED.md): fetched dependencies and Docker builds
+    (`examples/portable_app`)
+- [DSL specification](doc/DSL_SPEC.md): every key of every file
+- [How buildy works](doc/ARCHITECTURE.md): the phases of a build, and the design notes
 
-## Examples
+## Status
 
-See the `examples/` directory:
+Buildy is at version 0.2.0. Not there yet:
 
-- `examples/math/` - Simple C++ library and executable
-- `examples/game_engine/` - Multi-module C++ project with dependencies
+- A target can't choose its own toolchain: each module has one, and a target of another language
+  gets that language's default.
+- Rust for Windows builds Cargo's `x86_64-pc-windows-gnu` target, a cross-compile from Linux; the
+  MSVC target isn't built in. A C or C++ target can't link a Rust library by name yet.
+- No test targets yet, and no lockfile: pin a dependency with a full commit ID or a checksum.
+- Dependencies are fetched one at a time, and a `--target` build fetches those of every target.
+- Release binaries exist for Linux x64, Windows x64 and Apple Silicon; elsewhere, build from
+  source. The end-to-end tests compile C and C++ on Linux and macOS, not yet with MSVC.
 
 ## License
 
-MIT License
+MIT. See [LICENSE](LICENSE).
