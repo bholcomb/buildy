@@ -327,19 +327,20 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The root's toolchain, which filter keys in its staging may name
+	tc, err := cp.SelectToolchain(root)
+	if err != nil {
+		return nil, err
+	}
 
 	tg := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
+	tg.SetToolchain(tc)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
 	tg.names = cp.names
 	cp.Outputs.AddDir(outputDir)
 	tg.Outputs = cp.Outputs
-	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir, cp.Outputs)
-	if cp.CurrentToolchain != nil {
-		if err := tg.SetToolchain(cp.CurrentToolchain); err != nil {
-			return nil, err
-		}
-	}
+	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Outputs)
 	return tg.generateStagingAndInstall(root.Staging, root.Install, root.Project, outputDir)
 }
 
@@ -428,14 +429,12 @@ func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGen
 	}
 
 	cp.Outputs.AddDir(outputDir)
-	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, root, cp.Outputs)
+	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, cp.Outputs)
 
 	taskGen := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	taskGen.SetPathResolver(cp.PathResolver)
-	if err := taskGen.SetToolchain(tc); err != nil {
-		return nil, nil, err
-	}
+	taskGen.SetToolchain(tc)
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.names = cp.names

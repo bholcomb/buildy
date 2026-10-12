@@ -89,17 +89,11 @@ func (tg *TaskGenerator) SetPathResolver(pr *PathResolver) {
 	tg.PathResolver = pr
 }
 
-// SetToolchain sets up the toolchain for task generation
-func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
+// SetToolchain sets the module's toolchain
+func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) {
 	tg.CurrentToolchain = tc
-
-	toolMatcher, err := resource.NewToolMatcher(tc)
-	if err != nil {
-		return err
-	}
-	tg.ToolMatcher = toolMatcher
-	tg.CommandBuilder = resource.NewCommandBuilder(tc, toolMatcher, tg.Platform, tg.Configuration)
-	return nil
+	tg.ToolMatcher = resource.NewToolMatcher(tc)
+	tg.CommandBuilder = resource.NewCommandBuilder(tc, tg.Platform, tg.Configuration)
 }
 
 // hostCanSymlink reports whether staging can make symlinks: not on a Windows host, where a
@@ -218,10 +212,8 @@ func (tg *TaskGenerator) generateTargetTasks(
 		if targetToolchain == nil {
 			return nil, fmt.Errorf("%s: no %s toolchain found for platform %s-%s", where, metadata.ToolchainLanguage, tg.Platform, tg.Architecture)
 		}
-		if toolMatcher, err = resource.NewToolMatcher(targetToolchain); err != nil {
-			return nil, fmt.Errorf("%s: %w", where, err)
-		}
-		commandBuilder = resource.NewCommandBuilder(targetToolchain, toolMatcher, tg.Platform, tg.Configuration)
+		toolMatcher = resource.NewToolMatcher(targetToolchain)
+		commandBuilder = resource.NewCommandBuilder(targetToolchain, tg.Platform, tg.Configuration)
 	}
 
 	// The module's settings and the target's lists, filtered for the build with the target's

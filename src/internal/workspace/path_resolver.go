@@ -11,19 +11,14 @@ import (
 // PathResolver handles source file and include directory resolution
 type PathResolver struct {
 	ConfigFileDir string
-	WorkspaceRoot string
 	// Outputs are the outputs of the tasks generated so far, which source patterns match too
 	// (generated sources), and the output directories, where only they count
 	Outputs *DeclaredOutputs
 }
 
 // NewPathResolver creates a new PathResolver
-func NewPathResolver(configFileDir, workspaceRoot string, outputs *DeclaredOutputs) *PathResolver {
-	return &PathResolver{
-		ConfigFileDir: configFileDir,
-		WorkspaceRoot: workspaceRoot,
-		Outputs:       outputs,
-	}
+func NewPathResolver(configFileDir string, outputs *DeclaredOutputs) *PathResolver {
+	return &PathResolver{ConfigFileDir: configFileDir, Outputs: outputs}
 }
 
 // ResolveSources expands a target's source patterns, in order, to absolute files. A pattern that

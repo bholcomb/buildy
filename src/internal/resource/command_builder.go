@@ -13,20 +13,15 @@ import (
 
 // CommandBuilder builds commands using tool-based approach
 type CommandBuilder struct {
-	toolchain   *ToolchainConfig
-	toolMatcher *ToolMatcher
-	platform    string
-	configType  string
+	toolchain  *ToolchainConfig
+	platform   string
+	configType string
 }
 
-// NewCommandBuilder creates a new CommandBuilder
-func NewCommandBuilder(toolchain *ToolchainConfig, toolMatcher *ToolMatcher, platform, configType string) *CommandBuilder {
-	return &CommandBuilder{
-		toolchain:   toolchain,
-		toolMatcher: toolMatcher,
-		platform:    platform,
-		configType:  configType,
-	}
+// NewCommandBuilder creates a CommandBuilder for a toolchain's tools, for a platform and
+// configuration.
+func NewCommandBuilder(toolchain *ToolchainConfig, platform, configType string) *CommandBuilder {
+	return &CommandBuilder{toolchain: toolchain, platform: platform, configType: configType}
 }
 
 // Dependency file formats a compile tool can write (see supports.dependencies).

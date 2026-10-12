@@ -32,7 +32,7 @@ func TestBuildCommandGivesArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := NewCommandBuilder(gcc, nil, "linux", "debug")
+	cb := NewCommandBuilder(gcc, "linux", "debug")
 	cmd, depFile, _, err := cb.BuildCommand(tool, "/my ws/main.cpp", "/my ws/out/main.o",
 		[]string{`MSG="hello world"`}, []string{"/my ws/inc dir"}, []string{"-Wall"},
 		map[string]any{"std": "c++17", "is_shared_library": true})
@@ -75,7 +75,7 @@ func TestBuildCommandWordsAndSeparateFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := NewCommandBuilder(msvc, nil, "windows", "release")
+	cb := NewCommandBuilder(msvc, "windows", "release")
 	cmd, _, _, err := cb.BuildCommand(tool, `C:\my ws\main.cpp`, `C:\my ws\out\main.obj`, nil, nil, nil, map[string]any{"std": "c++17"})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestBuildCommandWordsAndSeparateFlags(t *testing.T) {
 			exe = l
 		}
 	}
-	cmd, _, err = NewCommandBuilder(clang, nil, "macos", "debug").BuildLinkCommand(exe, []string{"/a.o"}, "/app", nil, nil, []string{"Cocoa", "IOKit"}, nil)
+	cmd, _, err = NewCommandBuilder(clang, "macos", "debug").BuildLinkCommand(exe, []string{"/a.o"}, "/app", nil, nil, []string{"Cocoa", "IOKit"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestBuildCommandShellTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool, _ := tc.ToolFor("a.x", "compile")
-	cmd, _, _, err := NewCommandBuilder(tc, nil, "linux", "debug").BuildCommand(tool, "/my ws/it's.x", "/out/a.o", nil, nil, []string{"-v"}, nil)
+	cmd, _, _, err := NewCommandBuilder(tc, "linux", "debug").BuildCommand(tool, "/my ws/it's.x", "/out/a.o", nil, nil, []string{"-v"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestToolResponseFile(t *testing.T) {
 		}
 	}
 	tool, _ := gcc.ToolFor("a.c", "compile")
-	cmd, _, _, err := NewCommandBuilder(gcc, nil, "linux", "debug").BuildCommand(tool, "/a.c", "/a.o", nil, nil, nil, map[string]any{"std": "c11"})
+	cmd, _, _, err := NewCommandBuilder(gcc, "linux", "debug").BuildCommand(tool, "/a.c", "/a.o", nil, nil, nil, map[string]any{"std": "c11"})
 	if err != nil || cmd.ResponseFile != "gnu" {
 		t.Errorf("command %+v, %v: no response file syntax", cmd, err)
 	}
@@ -203,7 +203,7 @@ func TestMacOSLinksTakeFrameworks(t *testing.T) {
 			if link.Supports.OutputType == "static_library" {
 				continue
 			}
-			cmd, _, err := NewCommandBuilder(tc, nil, "macos", "release").BuildLinkCommand(link, []string{"/a.o"}, "/out", []string{"/opt/lib"}, []string{"glfw3"}, []string{"Cocoa", "IOKit"}, nil)
+			cmd, _, err := NewCommandBuilder(tc, "macos", "release").BuildLinkCommand(link, []string{"/a.o"}, "/out", []string{"/opt/lib"}, []string{"glfw3"}, []string{"Cocoa", "IOKit"}, nil)
 			if err != nil {
 				t.Fatalf("%s %s: %v", name, link.Name, err)
 			}

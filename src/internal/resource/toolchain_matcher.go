@@ -15,7 +15,7 @@ type ToolMatcher struct {
 }
 
 // NewToolMatcher creates a new ToolMatcher
-func NewToolMatcher(toolchain *ToolchainConfig) (*ToolMatcher, error) {
+func NewToolMatcher(toolchain *ToolchainConfig) *ToolMatcher {
 	tm := &ToolMatcher{
 		toolchain: toolchain,
 		toolMap:   make(map[string]*Tool),
@@ -29,7 +29,7 @@ func NewToolMatcher(toolchain *ToolchainConfig) (*ToolMatcher, error) {
 			tm.toolMap[tool.Action+":"+ext] = tool
 		}
 	}
-	return tm, nil
+	return tm
 }
 
 // FindTool finds a tool that matches the action and file extension

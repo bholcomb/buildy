@@ -8,8 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -321,7 +323,7 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 		}
 	}
 
-	archiveHash, err := fm.computeFileHash(downloadPath)
+	archiveHash, err := util.HashFile(downloadPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to hash %s: %w", downloadPath, err)
 	}
@@ -522,7 +524,7 @@ func (fm *FetchManager) saveDownloadMetadata(metadataPath, url, checksum, downlo
 	}
 
 	// Compute SHA256 hash of the downloaded file
-	sha256Hash, err := fm.computeFileHash(downloadPath)
+	sha256Hash, err := util.HashFile(downloadPath)
 	if err != nil {
 		return fmt.Errorf("failed to compute file hash: %w", err)
 	}
@@ -544,31 +546,18 @@ func (fm *FetchManager) saveDownloadMetadata(metadataPath, url, checksum, downlo
 	return os.WriteFile(metadataPath, data, 0644)
 }
 
-// computeFileHash computes the SHA256 hash of a file
-func (fm *FetchManager) computeFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 // verifyAgainstMetadata verifies a cached archive against its stored metadata
 // This is used when no config checksum is provided but we have metadata from a previous download
 func (fm *FetchManager) verifyAgainstMetadata(archivePath, metadataPath string) error {
 	// Load metadata
 	metadata, err := fm.loadDownloadMetadata(metadataPath)
-	if err != nil {
-		// No metadata file - can't verify, but this is okay for legacy cached files
+	if errors.Is(err, fs.ErrNotExist) {
+		// An archive downloaded before buildy kept metadata: nothing to verify against
 		util.LogDebug("No metadata file for cached archive, skipping verification")
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the metadata of the cached archive %s: %w", archivePath, err)
 	}
 
 	// Verify file size first (quick check)
@@ -586,7 +575,7 @@ func (fm *FetchManager) verifyAgainstMetadata(archivePath, metadataPath string) 
 		return nil
 	}
 
-	actualHash, err := fm.computeFileHash(archivePath)
+	actualHash, err := util.HashFile(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to compute hash: %w", err)
 	}
