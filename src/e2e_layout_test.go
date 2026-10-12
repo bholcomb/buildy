@@ -144,9 +144,11 @@ func TestE2EStagingSymlinksFollowTheHost(t *testing.T) {
 		t.Skip("skipping: a Windows host copies")
 	}
 	dir := fixture(t, "symlink_staging")
+	// x86_64, whatever the host's: buildy has toolchains for Linux and Windows on it (none for
+	// either on arm64), and the build compiles nothing
 	for _, platform := range []string{"linux", "windows"} {
-		mustBuildy(t, dir, "--platform", platform)
-		staged := filepath.Join(dir, "build", platform+"-"+detectArchitecture()+"-debug", "staging", "docs", "readme.txt")
+		mustBuildy(t, dir, "--platform", platform, "--architecture", "x86_64")
+		staged := filepath.Join(dir, "build", platform+"-x86_64-debug", "staging", "docs", "readme.txt")
 		info, err := os.Lstat(staged)
 		if err != nil {
 			t.Fatal(err)

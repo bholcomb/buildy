@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,28 @@ func needCpp(t *testing.T) {
 		t.Skip("skipping: the C++ end-to-end cases run on Linux and macOS")
 	}
 	needTools(t, "g++")
+}
+
+// sharedLibrary is the file name of the shared library name on the host (the C and C++ cases
+// run on Linux and macOS).
+func sharedLibrary(name string) string {
+	if runtime.GOOS == "darwin" {
+		return "lib" + name + ".dylib"
+	}
+	return "lib" + name + ".so"
+}
+
+// archiveMembers returns the members of a static library (ar t), without the symbol table that
+// macOS's ar lists as one (__.SYMDEF, __.SYMDEF SORTED) and GNU ar doesn't.
+func archiveMembers(t *testing.T, lib string) []string {
+	t.Helper()
+	var members []string
+	for _, member := range strings.Split(run(t, "ar", "t", lib), "\n") {
+		if member = strings.TrimSpace(member); member != "" && !strings.HasPrefix(member, "__.SYMDEF") {
+			members = append(members, member)
+		}
+	}
+	return members
 }
 
 // fixture copies testdata/e2e/<name> to a temporary directory and returns the copy.
@@ -177,7 +200,7 @@ func TestE2EStaleArchive(t *testing.T) {
 	lib := filepath.Join(outDir(dir, "debug"), "lib", "libcalc.a")
 
 	mustBuildy(t, dir)
-	if members := run(t, "ar", "t", lib); !strings.Contains(members, "sub.cpp.o") {
+	if members := archiveMembers(t, lib); !slices.Contains(members, "sub.cpp.o") {
 		t.Fatalf("libcalc.a members %q lack sub.cpp.o", members)
 	}
 
@@ -185,7 +208,7 @@ func TestE2EStaleArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustBuildy(t, dir)
-	if members := run(t, "ar", "t", lib); strings.Contains(members, "sub.cpp.o") {
+	if members := archiveMembers(t, lib); slices.Contains(members, "sub.cpp.o") {
 		t.Errorf("libcalc.a still holds sub.cpp.o after sub.cpp was removed: %q", members)
 	}
 }
@@ -520,7 +543,7 @@ func TestE2EOptionalSources(t *testing.T) {
 	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "7" {
 		t.Errorf("app printed %q, want 7", got)
 	}
-	if members := run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libplugins.a")); members != "p.c.o" {
+	if members := archiveMembers(t, filepath.Join(outDir(dir, "debug"), "lib", "libplugins.a")); !slices.Equal(members, []string{"p.c.o"}) {
 		t.Errorf("libplugins.a holds %q, want p.c.o", members)
 	}
 }
@@ -662,7 +685,7 @@ func TestE2ESpacedPaths(t *testing.T) {
 	}
 
 	// The archives hold the files the links point to, under the staging area's paths.
-	want := "bin/ bin/app bin/libgreet.so data dir/ data dir/notes.txt"
+	want := "bin/ bin/app bin/" + sharedLibrary("greet") + " data dir/ data dir/notes.txt"
 	if got := strings.Join(tarNames(t, filepath.Join(out, "dist dir", "spaced pkg.tar.gz")), " "); got != want {
 		t.Errorf("tar.gz entries %q, want %q", got, want)
 	}
@@ -768,7 +791,7 @@ func TestE2EManyObjects(t *testing.T) {
 			t.Errorf("%s printed %q, want 1501", app, got)
 		}
 	}
-	if members := strings.Fields(run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libmany.a"))); len(members) != 1500 {
+	if members := archiveMembers(t, filepath.Join(outDir(dir, "debug"), "lib", "libmany.a")); len(members) != 1500 {
 		t.Errorf("libmany.a has %d members, want 1500", len(members))
 	}
 	if rsp, _ := filepath.Glob(filepath.Join(dir, ".buildy_cache", "response_files", "*")); len(rsp) != 0 {
