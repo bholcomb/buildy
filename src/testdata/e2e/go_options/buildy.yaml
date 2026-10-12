@@ -1,0 +1,33 @@
+project:
+  name: go_options
+  version: "1.2.3"
+
+environment:
+  compile:
+    c_standard: c11
+
+targets:
+  executables:
+    - name: app
+      language: go
+      path: cmd/app
+      build_tags: [fancy, {release: [extra]}]
+      ldflags:
+        - "-X main.version=${project_version}"
+        - "-X 'main.msg=hello world'"
+        - release: ["-X main.mode=release"]
+      gcflags: ["-N", "-l"]
+      buildmode: pie
+    # A C program linking the Go archive, and including the header go writes beside it (the
+    # test builds carc first: depends_on orders only the link, not the compile)
+    - name: cmain
+      language: c
+      sources: [cmain/main.c]
+      include_dirs: ["${out_dir}/lib"]
+      libs: [carc, pthread]
+
+  static_libraries:
+    - {name: carc, language: go, path: clib, build_tags: [tagged]}
+
+  shared_libraries:
+    - {name: cshared, language: go, path: clib}

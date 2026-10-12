@@ -1,0 +1,10 @@
+project:
+  name: rust_options
+
+targets:
+  executables:
+    - {name: app, language: rust, path: app, features: [fancy, {release: [extra]}]}
+    - {name: tool, language: rust, path: app, bin: other}
+
+  shared_libraries:
+    - {name: plugin, language: rust, path: plugin, features: [double]}
