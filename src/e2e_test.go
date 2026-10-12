@@ -177,16 +177,16 @@ func TestE2EStaleArchive(t *testing.T) {
 	lib := filepath.Join(outDir(dir, "debug"), "lib", "libcalc.a")
 
 	mustBuildy(t, dir)
-	if members := run(t, "ar", "t", lib); !strings.Contains(members, "sub.o") {
-		t.Fatalf("libcalc.a members %q lack sub.o", members)
+	if members := run(t, "ar", "t", lib); !strings.Contains(members, "sub.cpp.o") {
+		t.Fatalf("libcalc.a members %q lack sub.cpp.o", members)
 	}
 
 	if err := os.Remove(filepath.Join(dir, "lib", "sub.cpp")); err != nil {
 		t.Fatal(err)
 	}
 	mustBuildy(t, dir)
-	if members := run(t, "ar", "t", lib); strings.Contains(members, "sub.o") {
-		t.Errorf("libcalc.a still holds sub.o after sub.cpp was removed: %q", members)
+	if members := run(t, "ar", "t", lib); strings.Contains(members, "sub.cpp.o") {
+		t.Errorf("libcalc.a still holds sub.cpp.o after sub.cpp was removed: %q", members)
 	}
 }
 
@@ -270,7 +270,7 @@ func TestE2ECwdIndependent(t *testing.T) {
 			t.Errorf("buildy .. created sub/%s", stray)
 		}
 	}
-	want := filepath.Join("build", fmt.Sprintf("%s-%s-debug", detectPlatform(), detectArchitecture()), "obj", ".", "app", "src", "main.o")
+	want := filepath.Join("build", fmt.Sprintf("%s-%s-debug", detectPlatform(), detectArchitecture()), "obj", ".", "app", "src", "main.cpp.o")
 	if !strings.Contains(strings.Join(fromRoot, "\n"), filepath.Clean(want)) {
 		t.Errorf("no object at %s:\n  %s", filepath.Clean(want), strings.Join(fromRoot, "\n  "))
 	}
@@ -519,8 +519,8 @@ func TestE2EOptionalSources(t *testing.T) {
 	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "7" {
 		t.Errorf("app printed %q, want 7", got)
 	}
-	if members := run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libplugins.a")); members != "p.o" {
-		t.Errorf("libplugins.a holds %q, want p.o", members)
+	if members := run(t, "ar", "t", filepath.Join(outDir(dir, "debug"), "lib", "libplugins.a")); members != "p.c.o" {
+		t.Errorf("libplugins.a holds %q, want p.c.o", members)
 	}
 }
 

@@ -21,7 +21,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}"
+        output: "${output_dir}/obj/${module}/${target}/${source_rel}${source_ext}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${config.defines}"
@@ -60,7 +60,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}"
+        output: "${output_dir}/obj/${module}/${target}/${source_rel}${source_ext}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${config.defines}"
@@ -98,7 +98,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}"
+        output: "${output_dir}/obj/${module}/${target}/${source_rel}${source_ext}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${config.defines}"

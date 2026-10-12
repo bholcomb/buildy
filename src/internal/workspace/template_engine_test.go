@@ -3,6 +3,7 @@ package workspace
 import (
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -110,7 +111,7 @@ targets:
 		t.Errorf("object paths depend on the current directory:\n  %v\n  %v", fromRoot, fromSub)
 	}
 	obj := filepath.Join(root, "build", "linux-x86_64-debug", "obj")
-	want := filepath.Join(obj, "core", "app", "_up", "shared", "util.o")
+	want := filepath.Join(obj, "core", "app", "_up", "shared", "util.cpp.o")
 	found := false
 	for _, out := range fromRoot {
 		if !strings.HasPrefix(out, obj+string(filepath.Separator)) {
@@ -139,8 +140,32 @@ func TestObjectPathsOfModulesOutsideTheRoot(t *testing.T) {
 	if len(compiles) != 1 {
 		t.Fatalf("got %d compiles", len(compiles))
 	}
-	want := filepath.Join(root, "build", "linux-x86_64-debug", "obj", "_up", "lib", "calc", "add.o")
+	want := filepath.Join(root, "build", "linux-x86_64-debug", "obj", "_up", "lib", "calc", "add.cpp.o")
 	if got := compiles[0].Outputs[0]; got != want {
 		t.Errorf("object at %s, want %s", got, want)
+	}
+}
+
+// Objects keep their source's extension, as CMake's do: a.c and a.cpp in one target are two
+// objects (they collided at obj/.../a.o, which graph validation rejected).
+func TestObjectsKeepTheSourceExtension(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": "project: {name: ws}\n" + cppEnvironment + "    c_standard: c11\n" +
+			"targets:\n  executables:\n    - {name: app, language: cpp, sources: [a.c, a.cpp]}\n",
+		"a.c":   "int c(void) { return 1; }",
+		"a.cpp": "int main() {}",
+	})
+	tasks := mustGenerateTasks(t, root)
+	if err := graphOf(t, tasks...).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	var objects []string
+	for _, task := range tasksOfType(tasks, "compile") {
+		objects = append(objects, filepath.Base(task.Outputs[0])+" "+filepath.Base(task.DepFile.Path))
+	}
+	sort.Strings(objects)
+	if strings.Join(objects, ", ") != "a.c.o a.c.d, a.cpp.o a.cpp.d" {
+		t.Errorf("objects and dependency files: %v", objects)
 	}
 }

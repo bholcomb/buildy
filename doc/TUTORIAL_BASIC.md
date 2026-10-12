@@ -233,10 +233,10 @@ build/
     └── obj/
         ├── calculator/
         │   └── appsrc/
-        │       └── main.o
+        │       └── main.cpp.o
         └── mathcore/
             └── libsrc/
-                └── math.o
+                └── math.cpp.o
 ```
 
 The output directory structure is:

@@ -2112,7 +2112,7 @@ templates:
       - name: compile
         action: compile
         for_each: source
-        output: "${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}"
+        output: "${output_dir}/obj/${module}/${target}/${source_rel}${source_ext}${tool.output_ext}"
         inputs: ["${source}"]
         tool_params:
           defines: "${config.defines}"
@@ -2204,9 +2204,10 @@ After generation, before anything runs (under `--dry-run` too), buildy checks th
 fails with an error naming the tasks, modules and targets involved if:
 
 1. two tasks declare the same output
-   (`output …/obj/app/one/main.o is produced by both compile_one_… (module ., target one) and …`),
-2. a task depends on a task that doesn't exist, or
-3. a `${…}` is left unresolved in a command, input or output path (an escaped `\${…}` is kept).
+   (`output …/gen/version.h is produced by both generate_version_… (module ., target one) and …`),
+2. a task depends on a task that doesn't exist,
+3. a `${…}` is left unresolved in a command, input or output path (an escaped `\${…}` is kept), or
+4. a task lacks its platform, architecture or configuration (an internal error).
 
 A task that reads another task's output is made to depend on it, so the order follows from the
 data. There are no setup tasks: the executor creates every output's directory.
@@ -2215,7 +2216,9 @@ data. There are no setup tasks: the executor creates every output's directory.
 
 Every output path is a function of the output directory (which already contains
 `<platform>-<arch>-<config>`), the module, the target, and the source's path relative to the
-module: object files go to `${output_dir}/obj/${module}/${target}/${source_rel}${tool.output_ext}`.
+module: object files go to `${output_dir}/obj/${module}/${target}/${source_rel}${source_ext}${tool.output_ext}`
+(`obj/core/app/src/window.cpp.o`). The source's extension stays in the name, as in CMake, so `a.c`
+and `a.cpp` in one target are two objects.
 A `..` in a module path (a module outside the workspace root) becomes `_up`, as in `source_rel`, so
 objects stay under `obj/`.
 Two targets compiling the same source get separate objects, and nothing depends on the directory
@@ -2233,6 +2236,7 @@ Templates can reference variables from multiple sources:
 | `${target}` | Current target name |
 | `${source}` | Current source file (in `for_each` loops), an absolute path |
 | `${source_rel}` | Source path relative to the module directory, without extension (`src/widgets/window`); each `..` becomes `_up` |
+| `${source_ext}` | The source's extension (`.cpp`) |
 | `${tool.output_ext}` | Tool's output extension (e.g., `.o`) |
 | `${tool.output_pattern}` | Tool's resolved output pattern (e.g., `libfoo.so`) |
 | `${output_prefix}` | Library filename prefix (from target's `output_prefix` or platform default) |

@@ -203,7 +203,9 @@ the module).** The output dir already contains `platform-arch-config`.
   path relative to the module directory, computed from absolute paths with the extension removed.
   It no longer depends on the invocation directory (S5). A source outside the module dir has
   each `..` replaced by `_up`. Anything stranger is caught by validation rule 1 rather than by
-  ever-cleverer naming.
+  ever-cleverer naming. *Since [phase 6](structure.md#object-names) the built-in templates keep
+  the extension, `${source_rel}${source_ext}${ext}` (`a.cpp.o`): `a.c` and `a.cpp` in one target
+  no longer collide.*
 - Sources and every other task path become absolute (`PathResolver` stops converting to
   cwd-relative), and the executor runs in the workspace root. That also makes Docker
   same-path mounting work (section 5).

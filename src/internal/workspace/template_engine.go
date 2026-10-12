@@ -355,7 +355,8 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 
 		// source_rel is the source's path relative to the module, without its extension:
 		// "src/widgets/window.cpp" in module dir M gives "src/widgets/window", whatever the
-		// directory buildy was started from.
+		// directory buildy was started from; source_ext is its extension, ".cpp". Objects keep
+		// it (window.cpp.o), as CMake's do: a.c and a.cpp in one target are two objects.
 		sourceRel, err := computeSourceRel(source, moduleDir)
 		if err != nil {
 			return nil, err
@@ -369,6 +370,7 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 		// Add source-specific variables
 		sc.VarEnv.SetVariable("source", source, "for_each")
 		sc.VarEnv.SetVariable("source_rel", sourceRel, "for_each")
+		sc.VarEnv.SetVariable("source_ext", filepath.Ext(source), "for_each")
 		sc.Context["source"] = source
 		sc.Context["source_rel"] = sourceRel
 
