@@ -40,6 +40,14 @@ func gitCommit(t *testing.T, dir, message string) string {
 	return gitIn(t, dir, "rev-parse", "HEAD")
 }
 
+// writeDepUser writes a workspace in dir whose one target, a C++ program, uses the dependency
+// dep: a dependency is fetched and built only when a target uses it.
+func writeDepUser(t *testing.T, dir, dep string) {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), fmt.Sprintf("project:\n  name: user\ntargets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp], deps: [%s]}\n", dep))
+	writeFile(t, filepath.Join(dir, "main.cpp"), "int main() {}\n")
+}
+
 // fileURL is a file:// URL of a local path.
 func fileURL(path string) string {
 	return "file://" + filepath.ToSlash(path)
@@ -244,11 +252,12 @@ func TestE2EInSourceDependency(t *testing.T) {
 		t.Skip("skipping: the case uses make and sh")
 	}
 	needTools(t, "git", "make")
+	needCpp(t)
 	repo := filepath.Join(t.TempDir(), "dep")
 	writeFile(t, filepath.Join(repo, "Makefile"), "all:\n\techo built $(CFG) >> log\nclean:\n\techo cleaned >> log\n")
 	gitRepo(t, repo)
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: insource\n")
+	writeDepUser(t, dir, "dep")
 	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
 		fmt.Sprintf("dep:\n  git: %q\n  build: {system: make, args: [\"CFG=${config}\"]}\n", fileURL(repo)))
 	mustBuildy(t, dir)
@@ -260,5 +269,38 @@ func TestE2EInSourceDependency(t *testing.T) {
 	}
 	if got, want := strings.Fields(strings.ReplaceAll(string(data), "\n", " ")), []string{"built", "debug", "cleaned", "built", "release"}; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("the dependency's make ran %q, want %q", got, want)
+	}
+}
+
+// A dependency no target uses is not fetched: a build succeeds although one can't be.
+func TestE2EUnusedDependencyIsNotFetched(t *testing.T) {
+	needCpp(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), `project:
+  name: unused
+targets:
+  executables:
+    - name: app
+      language: cpp
+      sources: [main.cpp]
+      deps: [greeting]
+`)
+	writeFile(t, filepath.Join(dir, "main.cpp"), "#include <cstdio>\nint main() { std::puts(GREETING); }\n")
+	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"), `greeting:
+  defines: ['GREETING="hello"']
+unfetchable:
+  git: "`+fileURL(filepath.Join(dir, "no-such-repo"))+`"
+  ref: main
+  build: {system: cmake}
+`)
+	out := mustBuildy(t, dir)
+	if strings.Contains(out, "unfetchable") {
+		t.Errorf("the build mentions the unused dependency:\n%s", out)
+	}
+	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "app")); got != "hello" {
+		t.Errorf("app printed %q", got)
+	}
+	if exists(filepath.Join(dir, ".buildy_cache", "deps", "unfetchable")) {
+		t.Error("the unused dependency was fetched")
 	}
 }

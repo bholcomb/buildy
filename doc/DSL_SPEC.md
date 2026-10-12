@@ -2805,17 +2805,18 @@ ln -s buildy_config/compile_commands.json compile_commands.json
 ```
 1. Load: parse and validate the root buildy.yaml and every module the build context
    (--platform, --architecture, --config) selects, recursively
-2. Prepare: resolve dependencies
+2. Generate: the tasks of every module, all targets first, then copies, staging and install.
+   The first target that uses a dependency resolves it:
    a. System: pkg-config or explicit paths
    b. Fetch: download or clone what isn't fetched yet; build what isn't built yet for the
       configuration being built (each build's record says), and install it
-   (--dry-run plans this step: it reports what it would fetch and build, and uses what is on disk)
-3. Generate: the tasks of every module, all targets first, then copies, staging and install
-4. Validate: one producer per output, every dependency a task, no unresolved ${...};
+   (--dry-run plans this step: it reports what it would fetch and build, and uses what is on disk).
+   A dependency no target uses is not resolved.
+3. Validate: one producer per output, every dependency a task, no unresolved ${...};
    add the edges from producers to the tasks that read their outputs
-5. Select: with --target, the named targets' final tasks and everything they depend on
-6. Execute in parallel stages with content-addressable caching (--dry-run prints the stages)
-7. Generate build report (JSON + terminal summary)
+4. Select: with --target, the named targets' final tasks and everything they depend on
+5. Execute in parallel stages with content-addressable caching (--dry-run prints the stages)
+6. Generate build report (JSON + terminal summary)
 ```
 
 ## 17. Build Reports

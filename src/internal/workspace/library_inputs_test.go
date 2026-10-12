@@ -102,9 +102,7 @@ func generateWithDependencies(t *testing.T, root string) []*BuildTask {
 	if err := deps.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := deps.ResolveAll(context.Background(), false); err != nil {
-		t.Fatal(err)
-	}
+	deps.Prepare(context.Background(), false)
 	toolchains, err := resource.NewToolchainManagerMulti(nil)
 	if err != nil {
 		t.Fatal(err)

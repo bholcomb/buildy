@@ -8,9 +8,10 @@ run), 5.5 (pkg-config flags dropped) and 6.2 (dependency builds outside any reco
 
 ## The phase
 
-Dependencies stay a phase **before** task generation (decision 6 of the
-[task graph contract](task-graph-contract.md)): they are not tasks. For each dependency, in name
-order, buildy:
+Dependencies are not tasks (decision 6 of the [task graph contract](task-graph-contract.md)).
+Task generation resolves each dependency the first time a target's `deps:` names it, before it
+generates that target's tasks; a dependency no target of the build uses is never fetched, built or
+looked up (in 0.2.0 and before, every defined dependency was, in name order). To resolve one, buildy:
 
 1. **Fetches** it, if it has `git:` or `url:`, into `.buildy_cache/deps/<name>/` (`${dep_dir}`);
 2. **builds** it, if it has a `build.system`, for the configuration being built only;

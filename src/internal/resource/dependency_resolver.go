@@ -8,7 +8,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -67,6 +66,7 @@ type DependencyResolver struct {
 	configs            map[string]*DependencyConfig
 	tools              *util.ToolIdentities // What each build phase runs, for build markers
 	plan               bool                 // Dry run: report fetches and builds instead of doing them
+	ctx                context.Context      // Stops fetches and builds (an interrupt); set by Prepare
 
 	// Timeout is how long a dependency build phase may run (0: no limit)
 	Timeout time.Duration
@@ -184,22 +184,14 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// ResolveAll resolves all loaded dependencies: fetches and builds them. With plan (--dry-run), it
-// fetches and builds nothing, reports what it would do, and resolves what is already on disk.
-// ctx stops the fetches and builds (an interrupt).
-func (dr *DependencyResolver) ResolveAll(ctx context.Context, plan bool) error {
+// Prepare readies the resolver for a build. Nothing is fetched or built yet: ResolveDependencies
+// resolves a dependency (fetches it, builds it, runs pkg-config) the first time a target uses it,
+// so a dependency no target of the build uses is never fetched. With plan (--dry-run), it fetches
+// and builds nothing, reports what it would do, and resolves what is already on disk. ctx stops
+// the fetches and builds (an interrupt).
+func (dr *DependencyResolver) Prepare(ctx context.Context, plan bool) {
+	dr.ctx = ctx
 	dr.plan = plan
-	names := make([]string, 0, len(dr.configs))
-	for name := range dr.configs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := dr.resolveDependency(ctx, name, dr.configs[name]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // resolveDependency resolves a single dependency
@@ -643,8 +635,8 @@ func DockerMounts(workspaceRoot, cacheDir string) []string {
 	return mounts
 }
 
-// ResolveDependencies resolves a list of dependency names and returns merged settings
-// This is used by TaskGenerator to get the combined include_dirs, libs, etc.
+// ResolveDependencies returns the merged settings of dependencies (their include_dirs, libs, ...),
+// for a target that uses them. Each is resolved the first time a target uses it (Prepare).
 func (dr *DependencyResolver) ResolveDependencies(depNames []string) (*ResolvedDependency, error) {
 	merged := &ResolvedDependency{
 		Name:        "merged",
@@ -659,7 +651,17 @@ func (dr *DependencyResolver) ResolveDependencies(depNames []string) (*ResolvedD
 	for _, name := range depNames {
 		dep := dr.resolved[name]
 		if dep == nil {
-			return nil, fmt.Errorf("dependency '%s' not found", name)
+			config := dr.configs[name]
+			if config == nil {
+				return nil, fmt.Errorf("dependency '%s' not found", name)
+			}
+			if dr.ctx == nil {
+				return nil, fmt.Errorf("internal error: dependency '%s' is used before the resolver was prepared", name)
+			}
+			if err := dr.resolveDependency(dr.ctx, name, config); err != nil {
+				return nil, err
+			}
+			dep = dr.resolved[name]
 		}
 
 		merged.IncludeDirs = append(merged.IncludeDirs, dep.IncludeDirs...)

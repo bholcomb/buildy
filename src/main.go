@@ -342,15 +342,13 @@ func main() {
 			util.LogFatal("Failed to load dependencies: %v", err)
 		}
 
-		// Prepare: fetch and build the dependencies. A dry run plans this instead: it fetches and
-		// builds nothing, and uses what is already on disk.
+		// Task generation fetches and builds each dependency the first time a target uses it. A
+		// dry run plans this instead: it fetches and builds nothing, and uses what is already on
+		// disk.
 		depResolver.Timeout = *timeout
 		depResolver.Force = *force
 		depResolver.Update = *updateDeps
-		if err := depResolver.ResolveAll(ctx, *dryRun); err != nil {
-			exitIfInterrupted(ctx)
-			util.LogFatal("Failed to resolve dependencies: %v", err)
-		}
+		depResolver.Prepare(ctx, *dryRun)
 	}
 
 	// Create workspace-aware config parser
@@ -381,7 +379,7 @@ func main() {
 	}
 
 	// Generate, validate, select (--target) and execute (or, with --dry-run, print the plan).
-	// The dependencies (cmake, make, meson, buildy) were built by ResolveAll.
+	// Generation fetches and builds the dependencies the targets use (cmake, make, meson, buildy).
 	result, err := builder.BuildWorkspace(
 		ctx,
 		ws,

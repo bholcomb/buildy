@@ -1132,7 +1132,7 @@ func TestE2EInterruptAFetch(t *testing.T) {
 	defer server.Close()
 	defer close(stop)
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: fetch\n")
+	writeDepUser(t, dir, "slowdep")
 	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
 		fmt.Sprintf("slowdep:\n  url: %q\n", server.URL+"/slowdep-1.0.tar.gz"))
 	code, out := interrupt(t, dir, func(out string) bool { return strings.Contains(out, "Fetching URL") })
@@ -1151,7 +1151,7 @@ func TestE2EInterruptADependencyBuild(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "Makefile"), "all:\n\tsleep 30 & echo $$! > \"$(CURDIR)/sleep.pid\"; wait\n")
 	gitRepo(t, repo)
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: depbuild\n")
+	writeDepUser(t, dir, "slowdep")
 	writeFile(t, filepath.Join(dir, "buildy_config", "dependencies.yaml"),
 		fmt.Sprintf("slowdep:\n  git: %q\n  build: {system: make}\n", repo))
 	pidFile := filepath.Join(dir, ".buildy_cache", "deps", "slowdep", "sleep.pid")

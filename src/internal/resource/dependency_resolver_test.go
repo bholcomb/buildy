@@ -121,7 +121,8 @@ ok:
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := dr.ResolveAll(context.Background(), false); err != nil {
+	dr.Prepare(context.Background(), false)
+	if _, err := dr.ResolveDependencies([]string{"ok"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"/x/linux-x86_64-release", "/y/ok-1.2", root + "/z", "/root-var"}
@@ -136,7 +137,8 @@ ok:
 	if err := dr.LoadDependencies(root, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := dr.ResolveAll(context.Background(), false); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
+	dr.Prepare(context.Background(), false)
+	if _, err := dr.ResolveDependencies([]string{"bad"}); err == nil || !strings.Contains(err.Error(), "dependency 'bad'") || !strings.Contains(err.Error(), "architecture") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -194,5 +196,46 @@ Libs: -L${prefix}/lib -ldemo -Wl,--as-needed -pthread -framework Cocoa /opt/libe
 	}
 	if !slices.Equal(dep.Frameworks, []string{"Cocoa"}) {
 		t.Errorf("frameworks = %q", dep.Frameworks)
+	}
+}
+
+// A dependency is resolved the first time a target uses it: one no target uses is never fetched,
+// built or looked up with pkg-config, and its problems don't stop the build.
+func TestDependenciesResolveWhenUsed(t *testing.T) {
+	root := t.TempDir()
+	writeDepFiles(t, root, map[string]string{
+		"buildy_config/dependencies.yaml": `
+used:
+  defines: ["USED=1"]
+unfetchable:
+  git: "` + filepath.ToSlash(filepath.Join(root, "no-such-repo")) + `"
+  ref: main
+unknown_package:
+  pkg_config: buildy-no-such-package
+`,
+	})
+	dr := newResolver(root)
+	if err := dr.LoadDependencies(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	dr.Prepare(context.Background(), false)
+	merged, err := dr.ResolveDependencies([]string{"used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(merged.Defines, " ") != "USED=1" {
+		t.Errorf("defines = %v", merged.Defines)
+	}
+	if len(dr.resolved) != 1 {
+		t.Errorf("resolved %v, want only 'used'", dr.resolved)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".buildy_cache", "deps", "unfetchable")); !os.IsNotExist(err) {
+		t.Errorf("the unused dependency was fetched: %v", err)
+	}
+	if _, err := dr.ResolveDependencies([]string{"unfetchable"}); err == nil {
+		t.Error("the unfetchable dependency resolved when used")
+	}
+	if _, err := dr.ResolveDependencies([]string{"undefined"}); err == nil || !strings.Contains(err.Error(), "'undefined' not found") {
+		t.Errorf("an undefined dependency: %v", err)
 	}
 }

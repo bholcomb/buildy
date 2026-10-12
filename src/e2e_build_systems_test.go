@@ -275,6 +275,7 @@ func TestE2EUserBuildSystemDocker(t *testing.T) {
 		t.Skip("skipping: set BUILDY_TEST_DOCKER=1 to run the Docker case")
 	}
 	needTools(t, "docker", "git")
+	needCpp(t)
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		t.Skip("skipping: already inside a container")
 	}
@@ -282,7 +283,7 @@ func TestE2EUserBuildSystemDocker(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "README"), "a tree\n")
 	gitRepo(t, repo)
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "buildy.yaml"), "project:\n  name: boxed\n")
+	writeDepUser(t, dir, "boxed")
 	writeFile(t, filepath.Join(dir, "buildy_config", "build_systems", "boxed.yaml"), `build_system:
   name: boxed
   phases:

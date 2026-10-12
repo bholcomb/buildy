@@ -640,6 +640,9 @@ For dependencies that need to be built:
 
 A dependency is fetched once and built once per configuration:
 
+- **Only when a target uses it.** A dependency no target of the build lists in `deps` is not
+  fetched, built or looked up. (A `--target` build still fetches what the workspace's other
+  targets use: every target's tasks are generated.)
 - **Only the configuration being built.** `buildy -c release` builds a dependency's release build
   and links it; debug is built when you build debug. The build system's output directories for
   that configuration (cmake: `${dep_install_dir}/include` and `/lib`) are added to the
