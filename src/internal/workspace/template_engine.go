@@ -207,7 +207,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
-	platform, architecture, configuration, toolchain string,
+	platform, architecture, configuration string,
 	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
 	template := bte.GetTemplate(templateName)
@@ -276,27 +276,18 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 
 		if step.ForEach != "" {
 			// Generate multiple tasks (one per source file)
-			stepTasks, err = bte.expandForEachStep(
-				step, context, itemConfig, mergedConfig, outputDir,
-				idGen, toolMatcher, commandBuilder,
-				platform, architecture, configuration, toolchain,
-				templateEnv,
-			)
+			stepTasks, err = bte.expandForEachStep(step, context, itemConfig, idGen, toolMatcher, commandBuilder, templateEnv)
 		} else if action == "build" {
 			// Generate single build task (single-step compile+link like Go)
 			stepTask, err = bte.expandBuildStep(
 				step, context, itemConfig, mergedConfig, outputDir,
-				idGen, toolMatcher, platform, architecture, configuration, toolchain,
+				idGen, toolMatcher, platform, configuration,
 				templateEnv,
 			)
 		} else {
 			// Generate single link task
-			stepTask, err = bte.expandSingleStep(
-				step, context, stepResults, itemConfig, mergedConfig,
-				outputDir, idGen, toolMatcher, commandBuilder,
-				platform, architecture, configuration, toolchain,
-				templateEnv,
-			)
+			stepTask, err = bte.expandSingleStep(step, context, stepResults, itemConfig, mergedConfig,
+				outputDir, idGen, toolMatcher, commandBuilder, templateEnv)
 		}
 
 		if err != nil {
@@ -338,12 +329,9 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 	step *config.Step,
 	context map[string]any,
 	itemConfig map[string]any,
-	mergedConfig map[string]any,
-	outputDir string,
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
-	platform, architecture, configuration, toolchain string,
 	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
 	tasks := []*BuildTask{}
@@ -415,25 +403,8 @@ func (bte *BuildTemplateEngine) expandForEachStep(
 			outputs = append(outputs, depFile)
 		}
 
-		// Create task
-		taskName := "unnamed"
-		if name, ok := itemConfig["name"].(string); ok {
-			taskName = name
-		}
-
-		taskID := idGen.Next(action, fmt.Sprintf("%s_%s%s", taskName, sourceRel, filepath.Ext(source)))
-		task := NewBuildTask(
-			taskID,
-			action,
-			[]TaskInput{NewTaskInput(source)},
-			outputs,
-			nil,
-			command,
-		)
-		task.Platform = platform
-		task.Architecture = architecture
-		task.Configuration = configuration
-		task.Toolchain = toolchain
+		taskID := idGen.Next(action, fmt.Sprintf("%s_%s%s", itemConfig["name"].(string), sourceRel, filepath.Ext(source)))
+		task := NewBuildTask(taskID, action, []TaskInput{NewTaskInput(source)}, outputs, nil, command)
 		if depFile != "" {
 			task.DepFile = &DepFile{Path: depFile, Format: depFormat}
 		}
@@ -455,7 +426,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
-	platform, architecture, configuration, toolchain string,
 	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
 	action, outputType := step.Action, step.OutputType
@@ -471,16 +441,7 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 			"Check that your toolchain defines a link tool for this output type", action, outputType)
 	}
 
-	// Get item name for output pattern
-	itemName := "output"
-	if name, ok := itemConfig["name"].(string); ok {
-		itemName = name
-	}
-	// Resolve output pattern using VarEnv (set name and output_prefix for resolution)
-	patternVarEnv := varEnv.CreateChild()
-	patternVarEnv.SetVariable("name", itemName, "output-pattern")
-	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
-	resolvedOutputPattern, err := resolveStrict(patternVarEnv, tool.OutputPattern, "the output pattern of tool "+tool.Name)
+	resolvedOutputPattern, err := outputPattern(tool, itemConfig, mergedConfig, toolMatcher, varEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -630,34 +591,15 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 		util.LogVerbose("Shared library will also produce import library: %s", implib)
 	}
 
-	// Create task
-	taskName := "unnamed"
-	if name, ok := itemConfig["name"].(string); ok {
-		taskName = name
-	}
-
 	taskInputs := []TaskInput{}
 	for _, inp := range filteredInputs {
 		taskInputs = append(taskInputs, NewTaskInput(inp))
 	}
 
-	taskID := idGen.Next(action, taskName)
-	task := NewBuildTask(
-		taskID,
-		action,
-		taskInputs,
-		outputs,
-		dependencies,
-		command,
-	)
+	task := NewBuildTask(idGen.Next(action, itemConfig["name"].(string)), action, taskInputs, outputs, dependencies, command)
 	// Libraries that are workspace targets are linked to their link tasks once every module is
 	// generated (resolveCrossModuleDependencies); the rest are system libraries
 	task.LinkLibs = libNames
-	task.Platform = platform
-	task.Architecture = architecture
-	task.Configuration = configuration
-	task.Toolchain = toolchain
-
 	return &task, nil
 }
 
@@ -670,7 +612,7 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	outputDir string,
 	idGen *TaskIDGenerator,
 	toolMatcher *resource.ToolMatcher,
-	platform, architecture, configuration, toolchain string,
+	platform, configuration string,
 	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
 	// Find build tool
@@ -680,16 +622,7 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 			"Check that your toolchain defines a tool with action='build'")
 	}
 
-	// Get item name
-	itemName := "module"
-	if name, ok := itemConfig["name"].(string); ok {
-		itemName = name
-	}
-	// Resolve output pattern using VarEnv (set name and output_prefix for resolution)
-	patternVarEnv := varEnv.CreateChild()
-	patternVarEnv.SetVariable("name", itemName, "output-pattern")
-	patternVarEnv.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
-	resolvedOutputPattern, err := resolveStrict(patternVarEnv, tool.OutputPattern, "the output pattern of tool "+tool.Name)
+	resolvedOutputPattern, err := outputPattern(tool, itemConfig, mergedConfig, toolMatcher, varEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -759,23 +692,10 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	// The tool tracks its own inputs (imports outside the target directory, go.mod, Cargo.toml,
 	// path dependencies, build scripts, embedded files): a tool-cached task always runs and lets
 	// the tool's cache decide, so it declares no inputs to hash.
-	taskID := idGen.Next("build", itemName)
-	task := NewBuildTask(
-		taskID,
-		tool.Name,
-		nil,
-		[]string{output},
-		[]string{}, // No dependencies - build tools handle internally
-		command,
-	)
+	task := NewBuildTask(idGen.Next("build", itemConfig["name"].(string)), tool.Name, nil, []string{output}, []string{}, command)
 	if metadata := bte.GetTemplateMetadata(fmt.Sprint(context["template_name"])); metadata != nil {
 		task.ToolCached = metadata.ToolCached
 	}
-	task.Platform = platform
-	task.Architecture = architecture
-	task.Configuration = configuration
-	task.Toolchain = toolchain
-
 	return &task, nil
 }
 
@@ -804,6 +724,16 @@ func computeSourceRel(source, moduleDir string) (string, error) {
 	return strings.TrimSuffix(rel, path.Ext(rel)), nil
 }
 
+// outputPattern resolves a link or build tool's output pattern for the target (${name} and
+// ${output_prefix}).
+func outputPattern(tool *resource.Tool, itemConfig, mergedConfig map[string]any, toolMatcher *resource.ToolMatcher, varEnv *util.VariableEnvironment) (string, error) {
+	env := varEnv.CreateChild()
+	env.SetVariable("name", itemConfig["name"].(string), "output-pattern")
+	env.SetVariable("output_prefix", resolveOutputPrefix(itemConfig, mergedConfig, toolMatcher), "output-pattern")
+	return resolveStrict(env, tool.OutputPattern, "the output pattern of tool "+tool.Name)
+}
+
+// resolveOutputPrefix returns the target's output_prefix, else its settings', else its toolchain's.
 func resolveOutputPrefix(itemConfig, mergedConfig map[string]any, toolMatcher *resource.ToolMatcher) string {
 	if prefix, ok := itemConfig["output_prefix"].(string); ok {
 		return prefix

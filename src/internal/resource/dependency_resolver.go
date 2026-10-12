@@ -630,7 +630,7 @@ func (dr *DependencyResolver) dockerMounts() []string {
 // DockerMounts returns the workspace root, and the cache directory when it lies outside it.
 func DockerMounts(workspaceRoot, cacheDir string) []string {
 	mounts := []string{workspaceRoot}
-	if rel, err := filepath.Rel(workspaceRoot, cacheDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !util.PathWithin(cacheDir, workspaceRoot) {
 		mounts = append(mounts, cacheDir)
 	}
 	return mounts

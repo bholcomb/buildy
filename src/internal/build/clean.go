@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"buildy/internal/workspace"
 	"buildy/pkg/util"
@@ -12,8 +11,7 @@ import (
 
 // within reports whether path is strictly inside dir.
 func within(dir, path string) bool {
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	return util.PathWithin(path, dir) && util.NormalizePath(path) != util.NormalizePath(dir)
 }
 
 // Clean removes what buildy produced for the workspace, inside the workspace root only:

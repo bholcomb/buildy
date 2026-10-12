@@ -465,22 +465,10 @@ func Variables(file *config.File, ctx BuildContext, workspaceRoot string, cliDef
 	if workspaceRoot != "" {
 		builtins.SetVariable("workspace", workspaceRoot, "built-in")
 	}
-	projectName, projectVersion := "unknown", "0.0.0"
-	if file.Project != nil {
-		if file.Project.Name != "" {
-			projectName = file.Project.Name
-		}
-		if file.Project.Version != "" {
-			projectVersion = file.Project.Version
-		}
-	}
+	projectName, projectVersion := projectNameVersion(file.Project)
 	builtins.SetVariable("project_name", projectName, "built-in")
 	builtins.SetVariable("project_version", projectVersion, "built-in")
-	baseDir := "build"
-	if file.Output.BaseDir != "" {
-		baseDir = file.Output.BaseDir
-	}
-	builtins.SetVariable("base_dir", baseDir, "output.base_dir")
+	builtins.SetVariable("base_dir", baseDir(file), "output.base_dir")
 
 	layer := func(parent *util.VariableEnvironment, source string, vars ...map[string]config.Scalar) *util.VariableEnvironment {
 		env := parent.CreateChild()
@@ -528,6 +516,26 @@ func Variables(file *config.File, ctx BuildContext, workspaceRoot string, cliDef
 		cli.SetVariable(name, value, "cli")
 	}
 	return cli, nil
+}
+
+// projectNameVersion returns a project's name and version, or "unknown" and "0.0.0".
+func projectNameVersion(p *config.Project) (string, string) {
+	name, version := "unknown", "0.0.0"
+	if p != nil && p.Name != "" {
+		name = p.Name
+	}
+	if p != nil && p.Version != "" {
+		version = p.Version
+	}
+	return name, version
+}
+
+// baseDir returns a config's output.base_dir, by default build.
+func baseDir(file *config.File) string {
+	if file.Output.BaseDir != "" {
+		return file.Output.BaseDir
+	}
+	return "build"
 }
 
 // getOutputDir resolves the module's output directory: output.pattern, by default
@@ -582,11 +590,7 @@ func (ws *Workspace) OutputRoots(ctx BuildContext, cliDefines map[string]string)
 		if err != nil {
 			return nil, err
 		}
-		base := "build"
-		if file.Output.BaseDir != "" {
-			base = file.Output.BaseDir
-		}
-		if base = filepath.Join(ws.RootDir, base); dir == base || strings.HasPrefix(dir, base+string(filepath.Separator)) {
+		if base := filepath.Join(ws.RootDir, baseDir(file)); util.PathWithin(dir, base) {
 			dir = base
 		}
 		if !hasString(roots, dir) {

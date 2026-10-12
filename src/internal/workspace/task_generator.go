@@ -363,7 +363,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.Platform,
 		tg.Architecture,
 		tg.Configuration,
-		targetToolchain.Name,
 		templateVarEnv,
 	)
 	if err != nil {
@@ -376,6 +375,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	for _, task := range tasks {
+		tg.finalizeTask(task, targetToolchain.Name)
 		task.Module = tg.CurrentModule
 		task.Target = targetName
 		task.Exec = execSpec
@@ -1133,15 +1133,7 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 	if tg.Workspace != nil {
 		workspaceRoot = tg.Workspace.RootDir
 	}
-	projectName, projectVersion := "unknown", "0.0.0"
-	if project != nil {
-		if project.Name != "" {
-			projectName = project.Name
-		}
-		if project.Version != "" {
-			projectVersion = project.Version
-		}
-	}
+	projectName, projectVersion := projectNameVersion(project)
 
 	for _, inst := range installs {
 		name := inst.Name
@@ -1202,7 +1194,7 @@ func (tg *TaskGenerator) generateInstallTasks(installs []*config.Install, projec
 		// Files a staging folder puts outside its directory are not in it.
 		var inputs []TaskInput
 		for _, file := range tg.stagedByName[stagingName] {
-			if rel, err := filepath.Rel(stagingDir, file); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if util.PathWithin(file, stagingDir) {
 				inputs = append(inputs, NewTaskInput(file))
 			} else {
 				util.LogInfo("install '%s': %s is outside the staging directory %s, so not in the archive", name, file, stagingDir)
