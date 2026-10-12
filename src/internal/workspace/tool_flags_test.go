@@ -133,3 +133,60 @@ func TestMacOSCppLinkHasFrameworks(t *testing.T) {
 		}
 	}
 }
+
+// A staging task depends on the task that produces its file and no other: a generate step with two
+// outputs per input staged its second output after the next input's task (outputs were matched to
+// task IDs by index).
+func TestStagingDependsOnItsProducer(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": `project: {name: stage}
+artifacts:
+  generate:
+    - name: code
+      tool: idl
+      inputs: [a.idl, b.idl]
+      outputs: ["${gen_dir}/${basename}.h", "${gen_dir}/${basename}.c"]
+staging:
+  contents:
+    - folder: include
+      artifacts: [code]
+`,
+		"a.idl": "", "b.idl": "",
+		"buildy_config/toolchains/idl.yaml": `toolchain:
+  name: idl
+  target: {platform: any, architecture: any}
+  host: {platform: any, architecture: any}
+  tools:
+    gen:
+      action: generate
+      command: "idlgen ${input} ${output}"
+      input_extensions: [".idl"]
+`,
+	})
+	tasks := generateWithToolchains(t, root, "debug")
+	graph := graphOf(t, tasks...)
+	if err := graph.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	producers := map[string]string{}
+	for _, task := range tasks {
+		for _, output := range task.Outputs {
+			producers[output] = task.TaskID
+		}
+	}
+	staged := 0
+	for _, task := range tasks {
+		if task.TaskType != NativeCopy && task.TaskType != NativeSymlink {
+			continue
+		}
+		staged++
+		want := producers[task.Inputs[0].Path]
+		if want == "" || len(task.Dependencies) != 1 || task.Dependencies[0] != want {
+			t.Errorf("%s stages %s: depends on %v, want [%s]", task.TaskID, task.Inputs[0].Path, task.Dependencies, want)
+		}
+	}
+	if staged != 4 {
+		t.Errorf("%d staging tasks, want 4", staged)
+	}
+}

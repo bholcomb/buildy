@@ -1045,18 +1045,13 @@ func (tg *TaskGenerator) processStagingContents(
 		// Artifacts: the module's own, or another module's (workspace-level staging assembles
 		// the artifacts of every module)
 		for _, ref := range item.Artifacts {
-			a := tg.names.artifacts[ref.Name]
-			outputs, taskIDs := a.outputs, a.taskIDs
+			outputs := tg.names.artifacts[ref.Name].outputs
 			if len(outputs) == 0 {
 				return nil, fmt.Errorf("staging folder '%s' in module %s: no module defines artifact '%s' with outputs", folderName, tg.moduleName(), ref.Name)
 			}
 			useSymlink := tg.useSymlink(ref.UseSymlink, defaultUseSymlinks)
-			for i, sourcePath := range outputs {
-				var deps []string
-				if i < len(taskIDs) {
-					deps = []string{taskIDs[i]}
-				}
-				tasks = append(tasks, tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(folderPath, filepath.Base(sourcePath)), useSymlink, deps))
+			for _, sourcePath := range outputs {
+				tasks = append(tasks, tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(folderPath, filepath.Base(sourcePath)), useSymlink))
 			}
 		}
 
@@ -1068,8 +1063,7 @@ func (tg *TaskGenerator) processStagingContents(
 				return nil, err
 			}
 			// A plain path outside the output directories is staged as named (a missing file fails
-			// the staging task); one inside must be an output of the build. The staging task runs
-			// after the task that produces its file (a producer edge).
+			// the staging task); one inside must be an output of the build.
 			glob, matches, err := tg.files(resolved)
 			if err != nil {
 				return nil, fmt.Errorf("staging folder '%s' in module %s: %w", folderName, tg.moduleName(), err)
@@ -1078,7 +1072,7 @@ func (tg *TaskGenerator) processStagingContents(
 				matches = []string{glob.Base}
 			}
 			for _, match := range matches {
-				tasks = append(tasks, tg.createSymlinkOrCopyTask(match, filepath.Join(folderPath, filepath.Base(match)), useSymlink, nil))
+				tasks = append(tasks, tg.createSymlinkOrCopyTask(match, filepath.Join(folderPath, filepath.Base(match)), useSymlink))
 			}
 		}
 
@@ -1110,11 +1104,12 @@ func (tg *TaskGenerator) createTargetStagingTask(targetName string, destFolder s
 		return nil, fmt.Errorf("staging folder %s in module %s: target '%s' has no output", destFolder, tg.moduleName(), targetName)
 	}
 	sourcePath := target.Outputs[0]
-	return tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(destFolder, filepath.Base(sourcePath)), useSymlink, []string{target.TaskID}), nil
+	return tg.createSymlinkOrCopyTask(sourcePath, filepath.Join(destFolder, filepath.Base(sourcePath)), useSymlink), nil
 }
 
-// createSymlinkOrCopyTask creates a task that either symlinks or copies a file
-func (tg *TaskGenerator) createSymlinkOrCopyTask(source, dest string, useSymlink bool, dependencies []string) *BuildTask {
+// createSymlinkOrCopyTask creates a task that either symlinks or copies a file. It runs after the
+// task that produces the file, if any: graph validation adds the edge from an input to its producer.
+func (tg *TaskGenerator) createSymlinkOrCopyTask(source, dest string, useSymlink bool) *BuildTask {
 	source = filepath.Clean(source)
 	dest = filepath.Clean(dest)
 
@@ -1122,9 +1117,9 @@ func (tg *TaskGenerator) createSymlinkOrCopyTask(source, dest string, useSymlink
 	var task BuildTask
 	if useSymlink {
 		// A symlink's key is the path it points to, not the content behind it
-		task = NewNativeTask(taskID, NativeSymlink, []TaskInput{{Path: source, Hash: "symlink:" + source}}, []string{dest}, dependencies, NativeOp{Op: NativeSymlink})
+		task = NewNativeTask(taskID, NativeSymlink, []TaskInput{{Path: source, Hash: "symlink:" + source}}, []string{dest}, nil, NativeOp{Op: NativeSymlink})
 	} else {
-		task = NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, dependencies, NativeOp{Op: NativeCopy})
+		task = NewNativeTask(taskID, NativeCopy, []TaskInput{NewTaskInput(source)}, []string{dest}, nil, NativeOp{Op: NativeCopy})
 	}
 	tg.finalizeTask(&task, "")
 	util.LogInfo("Generated %s task: %s -> %s", task.TaskType, source, dest)
@@ -1279,8 +1274,8 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 			continue
 		}
 
-		// One file: a target's output, or a source path
-		var dependencies []string
+		// One file: a target's output (the copy runs after the target's final task: a producer
+		// edge), or a source path
 		source := c.Source
 		if c.Target != "" {
 			target, found := tg.names.targets[c.Target]
@@ -1288,7 +1283,6 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 				return nil, fmt.Errorf("artifacts.copy in module %s: target '%s' is not a target of the workspace", tg.moduleName(), c.Target)
 			}
 			source = target.Outputs[0]
-			dependencies = append(dependencies, target.TaskID)
 		}
 		var err error
 		if source, err = resolveStrict(env, source, "the source of artifacts.copy"); err != nil {
@@ -1300,6 +1294,8 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 		endsInSeparator := strings.HasSuffix(dest, "/") || strings.HasSuffix(dest, string(filepath.Separator))
 		source, dest = tg.absolute(source), tg.absolute(dest)
 
+		// depends_on orders the copy after targets it has no file relation with
+		var dependencies []string
 		for _, dep := range c.DependsOn {
 			if target, found := tg.names.targets[dep]; found {
 				dependencies = append(dependencies, target.TaskID)
