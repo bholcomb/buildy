@@ -140,4 +140,5 @@ declares none.
 - Build system phases still skip a command of exactly `true` (make's and cargo's configure).
 - The Windows and macOS code paths (cmd.exe scripts, MSVC response files, `kern.argmax`) are
   built and vetted for those targets but have not run there.
-- Whether a staging symlink is made is decided by the target platform, not the host.
+- Whether a staging symlink is made is decided by the target platform, not the host. *The host
+  decides since [phase 5](layout.md#symlinks).*
