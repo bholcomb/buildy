@@ -89,7 +89,7 @@ platforms:
 	}
 	joined := strings.Join(first, "\n")
 	for _, want := range []string{
-		"-O0 -DL -DD -DX -DROOT -DAPP=1 -DDBG -DONLINUX",
+		"-O0 -g -DL -DD -DX -DROOT -DAPP=1 -DDBG -DONLINUX",
 		"-DROOT -DAPP=1 -DDBG -DLIBL -DLIBD",
 		"-llib -lm -ldl -lpthread",
 	} {

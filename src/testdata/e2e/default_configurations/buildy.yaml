@@ -1,0 +1,14 @@
+# Without configurations: in the config, debug and release still differ (finding 1.11): buildy's
+# own debug (optimization: none, symbols: true) and release (optimization: speed, NDEBUG).
+project:
+  name: default_configurations
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["main.c"]

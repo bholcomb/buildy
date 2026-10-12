@@ -449,7 +449,7 @@ func (tg *TaskGenerator) targetSettings(target *config.Target, s config.Settings
 	defines = append(defines, compileDefines...)
 	linkFlags = config.Remove(append(linkFlags, linkAdd...), linkRemove)
 	flags = config.Remove(flags, removeFlags)
-	defines = config.Remove(defines, removeDefines)
+	defines = config.UniqueDefines(config.Remove(defines, removeDefines))
 
 	scope := map[string]any{
 		"defines":    defines,

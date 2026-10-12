@@ -777,11 +777,30 @@ defines, and gets `X` after them. What merges: `variables`, `environment` (`tool
 and `configurations`. A module's targets, artifacts, staging, install, project and toolchain are
 its own.
 
-The levels then merge in this order, by the same rules: `config`, `environment.compile` (and
+The levels then merge in this order, by the same rules: buildy's
+[built-in configuration](#built-in-configurations), `config`, `environment.compile` (and
 `environment.link`), the build's platform section, its architecture section, then its
 configuration (`configurations.<config>`, then `environment.configurations.<config>`). Each level's
 `compile:` section merges into the level first. The abstract keywords' flags come first in the
-result, and every `remove_flags` and `remove_defines` applies last.
+result, and every `remove_flags` and `remove_defines` applies last. A macro defined more than once
+(`NDEBUG` and `NDEBUG=1`, or a target's `X=2` after the module's `X=1`) is passed once, by its last
+definition, where that one is: what the compiler would use anyway.
+
+### Built-in Configurations
+
+buildy has its own `debug` and `release` configurations, the lowest level of every config:
+
+| Configuration | Keywords | Defines | GCC/Clang | MSVC |
+|---|---|---|---|---|
+| `debug` | `optimization: none`, `symbols: true` | | `-O0 -g` | `/Od /Zi` |
+| `release` | `optimization: speed` | `NDEBUG` | `-O2 -DNDEBUG` | `/O2 /DNDEBUG` |
+
+A config's own settings merge over them: a keyword set at any level (`environment.compile`,
+`config`, `configurations.<name>`, a platform) replaces buildy's, a definition of `NDEBUG`
+replaces buildy's, and `remove_defines: [NDEBUG]` removes it. A keyword value the toolchain's
+`flag_mappings` don't have is skipped (it is an error only when a config sets it). Other
+configurations get nothing from buildy. Transform and generate tools get the keywords too, as
+their toolchains map them (glslc: `-O0 -g` in debug, `-O` in release).
 
 A platform section's `targets` override the module's targets of the same name and type: each field
 the override sets replaces the target's, except `compile` and `link`, which merge into the target's

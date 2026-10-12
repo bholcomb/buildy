@@ -358,7 +358,14 @@ targets:
 
 ### Build Configurations
 
-Define debug and release configurations:
+buildy has its own `debug` and `release` configurations, so a config without any still builds
+`-c release` optimized: `debug` is `optimization: none` and `symbols: true` (`-O0 -g` with GCC),
+`release` is `optimization: speed` and defines `NDEBUG` (`-O2 -DNDEBUG`). Whatever a config sets
+wins: a keyword set at any level replaces buildy's, and a definition of `NDEBUG` (`NDEBUG=1`)
+replaces buildy's; `remove_defines: [NDEBUG]` drops it. Other configurations (`-c portable`) get
+nothing from buildy.
+
+Define or adjust debug and release configurations:
 
 ```yaml
 environment:

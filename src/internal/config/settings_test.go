@@ -66,7 +66,7 @@ environment:
   configurations:
     debug: {flags: [-DDEBUG_MODE]}`,
 			ctx:   linuxDebug,
-			flags: []string{"-fpermissive", "-DDEBUG_MODE"},
+			flags: []string{"-O0", "-g", "-fpermissive", "-DDEBUG_MODE"}, // the built-in debug configuration's keywords first
 		},
 		{
 			name: "remove_flags removes keyword flags",
@@ -75,8 +75,9 @@ environment:
   compile: {warnings: extra}
   configurations:
     release: {optimization: full, remove_flags: [-Wextra]}`,
-			ctx:   linuxRelease,
-			flags: []string{"-O3", "-Wall"},
+			ctx:     linuxRelease,
+			flags:   []string{"-O3", "-Wall"},
+			defines: []string{"NDEBUG"},
 		},
 		{
 			name: "compile and link sections of a configuration",
@@ -92,6 +93,7 @@ environment:
 			ctx:       linuxRelease,
 			flags:     []string{"-O3", "-fvisibility=hidden", "-flto", "-march=native"},
 			linkFlags: []string{"-Wl,-z,now", "-flto", "-Wl,-O1"},
+			defines:   []string{"NDEBUG"},
 		},
 		{
 			name: "removals inside compile and link sections",
@@ -104,8 +106,9 @@ environment:
       compile: {remove_flags: [-Werror]}
       link: {remove_flags: [-s]}`,
 			ctx:       linuxRelease,
-			flags:     []string{"-Wall", "-Wextra"},
+			flags:     []string{"-O2", "-Wall", "-Wextra"},
 			linkFlags: []string{"-Wl,-z,now"},
+			defines:   []string{"NDEBUG"},
 		},
 		{
 			name: "Mobius: release removes the -O2 its keyword adds",
@@ -132,7 +135,7 @@ environment:
   link:
     flags: [{linux: [-ldl]}, {macos: [-framework Cocoa]}]`,
 			ctx:       linuxDebug,
-			flags:     []string{"-fvisibility=hidden", "-pthread", "-fsanitize=address"},
+			flags:     []string{"-O0", "-g", "-fvisibility=hidden", "-pthread", "-fsanitize=address"},
 			linkFlags: []string{"-ldl"},
 		},
 		{
@@ -150,7 +153,7 @@ architectures:
 configurations:
   debug: {flags: [-c4b]}`,
 			ctx:   linuxDebug,
-			flags: []string{"-c0", "-c1", "-c2", "-c3", "-c4", "-c4b", "-c5", "-c6"},
+			flags: []string{"-O0", "-g", "-c0", "-c1", "-c2", "-c3", "-c4", "-c4b", "-c5", "-c6"},
 		},
 	}
 	for _, c := range cases {
@@ -217,7 +220,7 @@ targets:
 	if s.CStandard != "c11" {
 		t.Errorf("c_standard = %q, want the root's c11", s.CStandard)
 	}
-	if want := []string{"-g", "-Wall", "-Wextra", "-froot"}; !reflect.DeepEqual(s.Flags, want) {
+	if want := []string{"-O0", "-g", "-Wall", "-Wextra", "-froot"}; !reflect.DeepEqual(s.Flags, want) {
 		t.Errorf("flags = %q, want %q", s.Flags, want)
 	}
 	if want := []string{"ROOT", "MODULE", "ROOTLINUX", "ROOTDEBUG"}; !reflect.DeepEqual(s.Defines, want) {
@@ -394,5 +397,55 @@ func TestBaseDirMustBeBelowTheRoot(t *testing.T) {
 		if _, err := LoadFile(path, false); err == nil {
 			t.Errorf("output.base_dir %q is accepted", dir)
 		}
+	}
+}
+
+// buildy's own debug and release configurations: the lowest level, so a config that sets a keyword
+// anywhere wins, and its definition of NDEBUG replaces buildy's.
+func TestBuiltinConfigurations(t *testing.T) {
+	portable := Context{Platform: "linux", Architecture: "x86_64", Configuration: "portable"}
+	cases := []struct {
+		name           string
+		yaml           string
+		ctx            Context
+		flags, defines []string
+	}{
+		{"debug, nothing set", "", linuxDebug, []string{"-O0", "-g"}, []string{}},
+		{"release, nothing set", "", linuxRelease, []string{"-O2"}, []string{"NDEBUG"}},
+		{"another configuration gets nothing", "", portable, []string{}, []string{}},
+		{"environment.compile wins", "environment:\n  compile: {optimization: full, symbols: false}\n", linuxDebug, []string{"-O3"}, []string{}},
+		{"the config section wins", "config: {optimization: full}\n", linuxRelease, []string{"-O3"}, []string{"NDEBUG"}},
+		{"a define of NDEBUG replaces buildy's", "environment:\n  compile: {defines: [A]}\n  configurations:\n    release: {defines: [NDEBUG=1]}\n", linuxRelease, []string{"-O2"}, []string{"A", "NDEBUG=1"}},
+		{"Mobius's own NDEBUG", "environment:\n  configurations:\n    release: {optimization: speed, defines: [NDEBUG]}\n", linuxRelease, []string{"-O2"}, []string{"NDEBUG"}},
+		{"remove_defines removes it", "environment:\n  configurations:\n    release: {remove_defines: [NDEBUG]}\n", linuxRelease, []string{"-O2"}, []string{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := loadText(t, c.yaml).Settings(c.ctx, gccMappings())
+			if err != nil {
+				t.Fatal(err)
+			}
+			same := func(a, b []string) bool { return len(a) == 0 && len(b) == 0 || reflect.DeepEqual(a, b) }
+			if !same(s.Flags, c.flags) || !same(s.Defines, c.defines) {
+				t.Errorf("flags %q, defines %q; want %q, %q", s.Flags, s.Defines, c.flags, c.defines)
+			}
+		})
+	}
+
+	// A toolchain that can't say a built-in value gets nothing for it, not an error
+	var sparse Ordered[Ordered[[]string]]
+	var values Ordered[[]string]
+	values.Set("fast", []string{"-Ofast"})
+	sparse.Set("optimization", values)
+	s, err := loadText(t, "").Settings(linuxDebug, sparse)
+	if err != nil || len(s.Flags) != 0 {
+		t.Errorf("a toolchain without optimization: none: flags %q, %v", s.Flags, err)
+	}
+}
+
+func TestUniqueDefines(t *testing.T) {
+	got := UniqueDefines([]string{"NDEBUG", "A=1", "F(x)=x", "B", "NDEBUG=1", "A=2", "F(y)=y", "B"})
+	if want := []string{"NDEBUG=1", "A=2", "F(y)=y", "B"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

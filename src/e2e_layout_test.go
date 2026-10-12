@@ -254,3 +254,24 @@ func TestE2ECacheDir(t *testing.T) {
 		t.Errorf("a relative --cache-dir isn't relative to the workspace root")
 	}
 }
+
+// Finding 1.11: without configurations: in the config, -c release differs from -c debug: buildy's
+// own debug is optimization: none and symbols: true, its release optimization: speed and NDEBUG.
+func TestE2EDefaultConfigurations(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc")
+	dir := fixture(t, "default_configurations")
+	for config, want := range map[string]string{"debug": "asserts unoptimized", "release": "ndebug optimized"} {
+		mustBuildy(t, dir, "-c", config)
+		if got := run(t, filepath.Join(outDir(dir, config), "bin", "app")); got != want {
+			t.Errorf("-c %s: app printed %q, want %q", config, got, want)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".buildy_cache", "tasks_"+filepath.Base(outDir(dir, "debug"))+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"-O0"`) || !strings.Contains(string(data), `"-g"`) {
+		t.Errorf("the debug compile lacks -O0 or -g")
+	}
+}
