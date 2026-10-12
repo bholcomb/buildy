@@ -44,3 +44,25 @@ func TestE2ECacheStats(t *testing.T) {
 	out := mustBuildy(t, dir, "--cache-stats", "-n", "1")
 	containsAll(t, "buildy --cache-stats -n 1", out, "Cache directory:", "Entries:")
 }
+
+// The user guide's first build: a C++ executable and nothing else, no cpp_standard. The compiler
+// builds with its own default standard.
+func TestE2EFirstBuild(t *testing.T) {
+	needCpp(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "buildy.yaml"), `project:
+  name: hello
+  version: "1.0.0"
+
+targets:
+  executables:
+    - name: hello
+      language: cpp
+      sources: ["src/*.cpp"]
+`)
+	writeFile(t, filepath.Join(dir, "src", "main.cpp"), "#include <iostream>\nint main() { std::cout << \"hello\\n\"; }\n")
+	mustBuildy(t, dir)
+	if got := run(t, filepath.Join(outDir(dir, "debug"), "bin", "hello")); got != "hello" {
+		t.Errorf("hello printed %q", got)
+	}
+}

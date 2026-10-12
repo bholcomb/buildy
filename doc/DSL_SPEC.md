@@ -755,6 +755,11 @@ section) takes `cpp_standard`, `c_standard`, `output_prefix`, `defines`, `flags`
 (`optimization`, `warnings`, `symbols`, `runtime`, or a custom one). A configuration, platform or
 architecture section also takes `compile:`, `link:` and `variables:`. Any other key is an error.
 
+`cpp_standard` and `c_standard` are the C++ and C standards (`c++17`, `c11`), passed as `-std=`
+(`/std:` with MSVC). Without one, buildy passes no standard and the compiler uses its own default
+(`gnu++17` with GCC 11 and later, `c++14` with MSVC). Set one for the same language on every
+compiler.
+
 Each item of `flags`, `defines`, `include_dirs`, `lib_dirs` and `libs` is one argument of the
 compiler or linker, passed as written: commands run without a shell, and no shell reads the
 items. `defines: ['MSG="hello world"']` passes `-DMSG="hello world"`, a string literal, and a path
@@ -1776,7 +1781,8 @@ The `supports` section declares tool capabilities and flag formats:
 | `include_flag` | string | Flag prefix for includes (e.g., `-I`) |
 | `pic` | bool | Supports position-independent code |
 | `pic_flag` | string | Flag for PIC (e.g., `-fPIC`) |
-| `std` | bool | Supports language standard flag |
+| `std` | bool | Supports a language standard: `${std_flags}` is its argument |
+| `std_flag` | string | Flag prefix for the standard (e.g., `-std=`; MSVC `/std:`) |
 | `dependencies` | string | Dependency tracking arguments, a [command template](#command-syntax) with `${dep_file}` (e.g., `-MMD -MP -MF ${dep_file}`) |
 
 **Linking supports:**
@@ -1793,8 +1799,8 @@ The `supports` section declares tool capabilities and flag formats:
 
 Each `*_flag` is joined to each value: `include_flag: "-I"` and `inc` give the argument `-Iinc`.
 A flag ending in a space is an argument of its own before each value: `"-framework "` and `Cocoa`
-give `-framework` `Cocoa`. A flag that isn't set has its default (`-D`, `-I`, `-fPIC`, `-L`,
-`-l`, `"-framework "`); one set to `""` is no flag (MSVC: `lib_flag: ""` with `lib_suffix: ".lib"`
+give `-framework` `Cocoa`. A flag that isn't set has its default (`-D`, `-I`, `-fPIC`, `-std=`,
+`-L`, `-l`, `"-framework "`); one set to `""` is no flag (MSVC: `lib_flag: ""` with `lib_suffix: ".lib"`
 gives `glfw3.lib`).
 
 ### Command Syntax
@@ -1803,7 +1809,7 @@ A tool's command is a template that buildy splits into words when it loads the t
 runs as an argument list, **without a shell**:
 
 ```yaml
-command: "g++ ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
+command: "g++ ${dep_flags} ${std_flags} ${flags} ${defines} ${includes} -c ${input} -o ${output}"
 ```
 
 - Words are separated by spaces, tabs and newlines.
@@ -1812,7 +1818,7 @@ command: "g++ ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${inpu
 - **A placeholder that is a word of its own** (`${includes}`) becomes the placeholder's values,
   each one argument: none when it is empty, several for a list. A path with spaces stays one
   argument.
-- **A placeholder inside a word** (`-std=${std}`, `/Fo${output}`, `/OUT:${output}`, `"${x}"`) is
+- **A placeholder inside a word** (`-o${output}`, `/Fo${output}`, `/OUT:${output}`, `"${x}"`) is
   replaced by its value, and the word stays one argument. It must have exactly one value: an
   empty one, or a list of several, there is an error. Write it as a word of its own to pass any
   number of arguments.
@@ -1826,8 +1832,9 @@ command: "g++ ${dep_flags} -std=${std} ${flags} ${defines} ${includes} -c ${inpu
 | `${defines}`, `${includes}`, `${lib_dirs}`, `${libs}`, `${frameworks}` | one per value, with the tool's `*_flag` |
 | `${objects}` | one per object file |
 | `${pic}` | `pic_flag` for a shared library's sources, else none |
+| `${std_flags}` | `std_flag` and the standard (`-std=c++17`), or none when the config sets no `cpp_standard` (`c_standard`): the compiler's default |
 | `${dep_flags}` | `supports.dependencies` with `${dep_file}` filled in |
-| `${std}` and other `tool_params` | one, or one per item of a list |
+| `${std}` (the standard's name) and other `tool_params` | one, or one per item of a list |
 | `${args}` (transform, generate) | one per item of the artifact's `args` |
 | anything else (transform, generate, build) | a variable (toolchain `variables`, `${output_dir}`, ...), one argument |
 

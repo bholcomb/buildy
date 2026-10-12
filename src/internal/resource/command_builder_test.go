@@ -63,8 +63,47 @@ func TestBuildCommandGivesArguments(t *testing.T) {
 		t.Errorf("link command\n  %s\nwant\n  %s", got, want)
 	}
 
-	if _, _, _, err := cb.BuildCommand(tool, "/a.cpp", "/a.o", nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "${std}") || !strings.Contains(err.Error(), "cpp_standard") {
-		t.Errorf("a compile without a standard: %v", err)
+}
+
+// Without a standard (no cpp_standard or c_standard), a built-in toolchain passes none: the
+// compiler's default. A toolchain of one's own that writes -std=${std} still needs one.
+func TestBuildCommandWithoutAStandard(t *testing.T) {
+	for _, c := range []struct{ toolchain, platform, source, output, want string }{
+		{"gcc-cpp-linux", "linux", "/a.cpp", "/a.o", `g++ | -MMD | -MP | -MF | /a.d | -c | /a.cpp | -o | /a.o`},
+		{"gcc-c-linux", "linux", "/a.c", "/a.o", `gcc | -MMD | -MP | -MF | /a.d | -c | /a.c | -o | /a.o`},
+		{"msvc-cpp-windows", "windows", "/a.cpp", "/a.obj", `cl.exe | /sourceDependencies | /a.json | /nologo | /EHsc | /c | /a.cpp | /Fo/a.obj`},
+	} {
+		tc := builtinToolchain(t, c.toolchain)
+		tool, err := tc.ToolFor(c.source, "compile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd, _, _, err := NewCommandBuilder(tc, c.platform, "release").BuildCommand(tool, c.source, c.output, nil, nil, nil, nil)
+		if err != nil {
+			t.Errorf("%s without a standard: %v", c.toolchain, err)
+		} else if got := argv(cmd.Args); got != c.want {
+			t.Errorf("%s without a standard\n  %s\nwant\n  %s", c.toolchain, got, c.want)
+		}
+	}
+
+	own, err := config.LoadToolchain([]byte(`toolchain:
+  name: own
+  tools:
+    c:
+      action: compile
+      command: "cc -std=${std} -c ${input} -o ${output}"
+      input_extensions: [".c"]
+      output_extension: ".o"
+`), "own.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := own.ToolFor("/a.c", "compile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := NewCommandBuilder(own, "linux", "debug").BuildCommand(tool, "/a.c", "/a.o", nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "${std}") || !strings.Contains(err.Error(), "cpp_standard") {
+		t.Errorf("-std=${std} without a standard: %v", err)
 	}
 }
 

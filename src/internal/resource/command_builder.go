@@ -57,6 +57,12 @@ func (cb *CommandBuilder) BuildCommand(
 	if isShared, _ := kwargs["is_shared_library"].(bool); tool.Supports.PIC && isShared {
 		values["pic"] = []string{orDefault(tool.Supports.PICFlag, "-fPIC")}
 	}
+	// The language standard (cpp_standard, c_standard): ${std} is its name, ${std_flags} its
+	// argument, or none when the config sets no standard, which leaves the compiler's default
+	values["std_flags"] = nil
+	if std, _ := kwargs["std"].(string); tool.Supports.Std && std != "" {
+		values["std_flags"] = []string{orDefault(tool.Supports.StdFlag, "-std=") + std}
+	}
 
 	// The dependency file: .json for MSVC's /sourceDependencies, .d for GCC and Clang
 	if deps := tool.Supports.Dependencies; !deps.IsZero() {

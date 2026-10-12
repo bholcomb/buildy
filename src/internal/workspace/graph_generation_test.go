@@ -26,20 +26,37 @@ func TestSameNamedTargetsInTwoModulesAreRejected(t *testing.T) {
 	}
 }
 
-// S12: a C++ target without cpp_standard used to compile with "-std=${std}".
-func TestMissingCppStandardIsAnError(t *testing.T) {
-	root := t.TempDir()
-	writeFiles(t, root, map[string]string{
-		"buildy.yaml": "project: {name: nostd}\ntargets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n",
-		"main.cpp":    "int main() {}",
-	})
-	_, err := generateTasks(t, root)
-	if err == nil {
-		t.Fatal("a compile with an unresolved ${std} was generated")
-	}
-	for _, want := range []string{"target 'app'", "${std}", "cpp_standard"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q lacks %q", err, want)
+// S12: a C++ target without cpp_standard used to compile with "-std=${std}". Now it compiles
+// with no standard, the compiler's default; with one, it passes -std=.
+func TestMissingCppStandardIsTheCompilersDefault(t *testing.T) {
+	for _, c := range []struct{ environment, want string }{{"", ""}, {cppEnvironment, "-std=c++17"}} {
+		root := t.TempDir()
+		writeFiles(t, root, map[string]string{
+			"buildy.yaml": "project: {name: nostd}\n" + c.environment + "targets:\n  executables:\n    - {name: app, language: cpp, sources: [main.cpp]}\n",
+			"main.cpp":    "int main() {}",
+		})
+		tasks, err := generateTasks(t, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compiles := 0
+		for _, task := range tasks {
+			if task.TaskType != "compile" {
+				continue
+			}
+			compiles++
+			var std []string
+			for _, arg := range task.Command.Args {
+				if strings.HasPrefix(arg, "-std") {
+					std = append(std, arg)
+				}
+			}
+			if got := strings.Join(std, " "); got != c.want {
+				t.Errorf("compile %v: standard %q, want %q", task.Command.Args, got, c.want)
+			}
+		}
+		if compiles != 1 {
+			t.Errorf("%d compiles, want 1", compiles)
 		}
 	}
 }

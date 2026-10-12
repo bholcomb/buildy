@@ -136,7 +136,7 @@ func (t *Tool) Expand(platform string, exec util.ExecSpec, values Values) (util.
 }
 
 // Supports is what a tool supports and how it spells it. A *_flag that is not set has a
-// default (-D, -I, -fPIC, -L, -l, "-framework "); one set to "" is no flag at all (MSVC's
+// default (-D, -I, -fPIC, -std=, -L, -l, "-framework "); one set to "" is no flag at all (MSVC's
 // libraries are named as they are).
 type Supports struct {
 	Defines       bool            `yaml:"defines" json:"defines"`
@@ -146,6 +146,7 @@ type Supports struct {
 	PIC           bool            `yaml:"pic" json:"pic"`
 	PICFlag       *string         `yaml:"pic_flag" json:"pic_flag"`
 	Std           bool            `yaml:"std" json:"std"`
+	StdFlag       *string         `yaml:"std_flag" json:"std_flag"`
 	Dependencies  CommandTemplate `yaml:"dependencies" json:"dependencies"` // dependency file arguments, with ${dep_file}
 	OutputType    string          `yaml:"output_type" json:"output_type"`   // link tools: what they produce
 	LibDirs       bool            `yaml:"lib_dirs" json:"lib_dirs"`

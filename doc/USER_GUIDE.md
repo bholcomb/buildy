@@ -34,7 +34,18 @@ Build it:
 buildy
 ```
 
-Buildy auto-detects your platform and architecture, selects an appropriate toolchain, and builds in debug mode by default.
+Buildy detects your platform and architecture, picks the toolchain for them (GCC on Linux, MSVC
+on Windows, Apple Clang on macOS), and builds the debug configuration. The program is
+`build/<platform>-<arch>-debug/bin/hello`.
+
+Without a `cpp_standard`, the compiler uses its own default C++ standard. To choose one, the same
+on every compiler:
+
+```yaml
+environment:
+  compile:
+    cpp_standard: "c++20"   # c_standard for C
+```
 
 ### Build Configurations
 

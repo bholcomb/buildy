@@ -46,7 +46,7 @@ toolchain:
     # C compilation
     c_compile:
       action: compile
-      command: "arm-linux-gnueabihf-gcc ${dep_flags} -std=${std} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
+      command: "arm-linux-gnueabihf-gcc ${dep_flags} ${std_flags} ${flags} ${defines} ${pic} ${includes} -c ${input} -o ${output}"
       response_file: gnu
       input_extensions: [".c"]
       output_extension: ".o"
