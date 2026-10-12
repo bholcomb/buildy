@@ -275,7 +275,11 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 		}
 	}
 
-	outputDir := filepath.Join(cp.Workspace.RootDir, "build", fmt.Sprintf("%s-%s-%s", cp.Platform, cp.Architecture, cp.Configuration))
+	// The root's output directory: the modules' too, unless one sets its own output
+	outputDir, err := cp.getOutputDir(root)
+	if err != nil {
+		return nil, err
+	}
 
 	tg := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)

@@ -111,6 +111,21 @@ architectures:     # Per-architecture settings (optional)
 configurations:    # Per-configuration settings (optional)
 ```
 
+### Output Directory
+
+```yaml
+output:
+  base_dir: build                                     # the default
+  pattern: "${base_dir}/${platform}-${arch}-${config}" # the default
+```
+
+Every task's outputs go under the output directory, `${out_dir}`: by default
+`build/<platform>-<arch>-<config>/` in the workspace root. `base_dir` is relative to the workspace
+root and may not contain `..`; a relative `pattern` is relative to the workspace root too. The
+root config's `output:` applies to every module and to the root's own staging and install, so a
+workspace has one layout. A module that sets `output:` overrides it for its own outputs, by the
+[merge rules](#how-settings-merge).
+
 ### Strict Validation
 
 Every config file (the workspace root, every module, a dependency's override config) is read by
@@ -758,9 +773,9 @@ A module's settings are the workspace root's merged with its own, by three rules
 
 So a module that adds `environment.compile.defines: [X]` keeps the root's `c_standard`, flags and
 defines, and gets `X` after them. What merges: `variables`, `environment` (`toolchains`, `compile`,
-`link`, `configurations`), `config`, and the settings of `platforms`, `architectures` and
-`configurations`. A module's targets, artifacts, staging, install, output, project and toolchain
-are its own.
+`link`, `configurations`), `config`, `output`, and the settings of `platforms`, `architectures`
+and `configurations`. A module's targets, artifacts, staging, install, project and toolchain are
+its own.
 
 The levels then merge in this order, by the same rules: `config`, `environment.compile` (and
 `environment.link`), the build's platform section, its architecture section, then its

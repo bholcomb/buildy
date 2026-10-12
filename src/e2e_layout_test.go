@@ -59,3 +59,21 @@ func TestE2ERecursiveGlobs(t *testing.T) {
 		t.Errorf("staged %v, want %v", got, want)
 	}
 }
+
+// The root's output: reaches the modules (and the root's own staging): one output layout per
+// workspace.
+func TestE2ERootOutputReachesModules(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc")
+	dir := fixture(t, "root_output")
+	mustBuildy(t, dir)
+	ctx := filepath.Base(outDir(dir, "debug"))
+	for _, p := range []string{"bin/app", "staging/bin/app"} {
+		if !exists(filepath.Join(dir, "out", ctx, p)) {
+			t.Errorf("out/%s/%s is missing", ctx, p)
+		}
+	}
+	if exists(filepath.Join(dir, "build")) {
+		t.Errorf("build/ exists: a module ignored the root's output.base_dir")
+	}
+}

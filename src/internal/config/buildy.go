@@ -415,7 +415,8 @@ type Install struct {
 // Install formats.
 var installFormats = []string{"tar.gz", "tgz", "zip", "tar"}
 
-// Output is where a module's outputs go.
+// Output is where the outputs go: the workspace root's for every module, unless a module sets its
+// own.
 type Output struct {
 	BaseDir string `yaml:"base_dir"`
 	Pattern string `yaml:"pattern"`
@@ -450,8 +451,8 @@ func (f *File) validate(d *decoder, root bool) {
 	if f.Dependencies != nil && !root {
 		d.errorf(nil, "dependencies: only the workspace's root config declares dependencies (in buildy_config/)")
 	}
-	if b := f.Output.BaseDir; b != "" && (strings.Contains(b, "..") || filepath.IsAbs(b)) {
-		d.errorf(nil, "output.base_dir '%s' must be relative and not contain '..'", b)
+	if b := f.Output.BaseDir; b != "" && (strings.Contains(b, "..") || filepath.IsAbs(b) || filepath.Clean(b) == ".") {
+		d.errorf(nil, "output.base_dir '%s' must be a directory below the workspace root (relative, not '.', without '..')", b)
 	}
 
 	f.Environment.Toolchains = normalizeKeys(d, f.Environment.Toolchains, "environment.toolchains", func(k string) (string, bool) {
@@ -592,9 +593,10 @@ func (f *File) ConfigurationNames() []string {
 }
 
 // Inherit returns a module's config with the workspace root's settings merged in, by the merge
-// rules (Merge): the variables, the environment, the config section, and the settings (not the
-// target overrides) of the platforms, architectures and configurations sections. Everything
-// else (project, targets, artifacts, staging, install, output, toolchain) is the module's own.
+// rules (Merge): the variables, the environment, the config section, the output layout, and the
+// settings (not the target overrides) of the platforms, architectures and configurations
+// sections. Everything else (project, targets, artifacts, staging, install, toolchain) is the
+// module's own.
 // Neither file changes. The root's config is the root module's own (discovery mode, a standalone
 // config): it inherits nothing.
 func Inherit(root, module *File) *File {
@@ -605,6 +607,7 @@ func Inherit(root, module *File) *File {
 	m.Variables = Merge(root.Variables, module.Variables)
 	m.Environment = Merge(root.Environment, module.Environment)
 	m.Config = Merge(root.Config, module.Config)
+	m.Output = Merge(root.Output, module.Output)
 	rootPlatforms := map[string]*PlatformSection{}
 	for name, p := range root.Platforms {
 		rootPlatforms[name] = &PlatformSection{Level: p.Level}

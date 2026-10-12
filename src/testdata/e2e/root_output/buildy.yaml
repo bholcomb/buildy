@@ -1,0 +1,20 @@
+# The root's output: reaches every module and the root's own staging: one output layout per
+# workspace.
+project:
+  name: root_output
+
+output:
+  base_dir: out
+
+environment:
+  compile:
+    c_standard: "c11"
+
+workspace:
+  modules: [app]
+
+staging:
+  name: pkg
+  contents:
+    - folder: bin
+      files: ["${out_dir}/bin/app"]

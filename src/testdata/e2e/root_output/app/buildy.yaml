@@ -1,0 +1,5 @@
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["main.c"]

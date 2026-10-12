@@ -371,3 +371,28 @@ func TestCheckKeywords(t *testing.T) {
 		t.Errorf("problems: %q", problems)
 	}
 }
+
+// The root's output layout reaches a module; a module's own output overrides it field by field.
+func TestInheritOutput(t *testing.T) {
+	root := loadText(t, "output: {base_dir: out, pattern: \"${base_dir}/${config}\"}\n")
+	plain := loadText(t, "variables: {X: 1}\n")
+	if got := Inherit(root, plain).Output; got != (Output{BaseDir: "out", Pattern: "${base_dir}/${config}"}) {
+		t.Errorf("a module without output: has %+v", got)
+	}
+	own := loadText(t, "output: {base_dir: elsewhere}\n")
+	if got := Inherit(root, own).Output; got != (Output{BaseDir: "elsewhere", Pattern: "${base_dir}/${config}"}) {
+		t.Errorf("a module with output.base_dir has %+v", got)
+	}
+}
+
+func TestBaseDirMustBeBelowTheRoot(t *testing.T) {
+	for _, dir := range []string{".", "./", "../out", filepath.Join(t.TempDir(), "out")} {
+		path := filepath.Join(t.TempDir(), "buildy.yaml")
+		if err := os.WriteFile(path, []byte("output: {base_dir: '"+dir+"'}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadFile(path, false); err == nil {
+			t.Errorf("output.base_dir %q is accepted", dir)
+		}
+	}
+}
