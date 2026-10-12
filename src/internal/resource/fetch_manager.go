@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -30,16 +31,39 @@ type DownloadMetadata struct {
 	Filename     string    `json:"filename"`
 }
 
+// Download timeouts: a server that can't be reached, or stops sending, fails the download. There
+// is no limit on a download's total time, so a large download over a slow link completes.
+const (
+	connectTimeout  = 30 * time.Second // to connect, and for the TLS handshake
+	downloadTimeout = 60 * time.Second // with no data from the server (headers or body)
+)
+
 // FetchManager handles downloading and caching of external dependencies
 type FetchManager struct {
 	cacheDir string
+	client   *http.Client
+	// idleTimeout fails a download after this long without data from the server
+	idleTimeout time.Duration
 }
 
 // NewFetchManager creates a new FetchManager
 func NewFetchManager(cacheDir string) *FetchManager {
 	return &FetchManager{
-		cacheDir: cacheDir,
+		cacheDir:    cacheDir,
+		client:      newHTTPClient(connectTimeout),
+		idleTimeout: downloadTimeout,
 	}
+}
+
+// newHTTPClient returns a client that gives up on connecting after connect. (downloadFile gives
+// up on a server that stops sending.)
+func newHTTPClient(connect time.Duration) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: connect,
+		ForceAttemptHTTP2:   true,
+	}}
 }
 
 // git runs git with args in dir. Like a task's command it runs in its own process group, killed
@@ -608,16 +632,28 @@ func (fm *FetchManager) GetDownloadMetadata(url string) (*DownloadMetadata, erro
 	return fm.loadDownloadMetadata(fm.downloadPath(url) + ".meta.json")
 }
 
-// downloadFile downloads a file from a URL with progress reporting. ctx stops it (an interrupt).
-// TODO: a timeout for a server that stops answering (review phase 4).
+// downloadFile downloads a file from a URL with progress reporting. ctx stops it (an interrupt),
+// and so does the server sending nothing for fm.idleTimeout.
 func (fm *FetchManager) downloadFile(ctx context.Context, url, dest string) error {
+	errStalled := fmt.Errorf("%s sent nothing for %s", url, fm.idleTimeout)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := time.AfterFunc(fm.idleTimeout, func() { cancel(errStalled) })
+	defer idle.Stop()
+	stalled := func(err error) error {
+		if context.Cause(ctx) == errStalled {
+			return errStalled
+		}
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fm.client.Do(req)
 	if err != nil {
-		return err
+		return stalled(err)
 	}
 	defer resp.Body.Close()
 
@@ -645,6 +681,7 @@ func (fm *FetchManager) downloadFile(ctx context.Context, url, dest string) erro
 	lastPercent := -1
 
 	for {
+		idle.Reset(fm.idleTimeout)
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			nw, writeErr := out.Write(buf[:n])
@@ -668,8 +705,11 @@ func (fm *FetchManager) downloadFile(ctx context.Context, url, dest string) erro
 			break
 		}
 		if readErr != nil {
-			return readErr
+			return stalled(readErr)
 		}
+	}
+	if err := out.Close(); err != nil {
+		return err
 	}
 
 	util.LogProgress("Download complete: %s", filepath.Base(dest))
