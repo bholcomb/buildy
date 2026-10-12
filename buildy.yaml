@@ -12,6 +12,12 @@ variables:
   import_env_vars:
     - name: BUILDY_CACHE_DIR
       default: ".buildy_cache"
+    # The build's time and commit, from the environment (buildy runs go without a shell):
+    #   BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) GIT_COMMIT=$(git rev-parse --short HEAD) buildy -r
+    - name: BUILD_TIME
+      default: unknown
+    - name: GIT_COMMIT
+      default: unknown
 
 environment:
   configurations:
@@ -25,11 +31,11 @@ targets:
     - name: buildy
       language: go
       path: "src"
-      build_tags: []
       ldflags:
-        - -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        - -X main.GitCommit=$(git rev-parse --short HEAD)
+        - -X main.BuildTime=${BUILD_TIME}
+        - -X main.GitCommit=${GIT_COMMIT}
         - -X main.BuildConfig=${config}
+        - release: [-s, -w]
 
 # Note: artifacts.copy is handled by bootstrap.sh to avoid "text file busy"
 # when buildy builds itself
