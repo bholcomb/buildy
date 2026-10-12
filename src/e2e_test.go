@@ -136,14 +136,28 @@ func fixtureUnder(t *testing.T, name, parent string) string {
 	return dst
 }
 
+// buildyCommand is buildy run in dir as a shell runs it, with extra environment variables (NAME=value).
+func buildyCommand(t *testing.T, dir string, env []string, args ...string) *exec.Cmd {
+	t.Helper()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(buildyBinary, args...)
+	cmd.Dir = abs
+	// A shell sets PWD to the directory, and buildy's current directory is PWD's spelling of it
+	// (os.Getwd): the test's own PWD would make it the path with symlinks resolved, which differs
+	// where the temporary directory's path goes through one (macOS's /var is /private/var). A
+	// fixture is not a VCS checkout: a stray .git above the temporary directory mustn't break go
+	// build.
+	cmd.Env = append(append(os.Environ(), "PWD="+abs, "GOFLAGS=-buildvcs=false"), env...)
+	return cmd
+}
+
 // buildy runs buildy in dir and returns its combined output and error.
 func buildy(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.Command(buildyBinary, args...)
-	cmd.Dir = dir
-	// A fixture is not a VCS checkout; don't let a stray .git above the temp dir break go build
-	cmd.Env = append(os.Environ(), "GOFLAGS=-buildvcs=false")
-	out, err := cmd.CombinedOutput()
+	out, err := buildyCommand(t, dir, nil, args...).CombinedOutput()
 	return string(out), err
 }
 
@@ -857,10 +871,7 @@ targets:
 // buildyEnv runs buildy in dir with extra environment variables, and fails the test if it fails.
 func buildyEnv(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(buildyBinary, args...)
-	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), "GOFLAGS=-buildvcs=false"), env...)
-	out, err := cmd.CombinedOutput()
+	out, err := buildyCommand(t, dir, env, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("buildy %s in %s failed: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
@@ -988,8 +999,7 @@ func (b *lockedBuffer) String() string {
 func interrupt(t *testing.T, dir string, ready func(output string) bool, args ...string) (int, string) {
 	t.Helper()
 	var output lockedBuffer
-	cmd := exec.Command(buildyBinary, args...)
-	cmd.Dir = dir
+	cmd := buildyCommand(t, dir, nil, args...)
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
