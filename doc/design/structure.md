@@ -117,8 +117,7 @@ helpers, `NewToolchainManager` and `NewBuildTemplateEngine` (single-directory wr
 template engine's unused list of earlier tasks and parameters, the command builder's tool matcher,
 and the path resolver's workspace root. `prependMkdir`, the `ResolveSources*` wrappers,
 `ParseSourceEntries` and the `CacheEntry` platform fields had gone in earlier phases.
-`golang.org/x/tools/cmd/deadcode` (with and without tests) now reports only
-`BuildSystemManager.LoadFilesystemSystems`, kept on purpose (below).
+`golang.org/x/tools/cmd/deadcode` (with and without tests) now reports nothing.
 
 Kept, undecided: `LoadFilesystemSystems` and the documented `buildy_config/build_systems/` (not
 loaded), and the Go and Rust tools' `supports` flags (`build_tags`, `features`, ...), documented
