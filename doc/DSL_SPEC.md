@@ -1762,20 +1762,6 @@ give `-framework` `Cocoa`. A flag that isn't set has its default (`-D`, `-I`, `-
 `-l`, `"-framework "`); one set to `""` is no flag (MSVC: `lib_flag: ""` with `lib_suffix: ".lib"`
 gives `glfw3.lib`).
 
-**Go/Rust supports** (descriptive: the tool's `command_params` do the work, buildy doesn't read
-these):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `build_tags` | bool | Supports build tags |
-| `build_tags_flag` | string | Flag for build tags (e.g., `-tags`) |
-| `ldflags` | bool | Supports linker flags |
-| `ldflags_flag` | string | Flag for ldflags |
-| `features` | bool | Supports cargo features |
-| `features_flag` | string | Flag for features |
-| `buildmode` | bool | Supports Go buildmode |
-| `buildmode_flag` | string | Flag for buildmode |
-
 ### Command Syntax
 
 A tool's command is a template that buildy splits into words when it loads the toolchain, and
@@ -1854,53 +1840,50 @@ tools and MSVC declares `msvc`; the macOS `ar` reads no response files.
 
 ### Data-Driven Command Parameters
 
-For tools with `action: build` (like Go and Rust), command parameters can be defined declaratively using the `command_params` section. This eliminates hardcoded language-specific logic.
+A `build` tool (Go, Rust) gets a target's options through `command_params`: each parameter fills
+the placeholder of its name with arguments. The built-in Go toolchains:
 
 ```yaml
 tools:
   go_build:
     action: build
-    command: "go build ${buildmode} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
-    
+    command: "go build ${buildmode} ${flags} -o ${output} ${build_tags} ${ldflags} ${gcflags} ${input}"
+    flags:
+      common: []
+      debug: []
+      release: ["-trimpath"]
     command_params:
       buildmode:
         sources: ["tool_params.buildmode", "item.buildmode"]
         format: "-buildmode=${value}"
-        optional: true
       build_tags:
         sources: ["tool_params.build_tags", "item.build_tags"]
         format: "-tags ${value}"
         join: ","
-        optional: true
       ldflags:
         sources: ["tool_params.ldflags", "item.ldflags"]
-        format: "-ldflags \"${value}\""
-        join: " "
-        resolve_variables: true
-        optional: true
+        format: "-ldflags=${value}"
       gcflags:
-        sources: ["tool_params.gcflags", "tool.flags.${config}"]
+        sources: ["tool_params.gcflags", "item.gcflags"]
         format: "-gcflags=${value}"
-        optional: true
 ```
 
-A parameter gives its placeholder arguments: its `format` is a [command template](#command-syntax)
-whose only placeholder is `${value}`, the values joined with `join`. `"-tags ${value}"` is two
-arguments, `-tags` and `a,b`; `-ldflags "${value}"` is `-ldflags` and the joined value as one
-argument, spaces and all. Without a `format` the value is one argument; without a value, the
-parameter gives none.
+A parameter takes the values of its first source that has any, joins them with `join` (default a
+space) into one value, and gives the arguments of its `format`, a [command template](#command-syntax)
+whose only placeholder is `${value}`: `"-tags ${value}"` is two arguments, `-tags` and `a,b`;
+`"-ldflags=${value}"` is one, spaces and all. Without a `format` the value is one argument; with no
+value (and no `default`), the parameter gives no arguments. Values are used as they are: a target's
+were resolved (variables, filters) when it was loaded.
 
 #### Command Parameter Fields
 
 | Field | Description |
 |-------|-------------|
-| `sources` | List of locations to search for the value (first match wins) |
+| `sources` | Where to look for the value, in order; the first with a value wins (required) |
 | `format` | The arguments, a command template with `${value}` |
-| `join` | Separator for array values (default: space); the joined value is one argument |
-| `optional` | If true, empty values produce empty string (not an error) |
-| `match` | Only use value if it matches this string |
-| `default` | Value when no source gives one, or `match` matches nothing (used as is) |
-| `resolve_variables` | Resolve `${var}` references in the value |
+| `join` | Separator between a list's values (default: a space); the joined value is one `${value}` |
+| `match` | Keep only the values equal to this (the Rust toolchains find `--release` in the configuration's flags) |
+| `default` | The value when no source gives one, or `match` matches nothing (used as is, without `format`) |
 
 #### Source Paths
 
@@ -1908,8 +1891,8 @@ Sources are dot-separated paths into the build context:
 
 | Path | Description |
 |------|-------------|
-| `tool_params.X` | Parameter passed via template's `tool_params` |
-| `item.X` | Field from the target configuration |
+| `tool_params.X` | A parameter the template's step passes (the built-in Go library templates pass `buildmode`, the Rust library templates `crate_type`) |
+| `item.X` | The target's key `X` ([Go and Rust target keys](#go-and-rust-target-keys)), or `name` |
 | `tool.flags.${config}` | Tool flags for current configuration (debug/release) |
 
 The parameters of a `build` tool are variables of the template step's `output` path too: the Rust

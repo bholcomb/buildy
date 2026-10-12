@@ -29,33 +29,19 @@ toolchain:
         common: []
         debug: []
         release: ["-trimpath"]
-      
+
+      # The target's options (build_tags, ldflags, gcflags, buildmode), each as go build takes it
       command_params:
         buildmode:
           sources: ["tool_params.buildmode", "item.buildmode"]
           format: "-buildmode=${value}"
-          optional: true
         build_tags:
           sources: ["tool_params.build_tags", "item.build_tags"]
           format: "-tags ${value}"
           join: ","
-          optional: true
         ldflags:
           sources: ["tool_params.ldflags", "item.ldflags"]
-          format: "-ldflags \"${value}\""
-          join: " "
-          resolve_variables: true
-          optional: true
+          format: "-ldflags=${value}"
         gcflags:
           sources: ["tool_params.gcflags", "item.gcflags"]
           format: "-gcflags=${value}"
-          optional: true
-      
-      
-      supports:
-        build_tags: true
-        build_tags_flag: "-tags"
-        ldflags: true
-        ldflags_flag: "-ldflags"
-        buildmode: true
-        buildmode_flag: "-buildmode"

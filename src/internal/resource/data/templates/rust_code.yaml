@@ -29,9 +29,6 @@ templates:
         output: "${output_dir}/cargo/${cargo_triple_dir}${profile}/${bin_name}${exe_ext}"
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
-        tool_params:
-          features: "${item.features}"
-          bin: "${item.bin}"
 
   # Rust static library: C-compatible static library (staticlib)
   # Use this for linking into C/C++ projects
@@ -57,7 +54,6 @@ templates:
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:
-          features: "${item.features}"
           crate_type: "staticlib"
 
   # Rust shared library: C-compatible dynamic library (cdylib)
@@ -84,5 +80,4 @@ templates:
         inputs: ["${item.path}"]
         working_dir: "${item.path}"
         tool_params:
-          features: "${item.features}"
           crate_type: "cdylib"

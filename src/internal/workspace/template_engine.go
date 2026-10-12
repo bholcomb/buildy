@@ -656,9 +656,7 @@ func (bte *BuildTemplateEngine) expandBuildStep(
 	}
 
 	// Command parameters are variables of the output path too (Cargo's ${profile}, ${bin_name})
-	params, err := resource.ResolveCommandParams(tool, toolParams, itemConfig, configuration, func(value string) (string, error) {
-		return resolveStrict(sc.VarEnv, value, "a command parameter of tool "+tool.Name)
-	})
+	params, err := resource.ResolveCommandParams(tool, toolParams, itemConfig, configuration)
 	if err != nil {
 		return nil, err
 	}

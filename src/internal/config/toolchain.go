@@ -156,17 +156,6 @@ type Supports struct {
 	Frameworks    bool            `yaml:"frameworks" json:"frameworks"`
 	FrameworkFlag *string         `yaml:"framework_flag" json:"framework_flag"`
 	Implib        bool            `yaml:"implib" json:"implib"`
-
-	// Documented for Go and Rust build tools. Their command_params do the work; buildy doesn't
-	// read these.
-	BuildTags     bool   `yaml:"build_tags" json:"build_tags"`
-	BuildTagsFlag string `yaml:"build_tags_flag" json:"build_tags_flag"`
-	Ldflags       bool   `yaml:"ldflags" json:"ldflags"`
-	LdflagsFlag   string `yaml:"ldflags_flag" json:"ldflags_flag"`
-	Features      bool   `yaml:"features" json:"features"`
-	FeaturesFlag  string `yaml:"features_flag" json:"features_flag"`
-	Buildmode     bool   `yaml:"buildmode" json:"buildmode"`
-	BuildmodeFlag string `yaml:"buildmode_flag" json:"buildmode_flag"`
 }
 
 // CommandParam defines how a build tool's command placeholder is filled (Go and Rust).
@@ -179,12 +168,8 @@ type CommandParam struct {
 	Format CommandTemplate `yaml:"format" json:"format"`
 	// Join separates a list's values (default " "): the joined value is one argument
 	Join string `yaml:"join" json:"join"`
-	// ResolveVariables resolves ${...} in the value
-	ResolveVariables bool `yaml:"resolve_variables" json:"resolve_variables"`
 	// Match keeps only list values equal to it (e.g. "--release" from the flags)
 	Match string `yaml:"match" json:"match"`
-	// Optional is documented; an empty value is always allowed
-	Optional bool `yaml:"optional" json:"optional"`
 	// Default is the value when no source has one, or Match matches nothing
 	Default string `yaml:"default" json:"default"`
 }

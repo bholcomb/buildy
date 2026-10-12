@@ -306,9 +306,8 @@ Toolchains use declarative `command_params` to define how command placeholders a
 command_params:
   build_tags:
     sources: ["tool_params.build_tags", "item.build_tags"]
-    format: "-tags ${value}"
+    format: "-tags ${value}"   # two arguments: -tags a,b
     join: ","
-    optional: true
 ```
 
 This eliminates hardcoded language-specific logic and makes the build system fully extensible via YAML.

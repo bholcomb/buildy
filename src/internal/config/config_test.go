@@ -376,3 +376,19 @@ func TestWorkspacePatternsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// The Go and Rust supports flags and the command parameters' optional and resolve_variables were
+// read by nothing; they are gone, and a toolchain that still has one fails to load.
+func TestRemovedBuildToolKeysAreErrors(t *testing.T) {
+	for _, key := range []string{
+		"supports: {build_tags: true}", "supports: {build_tags_flag: -tags}", "supports: {ldflags: true}",
+		"supports: {features_flag: --features}", "supports: {buildmode: true}",
+		"command_params: {tags: {sources: [item.build_tags], optional: true}}",
+		"command_params: {tags: {sources: [item.build_tags], resolve_variables: true}}",
+	} {
+		_, err := LoadToolchain([]byte("toolchain:\n  name: x\n  tools:\n    b:\n      action: build\n      command: \"go build\"\n      "+key+"\n"), "x.yaml")
+		if err == nil || !strings.Contains(err.Error(), "unknown key") {
+			t.Errorf("%s: %v, want an unknown key", key, err)
+		}
+	}
+}

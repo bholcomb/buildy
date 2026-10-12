@@ -152,17 +152,16 @@ func TestBuildCommandShellTool(t *testing.T) {
 	}
 }
 
-// Command parameters give arguments: "-ldflags ${value}"-style formats are several words, and a
-// quoted ${value} is one argument whatever it holds.
+// Command parameters give arguments: "-tags ${value}" is two words, and "-ldflags=${value}" one
+// argument whatever the joined value holds.
 func TestCommandParamsGiveArguments(t *testing.T) {
 	goTC := builtinToolchain(t, "go-linux")
 	tool := goTC.ToolsWithAction("build")[0]
-	params, err := ResolveCommandParams(tool, map[string]any{"ldflags": []string{"-s", "-X main.v=1 2"}, "build_tags": []string{"a", "b"}}, nil, "debug",
-		func(s string) (string, error) { return s, nil })
+	params, err := ResolveCommandParams(tool, nil, map[string]any{"ldflags": []string{"-s", "-X main.v=1 2"}, "build_tags": []string{"a", "b"}}, "debug")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := argv(params["ldflags"]); got != "-ldflags | -s -X main.v=1 2" {
+	if got := argv(params["ldflags"]); got != "-ldflags=-s -X main.v=1 2" {
 		t.Errorf("ldflags %s", got)
 	}
 	if got := argv(params["build_tags"]); got != "-tags | a,b" {

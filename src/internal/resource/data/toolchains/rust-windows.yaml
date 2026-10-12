@@ -31,7 +31,7 @@ toolchain:
   tools:
     cargo_build:
       action: build
-      command: "cargo build ${release_flag} ${lib_flag} --target x86_64-pc-windows-gnu --target-dir ${output_dir}/cargo ${features} ${bin_flag}"
+      command: "cargo build ${flags} ${lib_flag} --target x86_64-pc-windows-gnu --target-dir ${output_dir}/cargo ${features} ${bin_flag}"
       input_extensions: [".rs"]
       output_extension: ".exe"
       output_pattern: "${name}.exe"
@@ -39,7 +39,7 @@ toolchain:
         common: []
         debug: []
         release: ["--release"]
-      
+
       command_params:
         # Cargo's profile directory: release when the configuration's flags pass --release
         profile:
@@ -51,26 +51,13 @@ toolchain:
         bin_name:
           sources: ["tool_params.bin", "item.bin", "item.name"]
           format: "${value}"
-        release_flag:
-          sources: ["tool.flags.${config}"]
-          match: "--release"
-          format: "${value}"
-          optional: true
         lib_flag:
           sources: ["tool_params.crate_type"]
           format: "--lib"
-          optional: true
         features:
           sources: ["tool_params.features", "item.features"]
           format: "--features ${value}"
           join: ","
-          optional: true
         bin_flag:
           sources: ["tool_params.bin", "item.bin"]
           format: "--bin ${value}"
-          optional: true
-      
-      
-      supports:
-        features: true
-        features_flag: "--features"

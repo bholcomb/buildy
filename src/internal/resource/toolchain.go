@@ -20,11 +20,11 @@ type Tool = config.Tool
 //   - "item.*": the target
 //   - "tool.flags.*": the tool's flags ("tool.flags.${config}" for the configuration's)
 //
-// resolve resolves ${...} in the values of a parameter with resolve_variables.
-func ResolveCommandParams(t *Tool, toolParams, itemConfig map[string]any, configuration string, resolve func(string) (string, error)) (map[string][]string, error) {
+// The values are used as they are: a target's were resolved where it is loaded.
+func ResolveCommandParams(t *Tool, toolParams, itemConfig map[string]any, configuration string) (map[string][]string, error) {
 	result := make(map[string][]string, t.CommandParams.Len())
 	for _, name := range t.CommandParams.Keys {
-		args, err := resolveParamValue(t, t.CommandParams.Values[name], toolParams, itemConfig, configuration, resolve)
+		args, err := resolveParamValue(t, t.CommandParams.Values[name], toolParams, itemConfig, configuration)
 		if err != nil {
 			return nil, fmt.Errorf("command parameter %s of tool %s: %w", name, t.Name, err)
 		}
@@ -35,7 +35,7 @@ func ResolveCommandParams(t *Tool, toolParams, itemConfig map[string]any, config
 
 // resolveParamValue resolves a single command parameter to its arguments: none when it has no
 // value, else its format with ${value} filled in (the value itself without a format).
-func resolveParamValue(t *Tool, param *config.CommandParam, toolParams, itemConfig map[string]any, configuration string, resolve func(string) (string, error)) ([]string, error) {
+func resolveParamValue(t *Tool, param *config.CommandParam, toolParams, itemConfig map[string]any, configuration string) ([]string, error) {
 	values, ok := paramValues(t, param, toolParams, itemConfig, configuration)
 	if !ok {
 		if param.Default == "" {
@@ -49,12 +49,6 @@ func resolveParamValue(t *Tool, param *config.CommandParam, toolParams, itemConf
 		joinSep = " "
 	}
 	joined := strings.Join(values, joinSep)
-	if param.ResolveVariables {
-		var err error
-		if joined, err = resolve(joined); err != nil {
-			return nil, err
-		}
-	}
 	if param.Format.IsZero() {
 		return []string{joined}, nil
 	}
