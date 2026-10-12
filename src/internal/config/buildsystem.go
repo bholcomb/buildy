@@ -55,6 +55,9 @@ type Phase struct {
 	Command     CommandTemplate `yaml:"command,required"`
 	DefaultArgs []string        `yaml:"default_args"`
 	WorkingDir  CommandTemplate `yaml:"working_dir"` // default: the source directory
+	// Shell runs the command as a shell script (sh, or cmd.exe on a Windows host), for pipes,
+	// redirection and &&: each placeholder's values are quoted for the shell.
+	Shell bool `yaml:"shell"`
 }
 
 // BuildOutput says where a built dependency's headers and libraries are: each pattern that names
@@ -118,6 +121,9 @@ func LoadBuildSystem(data []byte, source string) (*BuildSystem, error) {
 			where := "build_system.phases." + name
 			checkPlaceholders(d, bs, phase.Command, where+".command", true)
 			checkPlaceholders(d, bs, phase.WorkingDir, where+".working_dir", false)
+			if phase.Shell && phase.Command.HasQuotedPlaceholder() {
+				d.errorf(nil, "'%s' runs its command with a shell (shell: true): write placeholders outside quotes, buildy quotes their values: %s", where, phase.Command.Text)
+			}
 			for i, arg := range phase.DefaultArgs {
 				if strings.Contains(arg, "${") {
 					d.errorf(nil, "'%s.default_args[%d]' is %q: default arguments are passed as written, placeholders go in the command", where, i, arg)

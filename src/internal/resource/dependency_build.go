@@ -128,17 +128,23 @@ func (b *dependencyBuild) command(name string) (util.Command, error) {
 		values[k] = v
 	}
 	values["args"] = append(append([]string{}, phase.DefaultArgs...), b.values["args"]...)
-	args, err := phase.Command.Expand(config.MapValues(values))
+	var command util.Command
+	var err error
+	if phase.Shell {
+		command.Script, err = phase.Command.ExpandShell(config.MapValues(values), util.ShellQuoter(b.exec))
+	} else {
+		command.Args, err = phase.Command.Expand(config.MapValues(values))
+	}
 	if err != nil {
 		return util.Command{}, fmt.Errorf("the %s phase of build system %s: %w", name, b.system.Name, err)
 	}
-	dir := b.sourceDir
+	command.Dir = b.sourceDir
 	if !phase.WorkingDir.IsZero() {
-		if dir, err = b.path(phase.WorkingDir); err != nil {
+		if command.Dir, err = b.path(phase.WorkingDir); err != nil {
 			return util.Command{}, fmt.Errorf("the working_dir of the %s phase of build system %s: %w", name, b.system.Name, err)
 		}
 	}
-	return util.Command{Args: args, Dir: dir}, nil
+	return command, nil
 }
 
 // path expands a path template of the build system: one word.

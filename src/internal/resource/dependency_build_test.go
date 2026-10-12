@@ -131,3 +131,41 @@ func TestBuildSystemPlaceholdersHaveValues(t *testing.T) {
 		}
 	}
 }
+
+// A shell phase is a script whose placeholder values are quoted for the shell, its working
+// directory expanded like any phase's.
+func TestShellPhase(t *testing.T) {
+	bs, err := config.LoadBuildSystem([]byte(`build_system:
+  name: plain
+  phases:
+    build:
+      shell: true
+      command: "./build.sh ${args} > ${build_dir}/log && cp lib.a ${install_dir}/"
+      working_dir: "${build_dir}"
+`), "plain.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newDependencyBuild("d", bs, "hash", "git abc", filepath.Join("/my src", "d"), "linux", "x86_64",
+		"debug", "", []string{"A=1 2"}, "", util.ExecSpec{}, nil)
+	command, err := b.command("build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := func(s string) string {
+		quoted, err := util.ShellQuoter(util.ExecSpec{})(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return quoted
+	}
+	want := "./build.sh " + q("A=1 2") + " > " + q(b.buildDir) + "/log && cp lib.a " + q(b.installDir) + "/"
+	if command.Script != want || command.Args != nil || command.Dir != b.buildDir {
+		t.Errorf("command = %+v\nwant script %s in %s", command, want, b.buildDir)
+	}
+
+	_, err = config.LoadBuildSystem([]byte("build_system:\n  name: x\n  phases: {build: {shell: true, command: 'make \"${build_dir}\"'}}\n"), "x.yaml")
+	if err == nil || !strings.Contains(err.Error(), "write placeholders outside quotes") {
+		t.Errorf("a quoted placeholder in a shell phase: err = %v", err)
+	}
+}
