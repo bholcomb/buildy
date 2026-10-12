@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -97,14 +96,4 @@ func (n *generatedNames) addArtifact(name, module string, outputs, taskIDs []str
 	}
 	n.artifacts[name] = artifact{module: module, outputs: outputs, taskIDs: taskIDs}
 	return nil
-}
-
-// targetNames returns the registered target names, sorted.
-func (n *generatedNames) targetNames() []string {
-	names := make([]string, 0, len(n.targets))
-	for name := range n.targets {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

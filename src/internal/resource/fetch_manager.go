@@ -280,8 +280,12 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 		}
 
 		if !archiveValid {
-			os.Remove(downloadPath)
-			os.Remove(metadataPath)
+			// A failed removal would use the bad archive below
+			for _, path := range []string{downloadPath, metadataPath} {
+				if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return "", fmt.Errorf("failed to remove the bad cached download: %w", err)
+				}
+			}
 		}
 	}
 
@@ -334,7 +338,9 @@ func (fm *FetchManager) FetchURL(ctx context.Context, url, checksum, dest string
 	}
 
 	// Drop the old marker first: if this run dies mid-extraction, dest stays unmarked.
-	os.Remove(extractionMarkerPath(dest))
+	if err := os.Remove(extractionMarkerPath(dest)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("failed to remove the extraction marker of %s: %w", dest, err)
+	}
 	if err := extractArchive(downloadPath, filename, dest); err != nil {
 		return "", fmt.Errorf("extraction of %s failed: %w", url, err)
 	}
