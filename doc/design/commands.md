@@ -181,6 +181,4 @@ cdylib library.
 - Whether a staging symlink is made is decided by the target platform, not the host. *The host
   decides since [phase 5](layout.md#symlinks).*
 - Go and Rust options on Windows and macOS are tested as argument lists; the end-to-end tests
-  are written to run there too, but have only run on Linux. A C target that includes the header a Go
-  library writes must be built after it (`--target lib` first): `depends_on.targets` orders a
-  target's link, not its compiles, and the header is no declared output.
+  are written to run there too, but have only run on Linux.

@@ -18,13 +18,14 @@ targets:
         - release: ["-X main.mode=release"]
       gcflags: ["-N", "-l"]
       buildmode: pie
-    # A C program linking the Go archive, and including the header go writes beside it (the
-    # test builds carc first: depends_on orders only the link, not the compile)
+    # A C program linking the Go archive, and including the header go writes beside it:
+    # depends_on runs its compile after the archive's build
     - name: cmain
       language: c
       sources: [cmain/main.c]
       include_dirs: ["${out_dir}/lib"]
       libs: [carc, pthread]
+      depends_on: [carc]
 
   static_libraries:
     - {name: carc, language: go, path: clib, build_tags: [tagged]}

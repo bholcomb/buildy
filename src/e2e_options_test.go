@@ -80,7 +80,10 @@ func TestE2EGoOptions(t *testing.T) {
 }
 
 // A Go static library is a c-archive a C program links, with the header go writes beside it and
-// its build tags; a shared library is a c-shared library that exports the functions.
+// its build tags; a shared library is a c-shared library that exports the functions. One build
+// from clean makes both: depends_on runs the C program's compile after the archive's build (it
+// ran only the link after it, and the compile failed or read a stale header). A change to the
+// header compiles the program again.
 func TestE2EGoLibraries(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping: a C program is linked against a Go archive on Linux only")
@@ -89,26 +92,34 @@ func TestE2EGoLibraries(t *testing.T) {
 	if cgo, err := exec.Command("go", "env", "CGO_ENABLED").Output(); err != nil || strings.TrimSpace(string(cgo)) != "1" {
 		t.Skipf("skipping: Go libraries need cgo, and go env CGO_ENABLED is %q (%v)", strings.TrimSpace(string(cgo)), err)
 	}
-	dir := fixture(t, "go_options")
-	lib := filepath.Join(outDir(dir, "debug"), "lib")
 
-	// The C program's compile includes the archive's header: build the libraries first
-	mustBuildy(t, dir, "--target", "carc", "--target", "cshared")
+	// Several times from clean, to catch a compile that races the archive's build
+	var dir string
+	for i := 0; i < 4; i++ {
+		dir = fixture(t, "go_options")
+		mustBuildy(t, dir, "-j", "8")
+		if got := output(t, filepath.Join(outDir(dir, "debug"), "bin", "cmain")); got != "5 2 1" {
+			t.Fatalf("build %d: cmain printed %q, want %q (Add(2, 3), Mode() with the tag 'tagged', LIB_LEVEL)", i+1, got, "5 2 1")
+		}
+	}
+	lib := filepath.Join(outDir(dir, "debug"), "lib")
 	for _, file := range []string{"libcarc.a", "libcarc.h", "libcshared.so", "libcshared.h"} {
 		if !exists(filepath.Join(lib, file)) {
 			t.Errorf("no %s in %s", file, lib)
 		}
 	}
-	mustBuildy(t, dir, "--target", "cmain")
-	if got := output(t, filepath.Join(outDir(dir, "debug"), "bin", "cmain")); got != "5 2" {
-		t.Errorf("cmain printed %q, want %q (Add(2, 3), and Mode() with the tag 'tagged')", got, "5 2")
-	}
-
 	symbols := exportedSymbols(t, filepath.Join(lib, "libcshared.so"))
 	for _, name := range []string{"Add", "Mode"} {
 		if !symbols[name] {
 			t.Errorf("libcshared.so doesn't export %s", name)
 		}
+	}
+
+	// The header changes, nothing the C program's compile declares: it runs again
+	editFile(t, filepath.Join(dir, "clib", "lib.go"), "#define LIB_LEVEL 1", "#define LIB_LEVEL 2")
+	mustBuildy(t, dir, "-j", "8")
+	if got := output(t, filepath.Join(outDir(dir, "debug"), "bin", "cmain")); got != "5 2 2" {
+		t.Errorf("after the header changed, cmain printed %q, want %q", got, "5 2 2")
 	}
 }
 
