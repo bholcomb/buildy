@@ -1306,7 +1306,7 @@ longer, the same way.
 | `--update-deps` | | Fetch the dependencies that can move again: git branches and tags, archives without a checksum |
 | `--clean` | | Remove what buildy built in the workspace (below), and nothing else |
 | `--clean-all` | | `--clean`, and the cache directory: fetched dependencies, their builds, the cache records |
-| `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for; fetch, build and run nothing |
+| `--dry-run` | `-d` | Plan only: generate and validate the tasks, list the dependency fetches and builds and the tasks in an order they can run in, each with what it waits for (and, with `-n 3`, its command); fetch, build and run nothing |
 | `--notify` | `-n` | Log level (1=error, 2=warn, 3=info, 4=verbose, 5=debug) |
 | `--compile-commands` | | Generate compile_commands.json |
 | `--define` | `-D` | Define variable (VAR=value) |

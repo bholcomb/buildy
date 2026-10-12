@@ -394,7 +394,7 @@ func runNative(task *workspace.BuildTask) error {
 }
 
 // printDryRun prints the plan: every task in an order that runs each after its dependencies, with
-// what it waits for. Nothing runs.
+// what it waits for, and at -n 3 its command. Nothing runs.
 func (te *TaskExecutor) printDryRun(graph *workspace.TaskGraph, order []string) {
 	util.LogProgress("Dry run: %d tasks, in an order they can run in (nothing is executed)", len(order))
 	for _, id := range order {
@@ -409,6 +409,9 @@ func (te *TaskExecutor) printDryRun(graph *workspace.TaskGraph, order []string) 
 			line += "  (after " + strings.Join(sorted, ", ") + ")"
 		}
 		util.LogProgress("%s", line)
+		if task.Native == nil {
+			util.LogInfo("      %s", task.Command)
+		}
 	}
 }
 

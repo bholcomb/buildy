@@ -303,6 +303,10 @@ func TestE2EGoOutsideImport(t *testing.T) {
 	dir := fixture(t, "go_outside_import")
 	app := filepath.Join(outDir(dir, "debug"), "bin", "app"+exeSuffix())
 
+	// A plan at -n 3 shows each task's command
+	if out := mustBuildy(t, dir, "--dry-run", "-n", "3"); !strings.Contains(out, "go build -o ") {
+		t.Errorf("the dry run doesn't show the go build command:\n%s", out)
+	}
 	mustBuildy(t, dir)
 	if got := run(t, app); got != "v1 m1" {
 		t.Fatalf("app printed %q, want %q", got, "v1 m1")
