@@ -49,6 +49,7 @@ type TaskGenerator struct {
 	TargetRegistry     *TargetRegistry
 	CurrentModule      string
 	Workspace          *Workspace
+	Outputs            *DeclaredOutputs // the outputs of every task generated so far, for file patterns
 
 	// Track generated targets for cross-module dependency resolution
 	generatedTargets map[string]string // target name -> link task ID
@@ -59,7 +60,6 @@ type TaskGenerator struct {
 	// Artifact tracking
 	artifactOutputs    map[string][]string // artifact name -> output paths
 	artifactTaskIDs    map[string][]string // artifact name -> task IDs
-	outputToTaskID     map[string]string   // output file path -> task ID
 	stagingTasksByName map[string][]string // staging name -> task IDs
 	stagingDestByName  map[string]string   // staging name -> destination directory
 }
@@ -85,7 +85,7 @@ func NewTaskGenerator(
 		generatedTargets:   make(map[string]string),
 		artifactOutputs:    make(map[string][]string),
 		artifactTaskIDs:    make(map[string][]string),
-		outputToTaskID:     make(map[string]string),
+		Outputs:            NewDeclaredOutputs(),
 		stagingTasksByName: make(map[string][]string),
 		stagingDestByName:  make(map[string]string),
 	}
@@ -266,10 +266,9 @@ func (tg *TaskGenerator) generateTargetTasks(
 		}
 	}
 
-	// A target that depends on artifacts (generated sources and headers) sees their outputs as
-	// virtual files for glob matching, and every one of its tasks, compiles included, runs after
-	// the tasks that produce them.
-	tg.PathResolver.ClearVirtualFiles()
+	// A target that depends on artifacts (generated sources and headers) runs every one of its
+	// tasks, compiles included, after the tasks that produce them: a header is no declared input.
+	// (Its source patterns match generated sources whether or not it names their artifact.)
 	var artifactTaskIDs []string
 	for _, artifactName := range target.DependsOn.Artifacts {
 		taskIDs, exists := tg.artifactTaskIDs[artifactName]
@@ -278,9 +277,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 				where, artifactName)
 		}
 		artifactTaskIDs = append(artifactTaskIDs, taskIDs...)
-		outputs := tg.artifactOutputs[artifactName]
-		tg.PathResolver.AddVirtualFiles(outputs)
-		util.LogInfo("Target depends on artifact '%s': added %d virtual files for glob matching", artifactName, len(outputs))
 	}
 
 	// The template's view of the target: ${item.X}
@@ -492,9 +488,6 @@ func (tg *TaskGenerator) registerTarget(name string, tasks []*BuildTask) {
 		outputPath = targetTask.Outputs[0]
 	}
 	globalTaskRegistry.RegisterTargetWithOutput(name, targetTask.TaskID, tg.CurrentModule, outputPath)
-	if len(targetTask.Outputs) > 0 {
-		globalTaskRegistry.RegisterTargetOutputs(targetTask.TaskID, targetTask.Outputs)
-	}
 	util.LogInfo("Registered target '%s' -> task '%s' (output: %s)", name, targetTask.TaskID, outputPath)
 }
 
@@ -524,11 +517,13 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 		return nil, err
 	}
 	tasks = append(tasks, generateTasks...)
+	tg.Outputs.Add(generateTasks...)
 	transformTasks, err := tg.generateTransformTasks(file, outputDir)
 	if err != nil {
 		return nil, err
 	}
 	tasks = append(tasks, transformTasks...)
+	tg.Outputs.Add(transformTasks...)
 
 	var overrides *config.Targets
 	if p := file.Platforms[tg.Platform]; p != nil {
@@ -549,39 +544,49 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 				return nil, err
 			}
 			tasks = append(tasks, targetTasks...)
+			tg.Outputs.Add(targetTasks...)
 		}
 	}
 
 	return tasks, nil
 }
 
-// GeneratePackagingTasks generates a module's copy artifacts, staging and install tasks, once
-// every module's targets exist. existing are the module's tasks from GenerateTargetTasks.
-func (tg *TaskGenerator) GeneratePackagingTasks(file *config.File, existing []*BuildTask) ([]*BuildTask, error) {
-	tasks := []*BuildTask{}
-
-	copyTasks, err := tg.generateArtifactCopyTasks(file.Artifacts.Copy, tg.outputDir)
+// GenerateCopyTasks generates a module's copy artifacts, once every module's targets exist. Every
+// module's copies are generated before any staging, whose patterns may name what they copy.
+func (tg *TaskGenerator) GenerateCopyTasks(file *config.File) ([]*BuildTask, error) {
+	tasks, err := tg.generateArtifactCopyTasks(file.Artifacts.Copy, tg.outputDir)
 	if err != nil {
 		return nil, err
 	}
-	tasks = append(tasks, copyTasks...)
+	tg.Outputs.Add(tasks...)
+	return tasks, nil
+}
 
-	if file.Staging != nil {
-		stagingTasks, err := tg.generateStagingTasks(file.Staging, tg.outputDir)
+// GenerateStagingTasks generates a module's staging and install tasks, once every module's
+// targets and copies exist.
+func (tg *TaskGenerator) GenerateStagingTasks(file *config.File) ([]*BuildTask, error) {
+	return tg.generateStagingAndInstall(file.Staging, file.Install, file.Project, tg.outputDir)
+}
+
+// generateStagingAndInstall generates a staging area's tasks, then the installs that package it.
+func (tg *TaskGenerator) generateStagingAndInstall(staging *config.Staging, installs []*config.Install, project *config.Project, outputDir string) ([]*BuildTask, error) {
+	var tasks []*BuildTask
+	if staging != nil {
+		stagingTasks, err := tg.generateStagingTasks(staging, outputDir)
 		if err != nil {
 			return nil, err
 		}
+		tg.Outputs.Add(stagingTasks...)
 		tasks = append(tasks, stagingTasks...)
 	}
-
-	if len(file.Install) > 0 {
-		installTasks, err := tg.generateInstallTasks(file.Install, file.Project, tg.outputDir)
+	if len(installs) > 0 {
+		installTasks, err := tg.generateInstallTasks(installs, project, outputDir)
 		if err != nil {
 			return nil, err
 		}
+		tg.Outputs.Add(installTasks...)
 		tasks = append(tasks, installTasks...)
 	}
-
 	return tasks, nil
 }
 
@@ -672,6 +677,25 @@ func (tg *TaskGenerator) registerArtifact(name string, outputs, taskIDs []string
 	return globalTaskRegistry.RegisterArtifact(name, tg.moduleName(), outputs, taskIDs)
 }
 
+// files expands a file pattern, relative to the module directory: the files on disk outside the
+// build's output directories, and the outputs of the tasks generated so far (DeclaredOutputs).
+// A pattern into an output directory that names no output is an error: it would name nothing on
+// a clean build.
+func (tg *TaskGenerator) files(pattern string) (util.Glob, []string, error) {
+	glob, err := util.ParseGlob(tg.moduleDir(), pattern)
+	if err != nil {
+		return glob, nil, err
+	}
+	files, outputDir, err := tg.Outputs.Files(glob)
+	if err != nil {
+		return glob, nil, err
+	}
+	if len(files) == 0 && outputDir != "" {
+		return glob, nil, noOutputMatches(glob, outputDir)
+	}
+	return glob, files, nil
+}
+
 // globInputs expands input patterns (relative to the module directory), in order.
 func (tg *TaskGenerator) globInputs(patterns []string, what string) ([]string, error) {
 	var files []string
@@ -680,7 +704,7 @@ func (tg *TaskGenerator) globInputs(patterns []string, what string) ([]string, e
 		if err != nil {
 			return nil, err
 		}
-		matches, err := util.GlobFiles(tg.moduleDir(), resolved)
+		_, matches, err := tg.files(resolved)
 		if err != nil {
 			return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 		}
@@ -785,7 +809,6 @@ func (tg *TaskGenerator) generateTransformTasks(file *config.File, outputDir str
 			tasks = append(tasks, &task)
 			outputs = append(outputs, output)
 			taskIDs = append(taskIDs, taskID)
-			tg.outputToTaskID[output] = taskID
 			util.LogInfo("Generated transform task: %s -> %s", inputFile, output)
 		}
 		if err := tg.registerArtifact(t.Name, outputs, taskIDs); err != nil {
@@ -879,9 +902,6 @@ func (tg *TaskGenerator) generateGenerateTasks(file *config.File, outputDir stri
 			tasks = append(tasks, &task)
 			outputs = append(outputs, resolvedOutputs...)
 			taskIDs = append(taskIDs, taskID)
-			for _, outputPath := range resolvedOutputs {
-				tg.outputToTaskID[outputPath] = taskID
-			}
 			util.LogInfo("Generated codegen task: %s -> %v", inputFile, resolvedOutputs)
 		}
 		if err := tg.registerArtifact(g.Name, outputs, taskIDs); err != nil {
@@ -942,7 +962,6 @@ func (tg *TaskGenerator) generateFromTemplate(g *config.Generate, outputDir, gen
 	if err := tg.registerArtifact(g.Name, []string{outputPath}, []string{taskID}); err != nil {
 		return nil, err
 	}
-	tg.outputToTaskID[outputPath] = taskID
 	util.LogInfo("Generated template task: %s -> %s", templatePath, outputPath)
 	return &task, nil
 }
@@ -1065,26 +1084,18 @@ func (tg *TaskGenerator) processStagingContents(
 			if err != nil {
 				return nil, err
 			}
-			glob, err := util.ParseGlob(tg.moduleDir(), resolved)
+			// A plain path outside the output directories is staged as named (a missing file fails
+			// the staging task); one inside must be an output of the build. The staging task runs
+			// after the task that produces its file (a producer edge).
+			glob, matches, err := tg.files(resolved)
 			if err != nil {
 				return nil, fmt.Errorf("staging folder '%s' in module %s: %w", folderName, tg.moduleName(), err)
 			}
-			matches := []string{glob.Base}
-			if !glob.Literal() {
-				if matches, err = glob.Files(); err != nil {
-					return nil, fmt.Errorf("staging folder '%s' in module %s: %w", folderName, tg.moduleName(), err)
-				}
+			if glob.Literal() {
+				matches = []string{glob.Base}
 			}
 			for _, match := range matches {
-				match = filepath.Clean(match)
-				// A file a task produces depends on that task
-				var deps []string
-				if taskID := tg.outputToTaskID[match]; taskID != "" {
-					deps = []string{taskID}
-				} else if taskID, ok := globalTaskRegistry.GetTaskIDByOutputPath(match); ok {
-					deps = []string{taskID}
-				}
-				tasks = append(tasks, tg.createSymlinkOrCopyTask(match, filepath.Join(folderPath, filepath.Base(match)), useSymlink, deps))
+				tasks = append(tasks, tg.createSymlinkOrCopyTask(match, filepath.Join(folderPath, filepath.Base(match)), useSymlink, nil))
 			}
 		}
 
@@ -1246,7 +1257,7 @@ func (tg *TaskGenerator) generateArtifactCopyTasks(copies []*config.Copy, output
 				if err != nil {
 					return nil, err
 				}
-				files, err := util.GlobFiles(tg.moduleDir(), pattern)
+				_, files, err := tg.files(pattern)
 				if err != nil {
 					return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 				}

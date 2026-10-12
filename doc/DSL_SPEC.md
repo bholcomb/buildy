@@ -973,6 +973,17 @@ directories; its files come sorted by path. On Linux and macOS a backslash escap
 character (`\*`); on Windows it is a path separator. A path without any of these characters names
 one file.
 
+**Patterns over build outputs.** A pattern names the files on disk outside the build's
+[output directory](#output-directory), and the outputs the build's tasks declare, wherever they
+are: what targets link, what generates and transforms write, what copies and staging produce. So
+`${out_dir}/bin/*` names the same files on a clean build as on the next one (the graph is known
+before anything runs), a file a previous build left in the output directory is never picked up,
+and the task that reads a match runs after the task that produces it. In the output directory a
+pattern, or a plain path, that names no output of the build is an error. Outputs are known in
+generation order: every module's generates, transforms and targets (modules in path order), then
+every module's copies, then every module's staging and install, then the root config's; a source
+pattern sees its own module's generated files.
+
 **Optional patterns (may match zero files):**
 
 For patterns that may legitimately match zero files (e.g., platform-specific sources, optional plugin directories), use the object form with `optional: true`:
@@ -1164,7 +1175,7 @@ These are **intentionally separate** concepts:
 | `deps` | External dependencies (provide include paths, lib paths, libs, defines) | `[glfw3, zlib]` |
 | `libs` | Internal project libraries to link against (implies build order) | `[engine_core, engine_renderer]` |
 | `depends_on.targets` | Build ordering only (no linking) - for code generators, tools, etc. | `[proto_gen, asset_compiler]` |
-| `depends_on.artifacts` | Build ordering + virtual files for globs | Code generators (protobuf, etc.) |
+| `depends_on.artifacts` | Build ordering (generated headers) | Code generators (protobuf, etc.) |
 
 Target names are unique across the workspace: `libs` and `depends_on.targets` refer to targets by
 name, and every module's executables and libraries share the output directory's `bin/` and `lib/`.
@@ -1217,16 +1228,16 @@ targets:
       language: cpp
       sources:
         - "src/*.cpp"
-        - "${gen_dir}/*.pb.cc"    # Globs can match artifact outputs
+        - "${gen_dir}/*.pb.cc"    # Matches the artifact's declared outputs
       depends_on:
-        artifacts: ["protos"]      # Ensures protoc runs first + enables glob matching
+        artifacts: ["protos"]      # protoc runs before every task of my_app
 ```
 
-When a target declares `depends_on.artifacts`:
-1. The artifact tasks are added as build dependencies of every task of the target, compiles
-   included (artifact runs first)
-2. The artifact's `outputs` are registered as "virtual files"
-3. Source globs in the target can match these virtual files even though they don't exist yet
+Source patterns match the artifact's declared `outputs` even though they don't exist yet (see
+[patterns over build outputs](#file-patterns)), and a compile of a generated source runs after its
+generate. When a target declares `depends_on.artifacts`, the artifact's tasks also run before
+every other task of the target, compiles included: a compile can include a generated header it
+doesn't list.
 
 **Note:** Artifact dependencies work within a single module. For multi-module projects, the artifact and dependent target should be in the same module.
 

@@ -1,0 +1,28 @@
+# Patterns over build outputs (finding 1.9) name the build's declared outputs: the same files on a
+# clean build as on the next, and never a stale file in the output directory.
+project:
+  name: output_globs
+
+environment:
+  compile:
+    c_standard: "c11"
+
+targets:
+  executables:
+    - name: app
+      language: c
+      sources: ["main.c"]
+
+artifacts:
+  copy:
+    - name: bins
+      sources: ["${out_dir}/bin/*"]
+      destination: "${out_dir}/copied"
+
+staging:
+  name: pkg
+  contents:
+    - folder: bin
+      files: ["${out_dir}/bin/*"]
+    - folder: copied
+      files: ["${out_dir}/copied/**"]

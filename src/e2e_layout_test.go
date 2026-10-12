@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,36 @@ func TestE2ERootOutputReachesModules(t *testing.T) {
 	}
 	if exists(filepath.Join(dir, "build")) {
 		t.Errorf("build/ exists: a module ignored the root's output.base_dir")
+	}
+}
+
+// Finding 1.9: staging and copy patterns over build outputs name the build's declared outputs, on
+// a clean build too, and never a stale file in the output directory. A pattern into the output
+// directory that names no output fails before anything runs.
+func TestE2EPatternsOverOutputs(t *testing.T) {
+	needCpp(t)
+	needTools(t, "gcc")
+	dir := fixture(t, "output_globs")
+	out := outDir(dir, "debug")
+	// A file a previous build (of another config) left in bin/
+	writeFile(t, filepath.Join(out, "bin", "stale"), "stale")
+
+	mustBuildy(t, dir)
+	if got, want := filesUnder(t, filepath.Join(out, "staging")), []string{"bin/app", "copied/app"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a clean build staged %v, want %v", got, want)
+	}
+	if got, want := filesUnder(t, filepath.Join(out, "copied")), []string{"app"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a clean build copied %v, want %v", got, want)
+	}
+
+	config := filepath.Join(dir, "buildy.yaml")
+	data, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, config, string(data)+"    - folder: lib\n      files: [\"${out_dir}/lib/*.so\"]\n")
+	out2 := mustFailBuildy(t, dir, "--dry-run")
+	if !strings.Contains(out2, "matches no output of the build") || !strings.Contains(out2, "lib/*.so") {
+		t.Errorf("a pattern into the output directory that names nothing doesn't fail as it should:\n%s", tail(out2, 10))
 	}
 }

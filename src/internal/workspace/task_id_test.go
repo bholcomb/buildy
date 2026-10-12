@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -78,47 +77,10 @@ func TestTaskIDRegistryTargetResolution(t *testing.T) {
 	}
 }
 
-// TestTaskIDRegistryOutputPathLookup tests looking up tasks by output path.
-func TestTaskIDRegistryOutputPathLookup(t *testing.T) {
-	registry := NewTaskIDRegistry()
-
-	// Register target with multiple outputs (DLL + import library)
-	registry.RegisterTargetWithOutput("mylib", "link_mylib_001__src", "src", "/build/bin/mylib.dll")
-	registry.RegisterTargetOutputs("link_mylib_001__src", []string{
-		"/build/bin/mylib.dll",
-		"/build/lib/mylib.lib",
-	})
-
-	// Primary output should resolve
-	taskID, ok := registry.GetTaskIDByOutputPath("/build/bin/mylib.dll")
-	if !ok {
-		t.Error("Should find task by primary output path")
-	}
-	if taskID != "link_mylib_001__src" {
-		t.Errorf("Expected link_mylib_001__src, got %s", taskID)
-	}
-
-	// Secondary output (import library) should also resolve
-	taskID, ok = registry.GetTaskIDByOutputPath("/build/lib/mylib.lib")
-	if !ok {
-		t.Error("Should find task by secondary output path (import library)")
-	}
-	if taskID != "link_mylib_001__src" {
-		t.Errorf("Expected link_mylib_001__src for .lib, got %s", taskID)
-	}
-
-	// Unknown path should not resolve
-	_, ok = registry.GetTaskIDByOutputPath("/build/bin/unknown.exe")
-	if ok {
-		t.Error("Should not find task for unknown output path")
-	}
-}
-
 // TestTaskIDRegistryClear verifies the registry can be cleared.
 func TestTaskIDRegistryClear(t *testing.T) {
 	registry := NewTaskIDRegistry()
 	registry.RegisterTarget("target1", "task1", "mod1")
-	registry.RegisterTargetOutputs("task1", []string{"/out/file1"})
 
 	// Verify it's populated
 	_, ok := registry.GetLinkTaskID("target1")
@@ -133,11 +95,6 @@ func TestTaskIDRegistryClear(t *testing.T) {
 	_, ok = registry.GetLinkTaskID("target1")
 	if ok {
 		t.Error("Registry should be empty after Clear()")
-	}
-
-	_, ok = registry.GetTaskIDByOutputPath("/out/file1")
-	if ok {
-		t.Error("Output path mapping should be cleared")
 	}
 }
 
@@ -166,96 +123,3 @@ func TestTaskIDGeneratorSpecialCharacters(t *testing.T) {
 	}
 }
 
-// TestTaskIDRegistryOutputPathLookupCrossplatform verifies that output path lookups
-// work correctly regardless of path separator style. This is critical for staging
-// tasks that need to find which task produces a given file.
-func TestTaskIDRegistryOutputPathLookupCrossplatform(t *testing.T) {
-	registry := NewTaskIDRegistry()
-
-	// Register with a path using native separators (as would happen during task generation)
-	nativePath := filepath.Join("build", "platform", "bin", "myapp.exe")
-	registry.RegisterTargetWithOutput("myapp", "link_myapp_001", "src", nativePath)
-	registry.RegisterTargetOutputs("link_myapp_001", []string{nativePath})
-
-	// Lookup with the same native path should work
-	taskID, ok := registry.GetTaskIDByOutputPath(nativePath)
-	if !ok {
-		t.Errorf("Should find task by native path: %s", nativePath)
-	}
-	if taskID != "link_myapp_001" {
-		t.Errorf("Expected link_myapp_001, got %s", taskID)
-	}
-
-	// Lookup with forward slashes should also work (cross-platform compatibility)
-	forwardPath := "build/platform/bin/myapp.exe"
-	taskID, ok = registry.GetTaskIDByOutputPath(forwardPath)
-	if !ok {
-		t.Errorf("Should find task by forward-slash path: %s (registered as: %s)", forwardPath, nativePath)
-	}
-	if taskID != "link_myapp_001" {
-		t.Errorf("Expected link_myapp_001, got %s", taskID)
-	}
-}
-
-// TestTaskIDRegistryWindowsCaseInsensitive verifies that on Windows,
-// path lookups are case-insensitive.
-func TestTaskIDRegistryWindowsCaseInsensitive(t *testing.T) {
-	// Mock Windows behavior by setting the goos variable
-	oldGoos := goos
-	goos = "windows"
-	defer func() { goos = oldGoos }()
-
-	registry := NewTaskIDRegistry()
-
-	// Register with mixed case (using forward slashes which work on both platforms)
-	registry.RegisterTargetWithOutput("myapp", "link_myapp_001", "src", "C:/Build/Bin/MyApp.exe")
-	registry.RegisterTargetOutputs("link_myapp_001", []string{"C:/Build/Bin/MyApp.exe"})
-
-	// Lookup with different case should work on Windows
-	taskID, ok := registry.GetTaskIDByOutputPath("c:/build/bin/myapp.exe")
-	if !ok {
-		t.Error("Windows path lookup should be case-insensitive")
-	}
-	if taskID != "link_myapp_001" {
-		t.Errorf("Expected link_myapp_001, got %s", taskID)
-	}
-
-	// Also test with uppercase lookup
-	taskID, ok = registry.GetTaskIDByOutputPath("C:/BUILD/BIN/MYAPP.EXE")
-	if !ok {
-		t.Error("Windows path lookup should be case-insensitive (uppercase)")
-	}
-	if taskID != "link_myapp_001" {
-		t.Errorf("Expected link_myapp_001, got %s", taskID)
-	}
-}
-
-// TestTaskIDRegistryLinuxCaseSensitive verifies that on Linux,
-// path lookups are case-sensitive.
-func TestTaskIDRegistryLinuxCaseSensitive(t *testing.T) {
-	// Mock Linux behavior
-	oldGoos := goos
-	goos = "linux"
-	defer func() { goos = oldGoos }()
-
-	registry := NewTaskIDRegistry()
-
-	// Register with specific case
-	registry.RegisterTargetWithOutput("myapp", "link_myapp_001", "src", "/home/user/Build/Bin/MyApp")
-	registry.RegisterTargetOutputs("link_myapp_001", []string{"/home/user/Build/Bin/MyApp"})
-
-	// Exact case should work
-	taskID, ok := registry.GetTaskIDByOutputPath("/home/user/Build/Bin/MyApp")
-	if !ok {
-		t.Error("Exact case lookup should work")
-	}
-	if taskID != "link_myapp_001" {
-		t.Errorf("Expected link_myapp_001, got %s", taskID)
-	}
-
-	// Different case should NOT match on Linux
-	_, ok = registry.GetTaskIDByOutputPath("/home/user/build/bin/myapp")
-	if ok {
-		t.Error("Linux path lookup should be case-sensitive - different case should not match")
-	}
-}

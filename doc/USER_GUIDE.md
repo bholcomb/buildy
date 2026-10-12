@@ -278,7 +278,7 @@ defines. See [How Settings Merge](DSL_SPEC.md#how-settings-merge).
 
 ### Generated Sources
 
-For source files created by code generators (protobuf, etc.), use `depends_on.artifacts` to create a dependency on the artifact. Buildy will automatically include the artifact's outputs in your source globs, even though those files don't exist yet:
+For source files created by code generators (protobuf, etc.), list them with a pattern: source patterns match the outputs an artifact declares, even though those files don't exist yet. Use `depends_on.artifacts` so the generator also runs before the target's other compiles, which may include its headers:
 
 ```yaml
 artifacts:
@@ -295,22 +295,19 @@ targets:
       language: cpp
       sources:
         - "src/*.cpp"
-        - "${gen_dir}/*.pb.cc"  # Glob will match artifact outputs
+        - "${gen_dir}/*.pb.cc"  # Matches the artifact's declared outputs
       depends_on:
-        artifacts: ["protos"]   # Creates build dependency + enables glob matching
+        artifacts: ["protos"]   # protoc runs before every task of myapp
 ```
 
-When a target declares `depends_on.artifacts`:
-1. The artifact tasks run before every task of the target, compiles included (a compile can
-   include a generated header it doesn't list)
-2. The artifact's output files are added to the "virtual file" list
-3. Source globs in the target will match these virtual files
+When a target declares `depends_on.artifacts`, the artifact tasks run before every task of the
+target, compiles included (a compile can include a generated header it doesn't list).
 
 Naming an artifact the module doesn't define is an error. A task that reads another task's output
 (a compile of a generated source, a staging copy of a library) always runs after it, whether or
 not anything declares the dependency.
 
-This means you use regular globs for generated files - no need to list each file explicitly. The outputs declared in the artifact's `outputs` field determine what files are available for matching.
+This means you use regular patterns for generated files - no need to list each file explicitly. A pattern into the output directory (`${gen_dir}`, `${out_dir}`) names only what the build's tasks declare as outputs, never a file an earlier build left there; one that names nothing is an error. The same holds for copies and staging: `files: ["${out_dir}/bin/*"]` stages the build's binaries on a clean build too.
 
 **Note:** Artifact dependencies currently work within a single module. For multi-module projects, both the artifact and the dependent target should be in the same module.
 
@@ -945,9 +942,9 @@ targets:
       language: cpp
       sources:
         - "src/*.cpp"
-        - "${gen_dir}/*.pb.cc"   # Matches artifact outputs
+        - "${gen_dir}/*.pb.cc"   # Matches the artifact's declared outputs
       depends_on:
-        artifacts: ["protos"]    # Enables glob matching + build dependency
+        artifacts: ["protos"]    # protoc runs before every task of mylib
 ```
 
 ## Staging and Distribution

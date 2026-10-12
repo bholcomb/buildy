@@ -3,7 +3,6 @@ package workspace
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 
 	"buildy/internal/config"
 	"buildy/pkg/util"
@@ -13,29 +12,18 @@ import (
 type PathResolver struct {
 	ConfigFileDir string
 	WorkspaceRoot string
-	// VirtualFiles are files that don't exist yet but will be created by artifacts
-	// These are included in glob matching for targets that depend on artifacts
-	VirtualFiles []string
+	// Outputs are the outputs of the tasks generated so far, which source patterns match too
+	// (generated sources), and the output directories, where only they count
+	Outputs *DeclaredOutputs
 }
 
 // NewPathResolver creates a new PathResolver
-func NewPathResolver(configFileDir, workspaceRoot string) *PathResolver {
+func NewPathResolver(configFileDir, workspaceRoot string, outputs *DeclaredOutputs) *PathResolver {
 	return &PathResolver{
 		ConfigFileDir: configFileDir,
 		WorkspaceRoot: workspaceRoot,
-		VirtualFiles:  []string{},
+		Outputs:       outputs,
 	}
-}
-
-// AddVirtualFiles adds files that will be created by artifacts
-// These files don't exist yet but should be included in glob matching
-func (pr *PathResolver) AddVirtualFiles(files []string) {
-	pr.VirtualFiles = append(pr.VirtualFiles, files...)
-}
-
-// ClearVirtualFiles removes all virtual files
-func (pr *PathResolver) ClearVirtualFiles() {
-	pr.VirtualFiles = []string{}
 }
 
 // ResolveSources expands a target's source patterns, in order, to absolute files. A pattern that
@@ -53,8 +41,9 @@ func (pr *PathResolver) ResolveSources(sources []config.Source) ([]string, error
 }
 
 // expandGlob expands a pattern, relative to the config file directory, to a sorted list of
-// absolute files (util.Glob: ** is recursive). Returns an error if the pattern matches no files
-// and optional is false. Also includes virtual files (from artifact outputs) that match the pattern.
+// absolute files: those on disk outside the output directories, and the outputs of the tasks
+// generated so far (generated sources) it matches. Returns an error if the pattern matches no
+// files and optional is false.
 func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, error) {
 	if !filepath.IsAbs(pr.ConfigFileDir) {
 		panic(fmt.Sprintf("internal error: path resolver needs an absolute config directory, has %q", pr.ConfigFileDir))
@@ -63,42 +52,23 @@ func (pr *PathResolver) expandGlob(pattern string, optional bool) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	util.LogInfo("Expanding pattern '%s' as '%s'", pattern, glob)
-
-	results, err := glob.Files()
+	files, outputDir, err := pr.Outputs.Files(glob)
 	if err != nil {
 		return nil, err
 	}
-
-	// Also match virtual files (artifact outputs) against the pattern
-	for _, vf := range pr.VirtualFiles {
-		if glob.Match(vf) {
-			results = append(results, vf)
-		}
-	}
-
-	if len(results) == 0 {
+	if len(files) == 0 {
 		if optional {
 			util.LogInfo("Optional glob pattern '%s' matched no files (skipped)", pattern)
 			return []string{}, nil
 		}
+		if outputDir != "" {
+			return nil, fmt.Errorf("source pattern '%s': %w", pattern, noOutputMatches(glob, outputDir))
+		}
 		return nil, fmt.Errorf("glob pattern '%s' (resolved to '%s') matched no files. "+
 			"Use {pattern: \"%s\", optional: true} if this is intentional", pattern, glob, pattern)
 	}
-
-	absResults := []string{}
-	seen := make(map[string]bool) // deduplicate
-	for _, result := range results {
-		result = filepath.Clean(result)
-		if !seen[result] {
-			absResults = append(absResults, result)
-			seen[result] = true
-		}
-	}
-
-	sort.Strings(absResults)
-	util.LogInfo("Pattern '%s' matched %d files: %v", pattern, len(absResults), absResults)
-	return absResults, nil
+	util.LogInfo("Pattern '%s' matched %d files: %v", pattern, len(files), files)
+	return files, nil
 }
 
 // absolute resolves a path against the config file directory. Every path buildy derives from

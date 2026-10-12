@@ -31,7 +31,8 @@ type ConfigParser struct {
 	DependencyResolver *resource.DependencyResolver
 	TaskIDGen          *TaskIDGenerator
 	ConfigFileDir      string
-	CacheDir           string // ${cache_dir}
+	CacheDir           string           // ${cache_dir}
+	Outputs            *DeclaredOutputs // every output generated so far, for file patterns
 }
 
 // NewConfigParser creates a new ConfigParser
@@ -55,6 +56,7 @@ func NewConfigParser(
 		Workspace:          workspace,
 		DependencyResolver: dependencyResolver,
 		TaskIDGen:          NewTaskIDGenerator("workspace"),
+		Outputs:            NewDeclaredOutputs(),
 	}
 }
 
@@ -119,6 +121,7 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 
 	// Start from an empty task registry: it maps this generation's targets to their tasks
 	globalTaskRegistry.Clear()
+	cp.Outputs = NewDeclaredOutputs()
 
 	cp.TargetRegistry = NewTargetRegistry(cp.Workspace)
 	if err := cp.TargetRegistry.Initialize(); err != nil {
@@ -132,8 +135,8 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 	}
 	cp.VarEnv = rootVars
 
-	// Generate every module's targets, in a fixed order, then every module's packaging tasks
-	// (copies, staging, install), which may name targets of other modules
+	// Generate every module's targets, in a fixed order, then every module's copies, then every
+	// module's staging and install: each may name what the earlier ones produce, in any module
 	modulePaths := make([]string, 0, len(cp.Workspace.Modules))
 	for modulePath := range cp.Workspace.Modules {
 		modulePaths = append(modulePaths, modulePath)
@@ -154,15 +157,20 @@ func (cp *ConfigParser) GenerateWorkspaceTasks() ([]*BuildTask, error) {
 		modules = append(modules, generated{gen, file, moduleTasks})
 		allTasks = append(allTasks, moduleTasks...)
 	}
-	for i, modulePath := range modulePaths {
-		packaging, err := modules[i].gen.GeneratePackagingTasks(modules[i].file, modules[i].tasks)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+	for _, step := range []func(*TaskGenerator, *config.File) ([]*BuildTask, error){
+		(*TaskGenerator).GenerateCopyTasks,
+		(*TaskGenerator).GenerateStagingTasks,
+	} {
+		for i, modulePath := range modulePaths {
+			packaging, err := step(modules[i].gen, modules[i].file)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate tasks for module %s: %w", modulePath, err)
+			}
+			for _, task := range packaging {
+				task.Module = modulePath
+			}
+			allTasks = append(allTasks, packaging...)
 		}
-		for _, task := range packaging {
-			task.Module = modulePath
-		}
-		allTasks = append(allTasks, packaging...)
 	}
 
 	// Second pass: resolve cross-module dependencies (target names -> task IDs)
@@ -237,6 +245,7 @@ func (cp *ConfigParser) processModule(modulePath string, moduleInfo *ModuleInfo)
 	moduleParser := NewConfigParser(cp.buildContext(), cp.CLIDefines, cp.ToolchainManager, cp.DefaultToolchain,
 		cp.TemplateEngine, cp.Workspace, cp.DependencyResolver)
 	moduleParser.CacheDir = cp.CacheDir
+	moduleParser.Outputs = cp.Outputs
 	moduleParser.CurrentModule = modulePath
 	moduleParser.TargetRegistry = cp.TargetRegistry
 	moduleParser.TaskIDGen = NewTaskIDGenerator(modulePath)
@@ -284,29 +293,15 @@ func (cp *ConfigParser) generateWorkspaceLevelTasks() ([]*BuildTask, error) {
 	tg := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
 	tg.TaskIDGen = NewTaskIDGenerator("workspace")
-	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir)
+	cp.Outputs.AddDir(outputDir)
+	tg.Outputs = cp.Outputs
+	tg.PathResolver = NewPathResolver(cp.Workspace.RootDir, cp.Workspace.RootDir, cp.Outputs)
 	if cp.CurrentToolchain != nil {
 		if err := tg.SetToolchain(cp.CurrentToolchain); err != nil {
 			return nil, err
 		}
 	}
-
-	var tasks []*BuildTask
-	if root.Staging != nil {
-		stagingTasks, err := tg.generateStagingTasks(root.Staging, outputDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate staging tasks: %w", err)
-		}
-		tasks = append(tasks, stagingTasks...)
-	}
-	if len(root.Install) > 0 {
-		installTasks, err := tg.generateInstallTasks(root.Install, root.Project, outputDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate install tasks: %w", err)
-		}
-		tasks = append(tasks, installTasks...)
-	}
-	return tasks, nil
+	return tg.generateStagingAndInstall(root.Staging, root.Install, root.Project, outputDir)
 }
 
 // resolveCrossModuleDependencies resolves dependencies by target name, now that every module's
@@ -401,7 +396,8 @@ func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGen
 		cp.VarEnv.SetVariable("cache_dir", cp.CacheDir, "built-in")
 	}
 
-	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, root)
+	cp.Outputs.AddDir(outputDir)
+	cp.PathResolver = NewPathResolver(cp.ConfigFileDir, root, cp.Outputs)
 
 	taskGen := NewTaskGenerator(cp.Platform, cp.Architecture, cp.Configuration, cp.ToolchainManager, cp.TemplateEngine,
 		cp.DependencyResolver, cp.VarEnv, cp.Workspace)
@@ -412,6 +408,7 @@ func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGen
 	taskGen.TaskIDGen = cp.TaskIDGen
 	taskGen.CurrentModule = cp.CurrentModule
 	taskGen.TargetRegistry = cp.TargetRegistry
+	taskGen.Outputs = cp.Outputs
 
 	tasks, err := taskGen.GenerateTargetTasks(file, outputDir)
 	return tasks, taskGen, err
