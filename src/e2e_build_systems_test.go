@@ -7,6 +7,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -210,6 +211,52 @@ func TestE2EUserBuildSystemErrors(t *testing.T) {
 	out = mustFailBuildy(t, dir)
 	if !strings.Contains(out, other) || !strings.Contains(out, "unknown key 'build_system.phases.build.comand' (did you mean 'command'?)") {
 		t.Errorf("an unknown key:\n%s", out)
+	}
+}
+
+// Build systems are searched like toolchains: next to the executable (found from the PATH, not
+// the current directory), then each --add-data-dir, then the workspace, each replacing the
+// one before.
+func TestE2EBuildSystemSearchOrder(t *testing.T) {
+	bin := t.TempDir()
+	exe := filepath.Join(bin, "buildy"+exeSuffix())
+	data, err := os.ReadFile(buildyBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	define := func(dir, where string) string {
+		path := filepath.Join(dir, "plain.yaml")
+		writeFile(t, path, strings.Replace(plainSystem, "build.sh and a static library", where, 1))
+		return path
+	}
+	byExe := define(filepath.Join(bin, "data", "build_systems"), "exe")
+	extra := t.TempDir()
+	byData := define(filepath.Join(extra, "build_systems"), "data dir")
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "buildy.yaml"), "project:\n  name: order\n")
+	byWorkspace := define(filepath.Join(ws, "buildy_config", "build_systems"), "workspace")
+	// The current directory's data/ is not the executable's
+	writeFile(t, filepath.Join(ws, "data", "build_systems", "broken.yaml"), "not: a build system\n")
+
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command("buildy"+exeSuffix(), "-n", "3", "--add-data-dir", extra)
+	cmd.Dir = ws
+	outBytes, err := cmd.CombinedOutput()
+	out := string(outBytes)
+	if err != nil {
+		t.Fatalf("buildy: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"Loaded build system: plain - exe (" + byExe + ")",
+		"Build system 'plain' from " + byData + " replaces the one from " + byExe,
+		"Build system 'plain' from " + byWorkspace + " replaces the one from " + byData,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the output lacks %q:\n%s", want, out)
+		}
 	}
 }
 

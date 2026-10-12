@@ -48,11 +48,17 @@ func main() {
 	// 130; a second one exits at once
 	ctx := build.HandleInterrupts()
 
-	// Get the directory where the buildy executable is located
-	buildyDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-	if err != nil {
-		util.LogFatal("Failed to get buildy directory: %v", err)
+	// The directory of the buildy executable (symlinks resolved), whose data/ is searched for
+	// templates, toolchains and build systems. Not os.Args[0]'s: run from the PATH, that is
+	// "buildy", which named the current directory.
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
 	}
+	if err != nil {
+		util.LogFatal("Failed to find the buildy executable: %v", err)
+	}
+	buildyDir := filepath.Dir(exe)
 
 	// Define CLI flags with auto-detected defaults
 	defaultPlatform := detectPlatform()
