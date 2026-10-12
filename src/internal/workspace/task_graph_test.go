@@ -197,10 +197,14 @@ func TestTaskNumbersAssigned(t *testing.T) {
 		task1.TaskNumber, task2.TaskNumber, task3.TaskNumber)
 }
 
+// graphOf returns a graph of tasks. A task made by hand gets the build context linux-x86_64-debug.
 func graphOf(t *testing.T, tasks ...*BuildTask) *TaskGraph {
 	t.Helper()
 	graph := NewTaskGraph()
 	for _, task := range tasks {
+		if task.Platform == "" && task.Architecture == "" && task.Configuration == "" {
+			task.Platform, task.Architecture, task.Configuration = "linux", "x86_64", "debug"
+		}
 		if err := graph.AddTask(task); err != nil {
 			t.Fatal(err)
 		}
@@ -266,6 +270,19 @@ func TestValidateRejectsUnresolvedVariables(t *testing.T) {
 	sed := &BuildTask{TaskID: "generate_config", Command: util.Command{Script: `sed 's/\${VERSION}/1.0/g' in > out`}, Outputs: []string{"/b/out"}}
 	if err := graphOf(t, sed).Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A task always has its real build context: generation that left one out is an error, not a build
+// of the wrong context's key and cache record.
+func TestValidateRejectsTaskWithoutBuildContext(t *testing.T) {
+	graph := NewTaskGraph()
+	if err := graph.AddTask(&BuildTask{TaskID: "copy_x", Module: "m", Platform: "linux", Configuration: "debug"}); err != nil {
+		t.Fatal(err)
+	}
+	err := graph.Validate()
+	if err == nil || !strings.Contains(err.Error(), "copy_x (module m) has no build context") {
+		t.Fatalf("got %v", err)
 	}
 }
 

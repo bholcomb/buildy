@@ -98,18 +98,16 @@ func NewNativeTask(taskID, taskType string, inputs []TaskInput, outputs []string
 	return task
 }
 
-// NewBuildTask creates a BuildTask with default values
+// NewBuildTask creates a task that runs a command. Its generator sets the build context
+// (platform, architecture, configuration) and toolchain; graph validation fails a task without.
 func NewBuildTask(taskID, taskType string, inputs []TaskInput, outputs []string, dependencies []string, command util.Command) BuildTask {
 	return BuildTask{
-		TaskID:        taskID,
-		TaskType:      taskType,
-		Inputs:        inputs,
-		Outputs:       outputs,
-		Dependencies:  dependencies,
-		Command:       command,
-		Platform:      "linux",
-		Architecture:  "x86_64",
-		Configuration: "debug",
+		TaskID:       taskID,
+		TaskType:     taskType,
+		Inputs:       inputs,
+		Outputs:      outputs,
+		Dependencies: dependencies,
+		Command:      command,
 	}
 }
 

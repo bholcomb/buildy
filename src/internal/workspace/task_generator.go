@@ -194,7 +194,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 	targetType string,
 	settings config.Settings,
 	outputDir string,
-	existingTasks []*BuildTask,
 ) ([]*BuildTask, error) {
 	targetName := target.Name
 	where := fmt.Sprintf("target '%s' in module %s", targetName, tg.moduleName())
@@ -362,7 +361,6 @@ func (tg *TaskGenerator) generateTargetTasks(
 		tg.Architecture,
 		tg.Configuration,
 		targetToolchain.Name,
-		existingTasks,
 		templateVarEnv,
 	)
 	if err != nil {
@@ -488,14 +486,6 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 	tasks := []*BuildTask{}
 	tg.outputDir = outputDir
 
-	if tg.TaskIDGen == nil {
-		moduleName := tg.CurrentModule
-		if moduleName == "" {
-			moduleName = "workspace"
-		}
-		tg.TaskIDGen = NewTaskIDGenerator(moduleName)
-	}
-
 	settings, err := tg.moduleSettings(file)
 	if err != nil {
 		return nil, err
@@ -529,7 +519,7 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 					}
 				}
 			}
-			targetTasks, err := tg.generateTargetTasks(target, section.Type, settings, outputDir, tasks)
+			targetTasks, err := tg.generateTargetTasks(target, section.Type, settings, outputDir)
 			if err != nil {
 				return nil, err
 			}
@@ -875,7 +865,11 @@ func (tg *TaskGenerator) generateGenerateTasks(file *config.File, outputDir stri
 				return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 			}
 			// A command without ${args} gets them at the end
-			if tmpl, _ := tool.Command.For(tg.Platform); !hasString(tmpl.Placeholders(), "args") {
+			tmpl, err := tool.Command.For(tg.Platform)
+			if err != nil {
+				return nil, fmt.Errorf("%s in module %s: tool %s %w", what, tg.moduleName(), tool.Name, err)
+			}
+			if !hasString(tmpl.Placeholders(), "args") {
 				if command, err = appendArgs(command, args, execSpec); err != nil {
 					return nil, fmt.Errorf("%s in module %s: %w", what, tg.moduleName(), err)
 				}

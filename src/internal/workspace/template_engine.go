@@ -208,17 +208,8 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
-	existingTasks []*BuildTask,
 	varEnv *util.VariableEnvironment,
 ) ([]*BuildTask, error) {
-	if existingTasks == nil {
-		existingTasks = []*BuildTask{}
-	}
-
-	if idGen == nil {
-		idGen = NewTaskIDGenerator("workspace")
-	}
-
 	template := bte.GetTemplate(templateName)
 	if template == nil {
 		return nil, fmt.Errorf("template '%s' not found", templateName)
@@ -303,7 +294,7 @@ func (bte *BuildTemplateEngine) ExpandTemplate(
 			stepTask, err = bte.expandSingleStep(
 				step, context, stepResults, itemConfig, mergedConfig,
 				outputDir, idGen, toolMatcher, commandBuilder,
-				platform, architecture, configuration, toolchain, existingTasks,
+				platform, architecture, configuration, toolchain,
 				templateEnv,
 			)
 		}
@@ -465,7 +456,6 @@ func (bte *BuildTemplateEngine) expandSingleStep(
 	toolMatcher *resource.ToolMatcher,
 	commandBuilder *resource.CommandBuilder,
 	platform, architecture, configuration, toolchain string,
-	existingTasks []*BuildTask,
 	varEnv *util.VariableEnvironment,
 ) (*BuildTask, error) {
 	action, outputType := step.Action, step.OutputType

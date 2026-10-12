@@ -39,6 +39,7 @@ var unresolvedVariable = regexp.MustCompile(`(^|[^\\])(\$\{[^}]*\})`)
 //  2. If a task's input is another task's output, the task depends on that producer.
 //  3. Every dependency names a task in the graph.
 //  4. No ${...} is left unresolved in a command, input or output.
+//  5. Every task has its build context: a platform, an architecture and a configuration.
 func (tg *TaskGraph) Validate() error {
 	var problems []string
 
@@ -58,6 +59,10 @@ func (tg *TaskGraph) Validate() error {
 
 	for _, id := range tg.sortedIDs() {
 		task := tg.Tasks[id]
+		if task.Platform == "" || task.Architecture == "" || task.Configuration == "" {
+			problems = append(problems, fmt.Sprintf("internal error: %s has no build context (platform '%s', architecture '%s', configuration '%s')",
+				task.Describe(), task.Platform, task.Architecture, task.Configuration))
+		}
 		for _, input := range task.Inputs {
 			producer, ok := producers[util.NormalizePath(input.Path)]
 			if ok && producer != task && !hasString(task.Dependencies, producer.TaskID) {

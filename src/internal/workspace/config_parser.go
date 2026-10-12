@@ -401,14 +401,6 @@ func hasInput(task *BuildTask, path string) bool {
 // GenerateTasks generates a module's target tasks from its (inherited) config, and returns the
 // task generator that generates its packaging tasks later
 func (cp *ConfigParser) GenerateTasks(file *config.File) ([]*BuildTask, *TaskGenerator, error) {
-	if cp.TaskIDGen == nil {
-		moduleName := cp.CurrentModule
-		if moduleName == "" {
-			moduleName = "workspace"
-		}
-		cp.TaskIDGen = NewTaskIDGenerator(moduleName)
-	}
-
 	tc, err := cp.SelectToolchain(file)
 	if err != nil {
 		return nil, nil, err
