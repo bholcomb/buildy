@@ -167,3 +167,39 @@ func TestNamesAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// A target in another language than its module's toolchain (a C target in a module whose
+// toolchain is C++) resolves toolchain filter keys, in the module's settings and its own lists,
+// with the toolchain that compiles it.
+func TestTargetFiltersUseItsOwnToolchain(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"buildy.yaml": `project: {name: mixed}
+environment:
+  compile:
+    c_standard: c11
+    cpp_standard: c++17
+    defines:
+      - gcc-c-linux: [MODULE_C]
+      - gcc-cpp-linux: [MODULE_CPP]
+targets:
+  executables:
+    - name: capp
+      language: c
+      sources: [main.c]
+      defines:
+        - gcc-c-linux: [TARGET_C]
+        - gcc-cpp-linux: [TARGET_CPP]
+`,
+		"main.c": "int main(void) { return 0; }",
+	})
+	compiles := tasksOfType(mustGenerateTasks(t, root), "compile")
+	if len(compiles) != 1 {
+		t.Fatalf("%d compile tasks, want 1", len(compiles))
+	}
+	args := strings.Join(compiles[0].Command.Args, " ")
+	if compiles[0].Toolchain != "gcc-c-linux" || !strings.Contains(args, "-DMODULE_C") || !strings.Contains(args, "-DTARGET_C") ||
+		strings.Contains(args, "CPP") {
+		t.Errorf("toolchain %s, command %s: want gcc-c-linux with MODULE_C and TARGET_C only", compiles[0].Toolchain, args)
+	}
+}

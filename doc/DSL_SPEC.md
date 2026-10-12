@@ -1063,7 +1063,7 @@ sources:
 | Platform | `linux`, `windows`, `macos` | Build target OS |
 | Architecture | `x86_64`, `arm64`, `i686` | Target CPU architecture |
 | Configuration | `debug`, `release`, or custom | Build configuration name |
-| Toolchain | `gcc-cpp-linux`, `clang-cpp-macos` | Active toolchain name |
+| Toolchain | `gcc-cpp-linux`, `clang-cpp-macos` | The toolchain that builds the target (a C target in a module whose toolchain is C++ gets the C toolchain, and its abstract keywords map through it) |
 
 **Full example with multiple filter dimensions:**
 

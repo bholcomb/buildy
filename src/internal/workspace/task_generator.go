@@ -107,18 +107,19 @@ func (tg *TaskGenerator) SetToolchain(tc *resource.ToolchainConfig) error {
 // Windows package staged on Linux may use symlinks (its install stores what they point to).
 var hostCanSymlink = runtime.GOOS != "windows"
 
-// getBuildContext returns the context filtered lists are resolved against
+// getBuildContext returns the context the module's filtered lists are resolved against: the build
+// and the module's toolchain.
 func (tg *TaskGenerator) getBuildContext() BuildContext {
-	toolchainName := ""
-	if tg.CurrentToolchain != nil {
-		toolchainName = tg.CurrentToolchain.Name
+	return tg.contextFor(tg.CurrentToolchain)
+}
+
+// contextFor returns the context of a target or tool that uses toolchain tc (nil: none).
+func (tg *TaskGenerator) contextFor(tc *resource.ToolchainConfig) BuildContext {
+	ctx := BuildContext{Platform: tg.Platform, Architecture: tg.Architecture, Configuration: tg.Configuration}
+	if tc != nil {
+		ctx.Toolchain = tc.Name
 	}
-	return BuildContext{
-		Platform:      tg.Platform,
-		Architecture:  tg.Architecture,
-		Configuration: tg.Configuration,
-		Toolchain:     toolchainName,
-	}
+	return ctx
 }
 
 // resolve resolves the variables of every string, failing on one it can't resolve.
@@ -142,14 +143,10 @@ func (tg *TaskGenerator) finalizeTask(task *BuildTask, toolchain string) {
 	task.Toolchain = toolchain
 }
 
-// moduleSettings resolves the module's compile and link settings for the build, and their
-// variables.
-func (tg *TaskGenerator) moduleSettings(file *config.File) (config.Settings, error) {
-	var mappings config.Ordered[config.Ordered[[]string]]
-	if tg.CurrentToolchain != nil {
-		mappings = tg.CurrentToolchain.FlagMappings
-	}
-	s, err := file.Settings(tg.getBuildContext(), mappings)
+// moduleSettings resolves the module's compile and link settings for the build and a target
+// toolchain (its toolchain-name filter keys and its flag_mappings), and their variables.
+func (tg *TaskGenerator) moduleSettings(file *config.File, tc *resource.ToolchainConfig) (config.Settings, error) {
+	s, err := file.Settings(tg.contextFor(tc), tc.FlagMappings)
 	if err != nil {
 		return s, fmt.Errorf("module %s: %w", tg.moduleName(), err)
 	}
@@ -188,11 +185,12 @@ type targetLists struct {
 }
 
 // generateTargetTasks generates a target's tasks from the template for its language and type.
-// settings are the module's; the target adds its own defines and flags to a copy of them.
+// The module's settings, for the target's toolchain (moduleSettings), get the target's own defines
+// and flags added to a copy of them.
 func (tg *TaskGenerator) generateTargetTasks(
+	file *config.File,
 	target *config.Target,
 	targetType string,
-	settings config.Settings,
 	outputDir string,
 ) ([]*BuildTask, error) {
 	targetName := target.Name
@@ -226,8 +224,13 @@ func (tg *TaskGenerator) generateTargetTasks(
 		commandBuilder = resource.NewCommandBuilder(targetToolchain, toolMatcher, tg.Platform, tg.Configuration)
 	}
 
-	// The target's lists, filtered for the build (with the module's toolchain) and resolved
-	ctx := tg.getBuildContext()
+	// The module's settings and the target's lists, filtered for the build with the target's
+	// toolchain, and resolved
+	settings, err := tg.moduleSettings(file, targetToolchain)
+	if err != nil {
+		return nil, err
+	}
+	ctx := tg.contextFor(targetToolchain)
 	lists := targetLists{}
 	for _, l := range []struct {
 		dst    *[]string
@@ -338,7 +341,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 	}
 
 	// The template's view of the settings, ${config.X}: the module's, with the target's
-	scope, err := tg.targetSettings(target, settings, lists, where)
+	scope, err := tg.targetSettings(target, ctx, settings, lists, where)
 	if err != nil {
 		return nil, err
 	}
@@ -398,8 +401,7 @@ func (tg *TaskGenerator) generateTargetTasks(
 // targetSettings returns the template's view of a target's settings (${config.X}): the module's
 // settings with the target's defines and flags (and its dependencies' defines) appended, then its
 // compile: and link: sections, then its removals.
-func (tg *TaskGenerator) targetSettings(target *config.Target, s config.Settings, lists targetLists, where string) (map[string]any, error) {
-	ctx := tg.getBuildContext()
+func (tg *TaskGenerator) targetSettings(target *config.Target, ctx BuildContext, s config.Settings, lists targetLists, where string) (map[string]any, error) {
 	resolve := func(f config.Filtered[string], field string) ([]string, error) {
 		return tg.resolve(f.Resolve(ctx), "the "+field+" of "+where)
 	}
@@ -486,8 +488,9 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 	tasks := []*BuildTask{}
 	tg.outputDir = outputDir
 
-	settings, err := tg.moduleSettings(file)
-	if err != nil {
+	// The module's settings for its own toolchain: a problem in them is the module's, whatever
+	// its targets (each target resolves them for its own toolchain)
+	if _, err := tg.moduleSettings(file, tg.CurrentToolchain); err != nil {
 		return nil, err
 	}
 
@@ -519,7 +522,7 @@ func (tg *TaskGenerator) GenerateTargetTasks(file *config.File, outputDir string
 					}
 				}
 			}
-			targetTasks, err := tg.generateTargetTasks(target, section.Type, settings, outputDir)
+			targetTasks, err := tg.generateTargetTasks(file, target, section.Type, outputDir)
 			if err != nil {
 				return nil, err
 			}
@@ -718,7 +721,7 @@ func setToolchainVariables(env *util.VariableEnvironment, toolchain *resource.To
 // abstract keywords as the tool's toolchain maps them, then the tool's common flags, then those
 // of the configuration.
 func (tg *TaskGenerator) toolFlags(file *config.File, toolchain *resource.ToolchainConfig, tool *resource.Tool, env *util.VariableEnvironment, what string) ([]string, error) {
-	flags, err := file.KeywordFlags(tg.getBuildContext(), toolchain.FlagMappings)
+	flags, err := file.KeywordFlags(tg.contextFor(toolchain), toolchain.FlagMappings)
 	if err != nil {
 		return nil, fmt.Errorf("%s with toolchain %s: %w", what, toolchain.Name, err)
 	}
